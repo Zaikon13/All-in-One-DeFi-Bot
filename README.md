@@ -1,4 +1,4 @@
-# All-in-One-DeFi-Bot
+# All-in-One-DeFi-Bot SPOT-v2 infra
 
 DeFi assistant για Cronos (επεκτάσιμο σε άλλα chains):
 - Real-time monitoring (wallet + Dexscreener)
