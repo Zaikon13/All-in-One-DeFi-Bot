@@ -1,16 +1,20 @@
-# Python
+# --- Environment ---
+.env
+.env.*
+secrets.*
+*.sqlite3
+data/
+
+# --- Python cache / build ---
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .venv/
-.env
-.env.*
-secrets.*
 dist/
 build/
 
-# OS/IDE
+# --- OS / IDE ---
 .DS_Store
 .vscode/
 .idea/
