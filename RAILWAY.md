@@ -1,0 +1,56 @@
+# RAILWAY — Variables (canonical names)
+
+# App / Time
+APP_NAME=All-in-One-DeFi-Bot
+TZ=Europe/Athens
+APP_URL=https://<your-app>.up.railway.app
+
+# Telegram
+TELEGRAM_BOT_TOKEN=**REDACTED**
+TELEGRAM_CHAT_ID=5307877340
+
+# Wallet / Network
+WALLET_ADDRESS=0xEa53D79ce2A915033e6b4C5ebE82bb6b292E35Cc
+CRONOS_RPC_URL=https://cronos-evm-rpc.publicnode.com
+
+# Discover / Alerts (from your canonical defaults)
+DISCOVER_ENABLED=true
+DISCOVER_QUERY=cronos
+DISCOVER_REQUIRE_WCRO_QUOTE=true
+DISCOVER_LIMIT=10
+DISCOVER_MAX_PAIR_AGE_HOURS=24
+DISCOVER_MIN_LIQ_USD=30000
+DISCOVER_MIN_VOL24_USD=5000
+DISCOVER_MIN_ABS_CHANGE_PCT=10
+DISCOVER_POLL=120
+ALERTS_INTERVAL_MINUTES=15
+DEX_POLL=60
+WALLET_POLL=15
+INTRADAY_HOURS=3
+EOD_TIME=23:59
+PRICE_MOVE_THRESHOLD=5
+PRICE_WINDOW=3
+SPIKE_THRESHOLD=8
+PUMP_ALERT_24H_PCT=20
+DUMP_ALERT_24H_PCT=-15
+RISKY_PUMP_DEFAULT=20
+RISKY_DROP_DEFAULT=-12
+GUARD_WINDOW_MIN=60
+GUARD_PUMP_PCT=20
+GUARD_DROP_PCT=-12
+GUARD_TRAIL_DROP_PCT=-8
+
+# Optional lists (keep empty strings if unused)
+DISCOVER_BASE_WHITELIST=
+DISCOVER_BASE_BLACKLIST=
+DEX_PAIRS=
+TOKENS=
+RISKY_SYMBOLS=
+RISKY_THRESHOLDS=
+
+# External APIs (keep secrets out of repo)
+ETHERSCAN_API=**REDACTED**
+
+# Notes:
+# - Τα παραπάνω ονόματα συμφωνούν με τα canonical defaults που μου έδωσες.
+# - Μπορείς να έχεις per-service διαφορετικές τιμές (π.χ. WORKER_TICK_SEC).
