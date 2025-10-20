@@ -1,4 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
 .env
 .env.*
-*.sqlite3
-data/
+secrets.*
+dist/
+build/
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/
