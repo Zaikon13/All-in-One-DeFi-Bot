@@ -6,7 +6,7 @@
 - Scope: Cronos ecosystem first, extensible.
 
 Milestones:
-- M0: SPOT-v2 infra ✅
-- M1: Telegram commands (/holdings, /totals, /pnl)
-- M2: Wallet monitor + Dexscreener discovery + alerts
-- M3: Trading flows + guards
+- infra ✅
+- Telegram commands (/holdings, /totals, /pnl)
+- Wallet monitor + Dexscreener discovery + alerts
+- Trading flows + guards
