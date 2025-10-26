@@ -1,26 +1,24 @@
-# MANIFEST — SPOT-v2 (Full Infra)
+# 🧾 REPO MANIFEST (SPOT-v2)
+**Last Sync:** {{ auto-updated by sync.yml }}
 
-Files (19):
-README.md
-SUMMARY.md
-MANIFEST.md
-SYNC.md
-CHECKS.md
-AGENTS.md
-DEPLOY.md
-RAILWAY.md
-WORKER.md
-.env.example
-.gitignore
-requirements.txt
-Procfile
-app.py
-worker.py
-.github/pull_request_template.md
-.github/ISSUE_TEMPLATE/bug_report.md
-.github/ISSUE_TEMPLATE/feature_request.md
-.github/workflows/ci.yml
+## Root files
+- main.py
+- requirements.txt
+- .env.example
+- README_SYNC.md
+- SUMMARY.md
+- AGENTS.md
+- CHECKS.md
 
-Notes:
-- Κανένα secret στο repo.
-- CI = syntax-only, για σταθερότητα.
+## GitHub Workflows
+- .github/workflows/ci.yml
+- .github/workflows/sync.yml
+
+## Modules
+- core/
+- telegram/
+- reports/
+- utils/
+- tests/
+
+*(Generated automatically by CI sync job)*
