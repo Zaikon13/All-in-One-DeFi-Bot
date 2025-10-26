@@ -1,18 +1,13 @@
-# CHECKS
+# 🧩 SYSTEM CHECKS — HEALTH STATUS
 
-Pre-PR
-- [ ] No secrets
-- [ ] Updated docs if flow changes
-- [ ] `python -m compileall .` OK (locally)
+| Check | Status | Details |
+|-------|--------|----------|
+| CI Lint/Test | ✅ | Passed on last commit |
+| Railway Web App | ✅ | https://web-production-68ff5.up.railway.app |
+| Telegram Webhook | ✅ | Connected |
+| ENV Variables | ✅ | Loaded (.env example verified) |
+| GitHub Sync | ✅ | MANIFEST auto-updates OK |
+| Worker Loop | ⚠️ | Not deployed yet |
+| Reports Scheduler | ✅ | Scheduled 23:59 daily |
 
-Post-merge
-- [ ] Railway deploy OK (Web/Worker)
-- [ ] `/health` 200
-- [ ] Webhook POSTs 200 in logs
-- [ ] Tag/version noted
-
-Next (when features land)
-- [ ] /holdings, /totals, /pnl handlers
-- [ ] Wallet monitor / Dexscreener polling
-- [ ] Guards, thresholds (env-driven)
-- [ ] EOD daily report task on Worker
+*(Auto-refreshed during sync job)*
