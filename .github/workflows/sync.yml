@@ -1,0 +1,49 @@
+name: 🔄 ChatGPT Full Sync
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12
+
+      - name: Sync ChatGPT context
+        run: |
+          echo "🔁 Syncing repo context for ChatGPT Agent"
+          git fetch --all --tags
+          echo "Repository synchronized."
+
+      - name: Commit Manifest update
+        run: |
+          python - <<'EOF'
+          import os, json
+          files = []
+          for root, _, filenames in os.walk("."):
+              for f in filenames:
+                  if ".git" not in root:
+                      files.append(os.path.join(root, f))
+          with open("MANIFEST.md", "w", encoding="utf-8") as fp:
+              fp.write("# 🧾 Repo Manifest\n\n")
+              fp.write("\n".join(sorted(files)))
+          EOF
+          git config user.name "ChatGPT Sync Agent"
+          git config user.email "agent@openai.com"
+          git add MANIFEST.md
+          git commit -m "🤖 Auto-update MANIFEST.md" || echo "No changes to commit"
+          git push
