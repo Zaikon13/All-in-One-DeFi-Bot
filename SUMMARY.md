@@ -1,12 +1,21 @@
-# Single Point of Truth — Summary (2025-10-20)
+# 📋 PROJECT SUMMARY — SPOT-v2
 
-- Repo: Zaikon13/All-in-One-DeFi-Bot
-- Deploy: Railway (2 services: Web + Worker)
-- Telegram: @AllInOneDeFiBot → webhook στο /telegram/webhook
-- Scope: Cronos ecosystem first, extensible.
+**Repository:** Zaikon13/All-in-One-DeFi-Bot  
+**Branch:** main  
+**Last update:** {{ auto }}
 
-Milestones:
-- infra ✅
-- Telegram commands (/holdings, /totals, /pnl)
-- Wallet monitor + Dexscreener discovery + alerts
-- Trading flows + guards
+## ✅ Completed
+- Telegram bot live and responding
+- Railway web service online
+- GitHub CI green
+- .env synchronized
+
+## ⏳ Pending
+- Worker service deployment
+- PnL module refactor
+- Integration tests
+
+## 📎 References
+- MANIFEST.md → file index
+- CHECKS.md → CI + Env health
+- AGENTS.md → chat/agent ownership
