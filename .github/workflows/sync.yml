@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   sync-manifest:
@@ -34,10 +33,10 @@ jobs:
 
       - name: Commit & push MANIFEST.md
         env:
-          GH_FINE_TOKEN: ${{ secrets.GH_FINE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name 'chatgpt-codex-bot'
           git config user.email 'bot@openai'
           git add MANIFEST.md
           git commit -m 'auto-update MANIFEST.md' || echo 'No changes'
-          git push origin HEAD:${GITHUB_REF#refs/heads/} || true
+          git push
