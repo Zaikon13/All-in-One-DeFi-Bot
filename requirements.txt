@@ -1,7 +1,0 @@
-fastapi
-uvicorn[standard]
-httpx
-pydantic
-python-telegram-bot==21.*
-schedule
-websockets
