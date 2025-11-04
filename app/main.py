@@ -86,3 +86,13 @@ async def telegram_webhook(req: Request) -> JSONResponse:
         await send_telegram_message(f"Echo: {text}")
 
     return JSONResponse({"ok": True})
+
+
+# ---------------------------------------------------------------------
+# ✅ NEW: Health router registration (safe append)
+# ---------------------------------------------------------------------
+try:
+    from app.health import router as health_router  # type: ignore
+    app.include_router(health_router)  # type: ignore[name-defined]
+except Exception:
+    pass
