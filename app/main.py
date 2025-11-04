@@ -76,23 +76,32 @@ async def telegram_webhook(req: Request) -> JSONResponse:
 
     # Απλή ασφάλεια: αν έχουμε ορισμένο CHAT_ID, αγνοούμε άλλα chats
     if CHAT_ID and chat_id and chat_id != str(CHAT_ID):
-        # Optionally: ενημέρωσε ευγενικά τον άγνωστο χρήστη
         return JSONResponse({"ok": True, "ignored": True})
 
     if text.lower().startswith("/start"):
         await send_telegram_message("👋 Bot ready! Δοκίμασε να μου γράψεις κάτι για echo.")
     elif text:
-        # echo
         await send_telegram_message(f"Echo: {text}")
 
     return JSONResponse({"ok": True})
 
 
 # ---------------------------------------------------------------------
-# ✅ NEW: Health router registration (safe append)
+# ✅ Health router registration
 # ---------------------------------------------------------------------
 try:
     from app.health import router as health_router  # type: ignore
     app.include_router(health_router)  # type: ignore[name-defined]
 except Exception:
     pass
+
+
+# ---------------------------------------------------------------------
+# ✅ GitHub webhook router registration
+# ---------------------------------------------------------------------
+try:
+    from app.github_webhook import router as gh_router  # type: ignore
+    app.include_router(gh_router)  # type: ignore[name-defined]
+    logging.info("✅ GitHub webhook router loaded")
+except Exception as e:
+    logging.warning("⚠️ GitHub webhook router not loaded: %s", e)
