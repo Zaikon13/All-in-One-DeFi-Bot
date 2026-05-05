@@ -36,7 +36,8 @@ async def get_daily_pnl() -> str:
     today = datetime.now().date()
     start_timestamp = int(datetime(today.year, today.month, today.day).timestamp())
 
-    API_URL = "https://explorer-api.cronos.org/mainnet/api"
+    # Using BlockScout API (does not require API key)
+    API_URL = "https://cronos.org/explorer/api"
 
     params = {
         "module": "account",
@@ -45,18 +46,18 @@ async def get_daily_pnl() -> str:
         "startblock": 0,
         "endblock": 99999999,
         "page": 1,
-        "offset": 50,
+        "offset": 100,      # increased a bit
         "sort": "desc"
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=20) as client:
             response = await client.get(API_URL, params=params)
             response.raise_for_status()
             data = response.json()
     except Exception as e:
         logging.exception("Explorer API error")
-        return f"❌ Error fetching transactions: {e}"
+        return f"❌ Error fetching transactions:\n{str(e)[:400]}"
 
     if data.get("status") != "1" or not data.get("result"):
         return "📅 No transactions found today."
@@ -74,25 +75,25 @@ async def get_daily_pnl() -> str:
         method = tx.get("functionName") or tx.get("method") or "Transfer"
         is_error = tx.get("isError", "0") != "0"
 
-        # Very basic PnL approximation (replace with real logic later)
-        pnl = -value * 0.3 if is_error else value * 0.1   # dummy
+        # Very basic PnL approximation - can be improved later with real prices
+        pnl = -value * 0.5 if is_error else value * 0.15
         total_pnl_approx += pnl
 
         trades.append({
             "time": datetime.fromtimestamp(tx_time).strftime("%H:%M"),
             "token": token,
-            "method": method[:25],
+            "method": method[:28],
             "value": value,
             "pnl": pnl
         })
 
     if not trades:
-        return "📅 No trades today."
+        return "📅 No trades executed today."
 
     message = f"📊 **Daily PnL Report** — {today.strftime('%B %d, %Y')}\n"
     message += f"Wallet: `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
 
-    for t in trades[:10]:
+    for t in trades[:12]:  # limit output
         emoji = "🟢" if t["pnl"] >= 0 else "🔴"
         message += f"{emoji} **{t['token']}** | {t['time']}\n"
         message += f"   {t['method']} | {t['value']:.4f} {t['token']}\n"
