@@ -1,5 +1,5 @@
 # app/main.py
-# Updated with Real $ PnL via DexScreener + Grok AI Analysis
+# Fixed: Real $ PnL + DexScreener + Grok AI + correct FastAPI imports
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import logging
 from typing import Any, Dict, Optional
 import httpx
 from datetime import datetime, timedelta
+from fastapi import FastAPI, Request, JSONResponse
 
 # ---------------------------------------------------------------------
 # Config
@@ -21,7 +22,7 @@ COVA_API_KEY = os.getenv("COVA_API_KEY") or "cqt_rQyD6PqwPyGkVvmWhBbyXWx9PxcD"
 GROK_API_KEY = os.getenv("GROK_API_KEY")
 
 # ---------------------------------------------------------------------
-# Daily PnL - Real $ PnL + DexScreener + Grok AI
+# Daily PnL - Real $ PnL via DexScreener + Grok AI
 # ---------------------------------------------------------------------
 async def get_daily_pnl() -> str:
     if not WALLET_ADDRESS:
@@ -29,7 +30,7 @@ async def get_daily_pnl() -> str:
 
     await send_telegram_message("📡 Fetching trades + real prices from DexScreener...", CHAT_ID)
 
-    # Covalent API (Cronos chain = 25)
+    # Covalent API (Cronos chain ID = 25)
     url = f"https://api.covalenthq.com/v1/25/address/{WALLET_ADDRESS}/transactions_v2/"
     params = {"key": COVA_API_KEY, "page-size": 200}
 
@@ -51,7 +52,10 @@ async def get_daily_pnl() -> str:
     total_pnl_usd = 0.0
 
     for tx in items:
-        tx_time = datetime.fromtimestamp(tx.get("block_signed_at"))
+        block_time = tx.get("block_signed_at")
+        if not block_time:
+            continue
+        tx_time = datetime.fromtimestamp(block_time) if isinstance(block_time, (int, float)) else datetime.fromisoformat(str(block_time).replace('Z', '+00:00'))
         if tx_time < cutoff:
             continue
 
@@ -65,7 +69,7 @@ async def get_daily_pnl() -> str:
             if abs(amount) < 0.0001:
                 continue
 
-            # DexScreener price
+            # Get real price from DexScreener
             price_usd = 0.0
             if contract:
                 try:
@@ -73,7 +77,7 @@ async def get_daily_pnl() -> str:
                     async with httpx.AsyncClient(timeout=10) as ds:
                         ds_resp = await ds.get(ds_url)
                         pairs = ds_resp.json().get("pairs", [])
-                        if pairs and isinstance(pairs, list):
+                        if pairs and isinstance(pairs, list) and len(pairs) > 0:
                             price_usd = float(pairs[0].get("priceUsd", 0) or 0)
                 except:
                     pass
@@ -98,7 +102,7 @@ async def get_daily_pnl() -> str:
     if not trades:
         return "📅 No trades in the last 24 hours."
 
-    # Build message
+    # Build report
     message = f"📊 **Daily PnL Report** — Last 24h\n"
     message += f"Wallet: `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
 
@@ -112,20 +116,21 @@ async def get_daily_pnl() -> str:
     # Grok AI Analysis
     if GROK_API_KEY:
         try:
-            prompt = f"Analyze these Cronos trades in Greek (short & useful):\nTotal PnL: ${total_pnl_usd:.2f}\nTrades: {str([{'symbol':t['symbol'], 'usd':t['usd'], 'dir':t['direction']} for t in trades[:8]])}\nGive insights, risk notes and suggestions."
+            prompt = f"Analyze these Cronos DeFi trades in Greek. Be short, useful and direct:\nTotal PnL: ${total_pnl_usd:.2f}\nTrades: {str([{'symbol':t['symbol'], 'usd':t['usd'], 'dir':t['direction']} for t in trades[:8]])}\nGive 3-4 short insights, risk notes and suggestions."
             async with httpx.AsyncClient(timeout=15) as g:
                 r = await g.post(
                     "https://api.x.ai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {GROK_API_KEY}"},
                     json={
-                        "model": "grok-4.3",
+                        "model": "grok-beta",
                         "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.75
+                        "temperature": 0.7
                     }
                 )
                 ai_comment = r.json()["choices"][0]["message"]["content"]
                 message += f"🤖 **Grok AI Analysis**:\n{ai_comment}"
         except Exception as e:
+            logging.exception("Grok AI error")
             message += "\n🤖 Grok AI (temporarily unavailable)"
     else:
         message += "\n🤖 Grok AI not configured."
@@ -133,7 +138,7 @@ async def get_daily_pnl() -> str:
     return message
 
 # ---------------------------------------------------------------------
-# Helpers (kept unchanged)
+# Telegram Helpers
 # ---------------------------------------------------------------------
 def _bot_api(method: str) -> str:
     if not BOT_TOKEN:
@@ -148,21 +153,24 @@ async def send_telegram_message(text: str, chat_id: Optional[str] = None) -> Non
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(
                 _bot_api("sendMessage"),
-                json={"chat_id": int(cid), "text": text, "parse_mode": "Markdown"},
+                json={"chat_id": int(cid), "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True},
             )
     except:
         pass
 
-# FastAPI app (kept)
+# ---------------------------------------------------------------------
+# FastAPI App
+# ---------------------------------------------------------------------
 app = FastAPI(title="All-in-One-DeFi-Bot")
 
 @app.on_event("startup")
 async def _startup() -> None:
     logging.basicConfig(level=logging.INFO)
-    logging.info("Starting Web service")
+    logging.info("✅ All-in-One-DeFi-Bot web service started")
     await send_telegram_message("✅ All-in-One-DeFi-Bot web is online.")
 
 @app.get("/")
+@app.get("/health")
 async def health() -> Dict[str, Any]:
     return {"ok": True, "name": "All-in-One-DeFi-Bot"}
 
@@ -179,11 +187,15 @@ async def telegram_webhook(req: Request) -> JSONResponse:
     chat_id = str(chat.get("id") or "")
 
     if text == "/start":
-        await send_telegram_message("✅ All-in-One-DeFi-Bot web is online.")
+        await send_telegram_message("✅ All-in-One-DeFi-Bot is online! Use /daily_pnl for report.", chat_id)
     elif text in ["/daily_pnl", "/dailypnl"]:
         report = await get_daily_pnl()
-        await send_telegram_message(report)
+        await send_telegram_message(report, chat_id)
     elif text:
-        await send_telegram_message(f"Echo: {text}")
+        await send_telegram_message(f"Echo: {text}", chat_id)
 
     return JSONResponse({"ok": True})
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
