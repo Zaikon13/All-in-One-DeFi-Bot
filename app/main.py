@@ -1,6 +1,7 @@
 # app/main.py
 # Fixed: Real $ PnL + DexScreener + Grok AI + correct FastAPI imports
 # Removed Covalent completely - using only Cronos Explorer
+# Improved /daily_pnl: group by token + net position (buys - sells)
 
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ import logging
 from typing import Any, Dict, Optional
 import httpx
 from datetime import datetime, timedelta
+from collections import defaultdict
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -23,7 +25,7 @@ WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 GROK_API_KEY = os.getenv("GROK_API_KEY")
 
 # ---------------------------------------------------------------------
-# Daily PnL - Real $ PnL via Cronos Explorer + DexScreener + Grok AI
+# Daily PnL - Grouped by token + net position
 # ---------------------------------------------------------------------
 async def get_daily_pnl() -> str:
     if not WALLET_ADDRESS:
@@ -32,10 +34,10 @@ async def get_daily_pnl() -> str:
     await send_telegram_message("📡 Fetching recent trades from Cronos explorer...", CHAT_ID)
 
     # Cronos Explorer API
-    url = f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&startblock=0&endblock=999999999&page=1&offset=100&sort=desc"
+    url = f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&startblock=0&endblock=999999999&page=1&offset=200&sort=desc"
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=25) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
@@ -48,8 +50,9 @@ async def get_daily_pnl() -> str:
         return "📅 No transactions found in the last 24h."
 
     cutoff = datetime.now() - timedelta(hours=24)
-    trades = []
-    total_pnl_usd = 0.0
+
+    # Group trades by token
+    token_data = defaultdict(lambda: {"buys": 0.0, "sells": 0.0, "trades": []})
 
     for tx in items:
         block_time = tx.get("timeStamp")
@@ -64,7 +67,6 @@ async def get_daily_pnl() -> str:
         if abs(amount) < 0.0001:
             continue
 
-        # Get price from DexScreener
         contract = tx.get("contractAddress")
         price_usd = 0.0
         if contract:
@@ -78,33 +80,43 @@ async def get_daily_pnl() -> str:
             except:
                 pass
 
-        usd_value = abs(amount) * price_usd
-        direction = "→" if tx.get("to") == WALLET_ADDRESS.lower() else "←"
-        emoji = "🟢" if direction == "→" else "🔴"
+        is_buy = tx.get("to", "").lower() == WALLET_ADDRESS.lower()
 
-        trades.append({
+        if is_buy:
+            token_data[symbol]["buys"] += amount
+        else:
+            token_data[symbol]["sells"] += amount
+
+        token_data[symbol]["trades"].append({
             "time": tx_time.strftime("%H:%M"),
-            "symbol": symbol,
             "amount": amount,
-            "usd": usd_value,
-            "direction": direction,
-            "emoji": emoji,
-            "tx_hash": tx.get("hash", "")[:10] + "...",
-            "link": f"https://cronos.org/explorer/tx/{tx.get('hash', '')}"
+            "usd": abs(amount) * price_usd,
+            "is_buy": is_buy,
+            "tx_hash": tx.get("hash", "")[:10] + "..."
         })
 
-        total_pnl_usd += usd_value if direction == "→" else -usd_value
-
-    if not trades:
+    if not token_data:
         return "📅 No trades in the last 24 hours."
 
     # Build report
     message = f"📊 **Daily PnL Report** — Last 24h\n"
     message += f"Wallet: `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
 
-    for t in trades[:12]:
-        message += f"{t['emoji']} **{t['symbol']}** {t['direction']} {abs(t['amount']):,.4f} (${t['usd']:,.2f})\n"
-        message += f"   {t['time']} | {t['tx_hash']}\n   🔗 [{t['tx_hash']}]({t['link']})\n\n"
+    total_pnl_usd = 0.0
+
+    for symbol, data in sorted(token_data.items()):
+        net_amount = data["buys"] - data["sells"]
+        avg_price = 0.0  # could be improved
+        net_usd = net_amount * (sum(t["usd"] for t in data["trades"]) / sum(abs(t["amount"]) for t in data["trades"]) if data["trades"] else 0)
+
+        emoji = "🟢" if net_amount > 0 else "🔴" if net_amount < 0 else "⚪"
+        message += f"{emoji} **{symbol}** Net: {net_amount:+.4f}\n"
+        message += f"   Buys: {data['buys']:.4f} | Sells: {data['sells']:.4f}\n"
+        if net_usd:
+            message += f"   Value: ${net_usd:,.2f}\n"
+        message += "\n"
+
+        total_pnl_usd += net_usd
 
     total_emoji = "🟢" if total_pnl_usd >= 0 else "🔴"
     message += f"**Total Daily PnL: {total_emoji} ${total_pnl_usd:,.2f}**\n\n"
@@ -112,7 +124,7 @@ async def get_daily_pnl() -> str:
     # Grok AI Analysis
     if GROK_API_KEY:
         try:
-            prompt = f"Analyze these Cronos DeFi trades in Greek. Be short, useful and direct:\nTotal PnL: ${total_pnl_usd:.2f}\nTrades: {str([{'symbol':t['symbol'], 'usd':t['usd'], 'dir':t['direction']} for t in trades[:8]])}\nGive 3-4 short insights, risk notes and suggestions."
+            prompt = f"Analyze these Cronos DeFi trades in Greek. Be short, useful and direct:\nTotal PnL: ${total_pnl_usd:.2f}\nTrades: {str(token_data)}\nGive 3-4 short insights."
             async with httpx.AsyncClient(timeout=15) as g:
                 r = await g.post(
                     "https://api.x.ai/v1/chat/completions",
@@ -182,7 +194,7 @@ async def telegram_webhook(req: Request) -> JSONResponse:
     chat = message.get("chat") or {}
     chat_id = str(chat.get("id") or "")
 
-    # Handle /start command - robust version
+    # Handle /start command
     if text.startswith('/start'):
         welcome_msg = (
             "👋 **Καλώς ήρθες στο All-in-One-DeFi-Bot!**\n\n"
@@ -194,7 +206,7 @@ async def telegram_webhook(req: Request) -> JSONResponse:
         await send_telegram_message(welcome_msg, chat_id)
         return JSONResponse({"ok": True})
 
-    elif text in ["/daily_pnl", "/dailypnl"]:
+    elif text in [" /daily_pnl", "/dailypnl"]:
         report = await get_daily_pnl()
         await send_telegram_message(report, chat_id)
     elif text:
