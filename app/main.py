@@ -8,7 +8,8 @@ import logging
 from typing import Any, Dict, Optional
 import httpx
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Request, JSONResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 # ---------------------------------------------------------------------
 # Config
