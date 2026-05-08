@@ -182,8 +182,18 @@ async def telegram_webhook(req: Request) -> JSONResponse:
     chat = message.get("chat") or {}
     chat_id = str(chat.get("id") or "")
 
-    if text == "/start":
-        await send_telegram_message("✅ All-in-One-DeFi-Bot is online! Use /daily_pnl for report.", chat_id)
+    # Handle /start command - robust version
+    if text.startswith('/start'):
+        welcome_msg = (
+            "👋 **Καλώς ήρθες στο All-in-One-DeFi-Bot!**\n\n"
+            "✅ `/daily_pnl` → Ημερήσιο PnL report\n"
+            "✅ Worker + Web service online\n"
+            "✅ Cronos Explorer + DexScreener\n\n"
+            "Πληκτρολόγησε /daily_pnl για να δεις το report σου!"
+        )
+        await send_telegram_message(welcome_msg, chat_id)
+        return JSONResponse({"ok": True})
+
     elif text in ["/daily_pnl", "/dailypnl"]:
         report = await get_daily_pnl()
         await send_telegram_message(report, chat_id)
