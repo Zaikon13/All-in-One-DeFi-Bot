@@ -1,5 +1,6 @@
 # app/main.py
 # Fixed: Real $ PnL + DexScreener + Grok AI + correct FastAPI imports
+# Removed Covalent completely - using only Cronos Explorer
 
 from __future__ import annotations
 
@@ -19,86 +20,80 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 APP_URL = os.getenv("APP_URL")
 TZ = os.getenv("TZ", "UTC")
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
-COVA_API_KEY = os.getenv("COVA_API_KEY") or "cqt_rQyD6PqwPyGkVvmWhBbyXWx9PxcD"
 GROK_API_KEY = os.getenv("GROK_API_KEY")
 
 # ---------------------------------------------------------------------
-# Daily PnL - Real $ PnL via DexScreener + Grok AI
+# Daily PnL - Real $ PnL via Cronos Explorer + DexScreener + Grok AI
 # ---------------------------------------------------------------------
 async def get_daily_pnl() -> str:
     if not WALLET_ADDRESS:
         return "❌ WALLET_ADDRESS not configured."
 
-    await send_telegram_message("📡 Fetching trades + real prices from DexScreener...", CHAT_ID)
+    await send_telegram_message("📡 Fetching recent trades from Cronos explorer...", CHAT_ID)
 
-    # Covalent API (Cronos chain ID = 25)
-    url = f"https://api.covalenthq.com/v1/25/address/{WALLET_ADDRESS}/transactions_v2/"
-    params = {"key": COVA_API_KEY, "page-size": 200}
+    # Cronos Explorer API
+    url = f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&startblock=0&endblock=999999999&page=1&offset=100&sort=desc"
 
     try:
-        async with httpx.AsyncClient(timeout=25) as client:
-            resp = await client.get(url, params=params)
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
     except Exception as e:
-        logging.exception("Covalent error")
+        logging.exception("Cronos Explorer error")
         return f"❌ Error fetching trades: {str(e)[:200]}"
 
-    items = data.get("data", {}).get("items", [])
+    items = data.get("result", [])
     if not items:
-        return "📅 No transactions found."
+        return "📅 No transactions found in the last 24h."
 
     cutoff = datetime.now() - timedelta(hours=24)
     trades = []
     total_pnl_usd = 0.0
 
     for tx in items:
-        block_time = tx.get("block_signed_at")
+        block_time = tx.get("timeStamp")
         if not block_time:
             continue
-        tx_time = datetime.fromtimestamp(block_time) if isinstance(block_time, (int, float)) else datetime.fromisoformat(str(block_time).replace('Z', '+00:00'))
+        tx_time = datetime.fromtimestamp(int(block_time))
         if tx_time < cutoff:
             continue
 
-        for transfer in tx.get("transfers", []):
-            token = transfer.get("token", {})
-            symbol = token.get("symbol") or "UNKNOWN"
-            contract = token.get("contract_address")
-            decimals = int(token.get("decimals", 18))
-            delta = float(transfer.get("delta", 0))
-            amount = delta / (10 ** decimals)
-            if abs(amount) < 0.0001:
-                continue
+        symbol = tx.get("tokenSymbol", "UNKNOWN")
+        amount = float(tx.get("value", 0)) / (10 ** int(tx.get("tokenDecimal", 18)))
+        if abs(amount) < 0.0001:
+            continue
 
-            # Get real price from DexScreener
-            price_usd = 0.0
-            if contract:
-                try:
-                    ds_url = f"https://api.dexscreener.com/latest/dex/tokens/{contract}"
-                    async with httpx.AsyncClient(timeout=10) as ds:
-                        ds_resp = await ds.get(ds_url)
-                        pairs = ds_resp.json().get("pairs", [])
-                        if pairs and isinstance(pairs, list) and len(pairs) > 0:
-                            price_usd = float(pairs[0].get("priceUsd", 0) or 0)
-                except:
-                    pass
+        # Get price from DexScreener
+        contract = tx.get("contractAddress")
+        price_usd = 0.0
+        if contract:
+            try:
+                ds_url = f"https://api.dexscreener.com/latest/dex/tokens/{contract}"
+                async with httpx.AsyncClient(timeout=8) as ds:
+                    ds_resp = await ds.get(ds_url)
+                    pairs = ds_resp.json().get("pairs", [])
+                    if pairs:
+                        price_usd = float(pairs[0].get("priceUsd", 0) or 0)
+            except:
+                pass
 
-            usd_value = abs(amount) * price_usd
-            direction = "→" if delta > 0 else "←"
-            emoji = "🟢" if direction == "→" else "🔴"
+        usd_value = abs(amount) * price_usd
+        direction = "→" if tx.get("to") == WALLET_ADDRESS.lower() else "←"
+        emoji = "🟢" if direction == "→" else "🔴"
 
-            trades.append({
-                "time": tx_time.strftime("%H:%M"),
-                "symbol": symbol,
-                "amount": amount,
-                "usd": usd_value,
-                "direction": direction,
-                "emoji": emoji,
-                "tx_hash": tx.get("tx_hash", "")[:10] + "...",
-                "link": f"https://cronos.org/explorer/tx/{tx.get('tx_hash', '')}"
-            })
+        trades.append({
+            "time": tx_time.strftime("%H:%M"),
+            "symbol": symbol,
+            "amount": amount,
+            "usd": usd_value,
+            "direction": direction,
+            "emoji": emoji,
+            "tx_hash": tx.get("hash", "")[:10] + "...",
+            "link": f"https://cronos.org/explorer/tx/{tx.get('hash', '')}"
+        })
 
-            total_pnl_usd += usd_value if direction == "→" else -usd_value
+        total_pnl_usd += usd_value if direction == "→" else -usd_value
 
     if not trades:
         return "📅 No trades in the last 24 hours."
