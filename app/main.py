@@ -1,5 +1,5 @@
 # app/main.py
-# Updated: Robust Grok AI for /daily_pnl with excellent fallback
+# Updated: Robust Grok AI for /daily_pnl with BackgroundTasks (non-blocking webhook)
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import logging
 from typing import Any, Dict, Optional, List
 import httpx
 from datetime import datetime
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 
 # Config
@@ -82,11 +82,13 @@ Create a clean and insightful Daily PnL summary. Highlight key trades, total act
     return await call_grok_api(prompt)
 
 
-async def get_daily_pnl() -> str:
+async def process_daily_pnl(chat_id: str):
+    """Background task: fetch data + send report"""
     if not WALLET_ADDRESS:
-        return "❌ WALLET_ADDRESS not configured."
+        await send_telegram_message("❌ WALLET_ADDRESS not configured.", chat_id)
+        return
 
-    await send_telegram_message("📡 Fetching recent trades from Cronos Explorer...", CHAT_ID)
+    await send_telegram_message("📡 Fetching recent trades from Cronos Explorer...", chat_id)
 
     url = f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&startblock=0&endblock=999999999&page=1&offset=200&sort=desc"
 
@@ -99,29 +101,34 @@ async def get_daily_pnl() -> str:
         transactions = data.get("result", [])
 
         if not transactions:
-            return "📭 No recent transactions found."
+            await send_telegram_message("📭 No recent transactions found.", chat_id)
+            return
 
-        # Try Grok AI
+        # Try Grok AI first
         if GROK_API_KEY:
             try:
                 ai_report = await analyze_with_grok(transactions, WALLET_ADDRESS)
-                return f"📊 **Grok AI Daily PnL Report**\n\n{ai_report}"
+                report = f"📊 **Grok AI Daily PnL Report**\n\n{ai_report}"
+                await send_telegram_message(report, chat_id)
+                return
             except Exception as e:
                 logging.warning(f"Grok AI failed: {str(e)[:100]}")
 
-        # Safe fallback
-        return build_raw_pnl_report(transactions, WALLET_ADDRESS)
+        # Safe fallback to raw list
+        report = build_raw_pnl_report(transactions, WALLET_ADDRESS)
+        await send_telegram_message(report, chat_id)
 
     except Exception as e:
         logging.exception("get_daily_pnl error")
-        return f"❌ Error: {str(e)[:100]}"
+        await send_telegram_message(f"❌ Error: {str(e)[:100]}", chat_id)
 
 
-# Telegram Helpers (unchanged)
+# Telegram Helpers
 def _bot_api(method: str) -> str:
     if not BOT_TOKEN:
         raise RuntimeError("Missing TELEGRAM_BOT_TOKEN")
     return f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+
 
 async def send_telegram_message(text: str, chat_id: Optional[str] = None) -> None:
     cid = chat_id or CHAT_ID
@@ -137,7 +144,7 @@ async def send_telegram_message(text: str, chat_id: Optional[str] = None) -> Non
         pass
 
 
-# FastAPI App (simplified)
+# FastAPI App
 app = FastAPI(title="All-in-One-DeFi-Bot")
 
 @app.on_event("startup")
@@ -151,8 +158,9 @@ async def _startup() -> None:
 async def health() -> Dict[str, Any]:
     return {"ok": True, "name": "All-in-One-DeFi-Bot"}
 
+
 @app.post("/telegram/webhook")
-async def telegram_webhook(req: Request) -> JSONResponse:
+async def telegram_webhook(req: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     try:
         payload = await req.json()
     except:
@@ -168,13 +176,15 @@ async def telegram_webhook(req: Request) -> JSONResponse:
         return JSONResponse({"ok": True})
 
     elif text in ("/daily_pnl", "/dailypnl"):
-        report = await get_daily_pnl()
-        await send_telegram_message(report, chat_id)
+        # Run heavy work in background → immediate response to Telegram
+        background_tasks.add_task(process_daily_pnl, chat_id)
+
     elif text:
         await send_telegram_message(f"Echo: {text}", chat_id)
 
     return JSONResponse({"ok": True})
 
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
