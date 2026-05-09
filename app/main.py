@@ -1,5 +1,5 @@
 # app/main.py
-# REVERTED: back to old cronos.org/explorer for /daily_pnl as requested
+# REVERTED + Grok AI for /daily_pnl
 
 from __future__ import annotations
 
@@ -10,6 +10,9 @@ import httpx
 from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+# Grok helper (assume grok_helper.py is imported or inline)
+# For simplicity, we assume ask_grok is available. If not, add import.
 
 # ---------------------------------------------------------------------
 # Config
@@ -22,18 +25,39 @@ WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 GROK_API_KEY = os.getenv("GROK_API_KEY")
 
 # ---------------------------------------------------------------------
-# Daily PnL - OLD VERSION with cronos.org/explorer
+# Grok helper (inline for simplicity)
+# ---------------------------------------------------------------------
+_grok_client = None
+
+def get_grok_client():
+    global _grok_client
+    if _grok_client is None:
+        api_key = os.getenv("GROK_API_KEY")
+        if not api_key:
+            raise ValueError("GROK_API_KEY not found")
+        from xai_sdk import Client
+        _grok_client = Client(api_key=api_key)
+    return _grok_client
+
+async def ask_grok(prompt: str, system_prompt: str = None) -> str:
+    client = get_grok_client()
+    from xai_sdk.chat import system, user
+    chat = client.chat.create(model="grok-4.3")
+    if system_prompt:
+        chat.append(system(system_prompt))
+    chat.append(user(prompt))
+    response = await chat.sample()
+    return response.text
+
+# ---------------------------------------------------------------------
+# Daily PnL - Grok AI version with safe fallback
 # ---------------------------------------------------------------------
 async def get_daily_pnl() -> str:
-    """Παλιά έκδοση με cronos.org/explorer (όπως ήταν πριν)"""
-    if not WALLET_ADDRESS:
-        return "❌ WALLET_ADDRESS not configured."
-
-    await send_telegram_message("📡 Fetching recent trades from Cronos Explorer...", CHAT_ID)
-
-    url = f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&startblock=0&endblock=999999999&page=1&offset=200&sort=desc"
-
+    """Daily PnL με Grok AI (fallback στην παλιά λίστα αν κάτι πάει στραβά)"""
     try:
+        # 1. Παλιά λογική για raw transactions
+        url = f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&startblock=0&endblock=999999999&page=1&offset=200&sort=desc"
+
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.get(url)
             resp.raise_for_status()
@@ -44,26 +68,46 @@ async def get_daily_pnl() -> str:
         if not transactions:
             return "📭 Δεν βρέθηκαν συναλλαγές τις τελευταίες ημέρες."
 
-        report = f"📊 **Daily PnL Report**\n\n"
-        report += f"🔑 Wallet: `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n"
-        report += f"📦 Βρέθηκαν {len(transactions)} συναλλαγές\n\n"
+        # 2. Δημιουργία prompt για το Grok
+        raw_data = "\n".join([
+            f"{tx['timeStamp']} | {tx.get('tokenSymbol','?')} | {float(tx.get('value',0)) / (10**int(tx.get('tokenDecimal',18))):,.4f}"
+            for tx in transactions[:50]
+        ])
 
-        for tx in transactions[:15]:
-            time_str = datetime.fromtimestamp(int(tx["timeStamp"])).strftime("%d/%m %H:%M")
-            symbol = tx.get("tokenSymbol", "???" )
-            value = float(tx.get("value", 0)) / (10 ** int(tx.get("tokenDecimal", 18)))
-            report += f"• {time_str} | {symbol} | {value:,.4f}\n"
+        prompt = f"""
+        Wallet: {WALLET_ADDRESS}
+        Τελευταίες συναλλαγές:
+        {raw_data}
 
-        return report
+        Δημιούργησε ένα σύντομο, επαγγελματικό και χρήσιμο Daily PnL report στα Ελληνικά.
+        Εστίασε σε:
+        - Συνολική εικόνα (πόσες συναλλαγές, ποια tokens κυριαρχούν)
+        - Top tokens / μεγαλύτερες κινήσεις
+        - Τυχόν ενδιαφέρουσες παρατηρήσεις
+        Κράτα το φιλικό και άμεσο.
+        """
 
-    except httpx.ReadTimeout:
-        return "⏳ Το Cronos Explorer αργεί. Δοκίμασε ξανά σε λίγα δευτερόλεπτα."
+        # 3. Κλήση Grok
+        grok_report = await ask_grok(
+            prompt,
+            system_prompt="Είσαι επαγγελματίας Cronos DeFi analyst. Μίλα στα Ελληνικά, είσαι άμεσος και λίγο savage."
+        )
+
+        return f"📊 **Smart Daily PnL Report**\n\n{grok_report}"
+
     except Exception as e:
-        logging.exception("Error in get_daily_pnl")
-        return f"❌ Σφάλμα: {str(e)[:150]}"
+        logging.error(f"Error in get_daily_pnl: {e}")
+        # Fallback στην παλιά απλή λίστα
+        fallback = "⚠️ Grok δεν μπόρεσε να απαντήσει. Εδώ είναι η κλασική λίστα:\n\n"
+        for tx in transactions[:20]:
+            time_str = datetime.fromtimestamp(int(tx['timeStamp'])).strftime("%d/%m %H:%M")
+            symbol = tx.get("tokenSymbol", "???")
+            value = float(tx.get("value", 0)) / (10 ** int(tx.get("tokenDecimal", 18)))
+            fallback += f"• {time_str} | {symbol} | {value:,.4f}\n"
+        return fallback
 
 # ---------------------------------------------------------------------
-# Telegram Helpers
+# Telegram Helpers (same as before)
 # ---------------------------------------------------------------------
 def _bot_api(method: str) -> str:
     if not BOT_TOKEN:
@@ -84,7 +128,7 @@ async def send_telegram_message(text: str, chat_id: Optional[str] = None) -> Non
         pass
 
 # ---------------------------------------------------------------------
-# FastAPI App
+# FastAPI App (same as before)
 # ---------------------------------------------------------------------
 app = FastAPI(title="All-in-One-DeFi-Bot")
 
