@@ -1,29 +1,28 @@
 # app/main.py
-# Updated: Robust Grok AI for /daily_pnl with BackgroundTasks (non-blocking webhook)
+# Clean version - Pure Cronos Explorer /daily_pnl (no Grok AI)
 
 from __future__ import annotations
 
 import os
 import logging
-from typing import Any, Dict, Optional, List
-import httpx
+from typing import Any, Dict, List
 from datetime import datetime
+import httpx
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 
 # Config
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
-GROK_API_KEY = os.getenv("GROK_API_KEY")
+BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
 
 
-def build_raw_pnl_report(transactions: List[Dict], wallet: str) -> str:
+def build_pnl_report(transactions: List[Dict], wallet: str) -> str:
     report = f"📊 **Daily PnL Report**\n\n"
     report += f"🔑 Wallet: `{wallet[:8]}...{wallet[-6:]}`\n"
     report += f"📦 {len(transactions)} recent transactions\n\n"
 
-    for tx in transactions[:15]:
+    for tx in transactions[:20]:
         try:
             time_str = datetime.fromtimestamp(int(tx.get('timeStamp', 0))).strftime('%d/%m %H:%M')
             symbol = tx.get('tokenSymbol', '???')
@@ -35,156 +34,96 @@ def build_raw_pnl_report(transactions: List[Dict], wallet: str) -> str:
     return report
 
 
-async def call_grok_api(prompt: str) -> str:
-    if not GROK_API_KEY:
-        raise ValueError("No GROK_API_KEY")
-
-    url = "https://api.x.ai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROK_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "grok-beta",
-        "messages": [
-            {"role": "system", "content": "You are an expert DeFi analyst. Give clear, actionable insights."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.6,
-        "max_tokens": 700
-    }
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(url, json=payload, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        return data['choices'][0]['message']['content'].strip()
-
-
-async def analyze_with_grok(transactions: List[Dict], wallet: str) -> str:
-    tx_lines = []
-    for tx in transactions[:20]:
-        try:
-            time_str = datetime.fromtimestamp(int(tx.get('timeStamp', 0))).strftime('%d/%m %H:%M')
-            symbol = tx.get('tokenSymbol', 'Unknown')
-            value = float(tx.get('value', 0)) / (10 ** int(tx.get('tokenDecimal', 18)))
-            tx_lines.append(f"{time_str} | {symbol} | {value:,.4f}")
-        except:
-            continue
-
-    prompt = f"""Wallet: {wallet}
-
-Recent trades (newest first):
-{chr(10).join(tx_lines)}
-
-Create a clean and insightful Daily PnL summary. Highlight key trades, total activity, and any patterns. Use markdown. Be concise."""
-
-    return await call_grok_api(prompt)
-
-
 async def process_daily_pnl(chat_id: str):
-    """Background task: fetch data + send report"""
     if not WALLET_ADDRESS:
-        await send_telegram_message("❌ WALLET_ADDRESS not configured.", chat_id)
+        await send_telegram_message('❌ WALLET_ADDRESS not configured.', chat_id)
         return
 
-    await send_telegram_message("📡 Fetching recent trades from Cronos Explorer...", chat_id)
+    await send_telegram_message('📡 Fetching recent trades from Cronos Explorer...', chat_id)
 
-    url = f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&startblock=0&endblock=999999999&page=1&offset=200&sort=desc"
+    url = f'https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&startblock=0&endblock=999999999&page=1&offset=200&sort=desc'
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
 
-        transactions = data.get("result", [])
+        transactions = data.get('result', [])
 
         if not transactions:
-            await send_telegram_message("📭 No recent transactions found.", chat_id)
+            await send_telegram_message('📭 No recent transactions found.', chat_id)
             return
 
-        # Try Grok AI first
-        if GROK_API_KEY:
-            try:
-                ai_report = await analyze_with_grok(transactions, WALLET_ADDRESS)
-                report = f"📊 **Grok AI Daily PnL Report**\n\n{ai_report}"
-                await send_telegram_message(report, chat_id)
-                return
-            except Exception as e:
-                logging.warning(f"Grok AI failed: {str(e)[:100]}")
-
-        # Safe fallback to raw list
-        report = build_raw_pnl_report(transactions, WALLET_ADDRESS)
+        report = build_pnl_report(transactions, WALLET_ADDRESS)
         await send_telegram_message(report, chat_id)
 
     except Exception as e:
-        logging.exception("get_daily_pnl error")
-        await send_telegram_message(f"❌ Error: {str(e)[:100]}", chat_id)
+        logging.exception('get_daily_pnl error')
+        await send_telegram_message('⚠️ Cronos Explorer temporarily unavailable. Please try again in a few seconds.', chat_id)
 
 
-# Telegram Helpers
 def _bot_api(method: str) -> str:
     if not BOT_TOKEN:
-        raise RuntimeError("Missing TELEGRAM_BOT_TOKEN")
-    return f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+        raise RuntimeError('Missing TELEGRAM_BOT_TOKEN')
+    return f'https://api.telegram.org/bot{BOT_TOKEN}/{method}'
 
 
-async def send_telegram_message(text: str, chat_id: Optional[str] = None) -> None:
+async def send_telegram_message(text: str, chat_id: str = None) -> None:
     cid = chat_id or CHAT_ID
     if not (BOT_TOKEN and cid):
         return
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=8) as client:
             await client.post(
-                _bot_api("sendMessage"),
-                json={"chat_id": int(cid), "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
+                _bot_api('sendMessage'),
+                json={
+                    'chat_id': int(cid),
+                    'text': text,
+                    'parse_mode': 'Markdown',
+                    'disable_web_page_preview': True
+                }
             )
     except:
         pass
 
 
-# FastAPI App
-app = FastAPI(title="All-in-One-DeFi-Bot")
+app = FastAPI(title='All-in-One-DeFi-Bot')
 
-@app.on_event("startup")
+@app.on_event('startup')
 async def _startup() -> None:
     logging.basicConfig(level=logging.INFO)
-    logging.info("✅ All-in-One-DeFi-Bot started")
-    await send_telegram_message("✅ All-in-One-DeFi-Bot is online.")
+    logging.info('✅ All-in-One-DeFi-Bot started')
+    await send_telegram_message('✅ All-in-One-DeFi-Bot is online.')
 
-@app.get("/")
-@app.get("/health")
+@app.get('/')
+@app.get('/health')
 async def health() -> Dict[str, Any]:
-    return {"ok": True, "name": "All-in-One-DeFi-Bot"}
+    return {'ok': True, 'name': 'All-in-One-DeFi-Bot'}
 
 
-@app.post("/telegram/webhook")
+@app.post('/telegram/webhook')
 async def telegram_webhook(req: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     try:
         payload = await req.json()
     except:
-        return JSONResponse({"ok": False}, status_code=400)
+        return JSONResponse({'ok': False}, status_code=400)
 
-    message = (payload.get("message") or payload.get("edited_message")) or {}
-    text = (message.get("text") or "").strip().lower()
-    chat = message.get("chat") or {}
-    chat_id = str(chat.get("id") or "")
+    message = (payload.get('message') or payload.get('edited_message')) or {}
+    text = (message.get('text') or '').strip().lower()
+    chat = message.get('chat') or {}
+    chat_id = str(chat.get('id') or '')
 
     if text.startswith('/start'):
-        await send_telegram_message("👋 **Welcome!** Type `/daily_pnl` for Grok AI report.", chat_id)
-        return JSONResponse({"ok": True})
+        await send_telegram_message('👋 Welcome! Type `/daily_pnl` for report.', chat_id)
+        return JSONResponse({'ok': True})
 
-    elif text in ("/daily_pnl", "/dailypnl"):
-        # Run heavy work in background → immediate response to Telegram
+    elif text in ('/daily_pnl', '/dailypnl'):
         background_tasks.add_task(process_daily_pnl, chat_id)
 
-    elif text:
-        await send_telegram_message(f"Echo: {text}", chat_id)
-
-    return JSONResponse({"ok": True})
+    return JSONResponse({'ok': True})
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    uvicorn.run(app, host='0.0.0.0', port=int(os.getenv('PORT', 8000)))
