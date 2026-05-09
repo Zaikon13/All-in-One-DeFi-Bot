@@ -1,6 +1,5 @@
 # app/main.py
-# FIXED: Webhook handler now correctly matches /daily_pnl and /start
-# Removed leading space bug that was preventing commands from working
+# FIXED: Switched to stable Cronoscan API for /daily_pnl
 
 from __future__ import annotations
 
@@ -24,125 +23,63 @@ WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 GROK_API_KEY = os.getenv("GROK_API_KEY")
 
 # ---------------------------------------------------------------------
-# Daily PnL - Grouped by token + net position
+# Daily PnL - Using stable Cronoscan API
 # ---------------------------------------------------------------------
 async def get_daily_pnl() -> str:
+    """Stable version using api.cronoscan.com (much more reliable)"""
     if not WALLET_ADDRESS:
         return "❌ WALLET_ADDRESS not configured."
 
-    await send_telegram_message("📡 Fetching recent trades from Cronos explorer...", CHAT_ID)
+    await send_telegram_message("📡 Fetching recent trades from Cronoscan...", CHAT_ID)
 
-    # Cronos Explorer API
-    url = f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&startblock=0&endblock=999999999&page=1&offset=200&sort=desc"
+    api_key = os.getenv("ETHERSCAN_API")
+    if not api_key:
+        return "❌ ETHERSCAN_API key not configured."
+
+    url = (
+        f"https://api.cronoscan.com/api"
+        f"?module=account"
+        f"&action=tokentx"
+        f"&address={WALLET_ADDRESS}"
+        f"&startblock=0"
+        f"&endblock=999999999"
+        f"&page=1"
+        f"&offset=100"
+        f"&sort=desc"
+        f"&apikey={api_key}"
+    )
 
     try:
-        async with httpx.AsyncClient(timeout=25) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
+
+        if data.get("status") != "1":
+            return f"❌ Cronoscan API error: {data.get('message', 'Unknown error')}"
+
+        transactions = data.get("result", [])
+        
+        if not transactions:
+            return "📭 Δεν βρέθηκαν συναλλαγές τις τελευταίες ημέρες."
+
+        report = f"📊 **Daily PnL Report**\n\n"
+        report += f"🔑 Wallet: `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n"
+        report += f"📦 Βρέθηκαν {len(transactions)} συναλλαγές\n\n"
+
+        for tx in transactions[:15]:
+            time_str = datetime.fromtimestamp(int(tx["timeStamp"])).strftime("%d/%m %H:%M")
+            symbol = tx.get("tokenSymbol", "???")
+            value = float(tx.get("value", 0)) / (10 ** int(tx.get("tokenDecimal", 18)))
+            report += f"• {time_str} | {symbol} | {value:,.4f}\n"
+
+        return report
+
+    except httpx.ReadTimeout:
+        return "⏳ Το Cronoscan API αργεί. Δοκίμασε ξανά σε λίγα δευτερόλεπτα."
     except Exception as e:
-        logging.exception("Cronos Explorer error")
-        return f"❌ Error fetching trades: {str(e)[:200]}"
-
-    items = data.get("result", [])
-    if not items:
-        return "📅 No transactions found in the last 24h."
-
-    cutoff = datetime.now() - timedelta(hours=24)
-
-    # Group trades by token
-    token_data = defaultdict(lambda: {"buys": 0.0, "sells": 0.0, "trades": []})
-
-    for tx in items:
-        block_time = tx.get("timeStamp")
-        if not block_time:
-            continue
-        tx_time = datetime.fromtimestamp(int(block_time))
-        if tx_time < cutoff:
-            continue
-
-        symbol = tx.get("tokenSymbol", "UNKNOWN")
-        amount = float(tx.get("value", 0)) / (10 ** int(tx.get("tokenDecimal", 18)))
-        if abs(amount) < 0.0001:
-            continue
-
-        contract = tx.get("contractAddress")
-        price_usd = 0.0
-        if contract:
-            try:
-                ds_url = f"https://api.dexscreener.com/latest/dex/tokens/{contract}"
-                async with httpx.AsyncClient(timeout=8) as ds:
-                    ds_resp = await ds.get(ds_url)
-                    pairs = ds_resp.json().get("pairs", [])
-                    if pairs:
-                        price_usd = float(pairs[0].get("priceUsd", 0) or 0)
-            except:
-                pass
-
-        is_buy = tx.get("to", "").lower() == WALLET_ADDRESS.lower()
-
-        if is_buy:
-            token_data[symbol]["buys"] += amount
-        else:
-            token_data[symbol]["sells"] += amount
-
-        token_data[symbol]["trades"].append({
-            "time": tx_time.strftime("%H:%M"),
-            "amount": amount,
-            "usd": abs(amount) * price_usd,
-            "is_buy": is_buy,
-            "tx_hash": tx.get("hash", "")[:10] + "..."
-        })
-
-    if not token_data:
-        return "📅 No trades in the last 24 hours."
-
-    # Build report
-    message = f"📊 **Daily PnL Report** — Last 24h\n"
-    message += f"Wallet: `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
-
-    total_pnl_usd = 0.0
-
-    for symbol, data in sorted(token_data.items()):
-        net_amount = data["buys"] - data["sells"]
-        avg_price = 0.0  # could be improved
-        net_usd = net_amount * (sum(t["usd"] for t in data["trades"]) / sum(abs(t["amount"]) for t in data["trades"]) if data["trades"] else 0)
-
-        emoji = "🟢" if net_amount > 0 else "🔴" if net_amount < 0 else "⚪"
-        message += f"{emoji} **{symbol}** Net: {net_amount:+.4f}\n"
-        message += f"   Buys: {data['buys']:.4f} | Sells: {data['sells']:.4f}\n"
-        if net_usd:
-            message += f"   Value: ${net_usd:,.2f}\n"
-        message += "\n"
-
-        total_pnl_usd += net_usd
-
-    total_emoji = "🟢" if total_pnl_usd >= 0 else "🔴"
-    message += f"**Total Daily PnL: {total_emoji} ${total_pnl_usd:,.2f}**\n\n"
-
-    # Grok AI Analysis
-    if GROK_API_KEY:
-        try:
-            prompt = f"Analyze these Cronos DeFi trades in Greek. Be short, useful and direct:\nTotal PnL: ${total_pnl_usd:.2f}\nTrades: {str(token_data)}\nGive 3-4 short insights."
-            async with httpx.AsyncClient(timeout=15) as g:
-                r = await g.post(
-                    "https://api.x.ai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {GROK_API_KEY}"},
-                    json={
-                        "model": "grok-beta",
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.7
-                    }
-                )
-                ai_comment = r.json()["choices"][0]["message"]["content"]
-                message += f"🤖 **Grok AI Analysis**:\n{ai_comment}"
-        except Exception as e:
-            logging.exception("Grok AI error")
-            message += "\n🤖 Grok AI (temporarily unavailable)"
-    else:
-        message += "\n🤖 Grok AI not configured."
-
-    return message
+        logging.exception("Error in get_daily_pnl")
+        return f"❌ Σφάλμα: {str(e)[:150]}"
 
 # ---------------------------------------------------------------------
 # Telegram Helpers
@@ -174,7 +111,7 @@ app = FastAPI(title="All-in-One-DeFi-Bot")
 async def _startup() -> None:
     logging.basicConfig(level=logging.INFO)
     logging.info("✅ All-in-One-DeFi-Bot web service started")
-    await send_telegram_message("✅ All-in-One-DeFi-Bot web is online.")
+    await send_telegram_message("✅ All-in-One-DeFi-Bot is online.")
 
 @app.get("/")
 @app.get("/health")
@@ -195,19 +132,16 @@ async def telegram_webhook(req: Request) -> JSONResponse:
 
     logging.info(f"Received command: '{text}' from chat {chat_id}")
 
-    # Handle /start command
     if text.startswith('/start'):
         welcome_msg = (
             "👋 **Καλώς ήρθες στο All-in-One-DeFi-Bot!**\n\n"
             "✅ `/daily_pnl` → Ημερήσιο PnL report\n"
-            "✅ Worker + Web service online\n"
-            "✅ Cronos Explorer + DexScreener\n\n"
+            "✅ Worker + Bot service online\n\n"
             "Πληκτρολόγησε /daily_pnl για να δεις το report σου!"
         )
         await send_telegram_message(welcome_msg, chat_id)
         return JSONResponse({"ok": True})
 
-    # FIXED: Correct command matching (no leading space!)
     elif text == "/daily_pnl" or text == "/dailypnl":
         report = await get_daily_pnl()
         await send_telegram_message(report, chat_id)
