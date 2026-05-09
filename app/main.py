@@ -1,7 +1,6 @@
 # app/main.py
-# Fixed: Real $ PnL + DexScreener + Grok AI + correct FastAPI imports
-# Removed Covalent completely - using only Cronos Explorer
-# Improved /daily_pnl: group by token + net position (buys - sells)
+# FIXED: Webhook handler now correctly matches /daily_pnl and /start
+# Removed leading space bug that was preventing commands from working
 
 from __future__ import annotations
 
@@ -194,6 +193,8 @@ async def telegram_webhook(req: Request) -> JSONResponse:
     chat = message.get("chat") or {}
     chat_id = str(chat.get("id") or "")
 
+    logging.info(f"Received command: '{text}' from chat {chat_id}")
+
     # Handle /start command
     if text.startswith('/start'):
         welcome_msg = (
@@ -206,7 +207,8 @@ async def telegram_webhook(req: Request) -> JSONResponse:
         await send_telegram_message(welcome_msg, chat_id)
         return JSONResponse({"ok": True})
 
-    elif text in [" /daily_pnl", "/dailypnl"]:
+    # FIXED: Correct command matching (no leading space!)
+    elif text == "/daily_pnl" or text == "/dailypnl":
         report = await get_daily_pnl()
         await send_telegram_message(report, chat_id)
     elif text:
