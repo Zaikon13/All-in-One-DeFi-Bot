@@ -1,10 +1,11 @@
 # app/main.py
-# Improved webhook + command handling
+# Fixed multi-service webhook conflict
 
 from __future__ import annotations
 
 import os
 import logging
+import asyncio
 from typing import Any, Dict, List
 from datetime import datetime
 import httpx
@@ -16,8 +17,9 @@ BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
 
-# Force correct bot URL
+# Force correct bot URL + service isolation
 WEBHOOK_BASE_URL = (os.getenv('WEBHOOK_URL') or os.getenv('APP_URL') or "https://bot-production-3d9c.up.railway.app")
+RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
 
 
 def build_pnl_report(transactions: List[Dict], wallet: str) -> str:
@@ -95,7 +97,7 @@ async def delete_webhook() -> None:
     """Delete current webhook for clean setup"""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(_bot_api('deleteWebhook'), json={'drop_pending_updates': True})
+            await client.post(_bot_api('deleteWebhook'))
             logging.info('🗑️ Old Telegram webhook deleted')
     except Exception as e:
         logging.warning(f'Failed to delete webhook: {e}')
@@ -127,28 +129,31 @@ app = FastAPI(title='All-in-One-DeFi-Bot')
 @app.on_event('startup')
 async def _startup() -> None:
     logging.basicConfig(level=logging.INFO)
-    logging.info('✅ All-in-One-DeFi-Bot (web/bot service) started')
+    logging.info(f'✅ All-in-One-DeFi-Bot started | Service: {RAILWAY_SERVICE_NAME}')
 
-    await send_telegram_message('✅ All-in-One-DeFi-Bot web/bot service is online.')
+    await send_telegram_message(f'✅ Bot started on service: **{RAILWAY_SERVICE_NAME}**')
 
-    # Robust Webhook Setup
-    full_webhook_url = f"{WEBHOOK_BASE_URL.rstrip('/')}/telegram/webhook"
-    await delete_webhook()
-    await asyncio.sleep(1)  # Small delay for Telegram
-    await set_webhook(full_webhook_url)
+    # ONLY the "bot" service sets the webhook
+    if RAILWAY_SERVICE_NAME.lower() == "bot":
+        full_webhook_url = f"{WEBHOOK_BASE_URL.rstrip('/')}/telegram/webhook"
+        await delete_webhook()
+        await asyncio.sleep(2)
+        await set_webhook(full_webhook_url)
+    else:
+        logging.info(f'⏭️ Service {RAILWAY_SERVICE_NAME} - skipping webhook setup (not the bot service)')
 
 
 @app.get('/')
 @app.get('/health')
 async def health() -> Dict[str, Any]:
-    return {'ok': True, 'name': 'All-in-One-DeFi-Bot', 'service': 'web-bot'}
+    return {'ok': True, 'name': 'All-in-One-DeFi-Bot', 'service': RAILWAY_SERVICE_NAME}
 
 
 @app.post('/telegram/webhook')
 async def telegram_webhook(req: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     try:
         payload = await req.json()
-        logging.info(f"📥 Webhook received update type: {list(payload.keys())}")
+        logging.info(f"📥 Webhook received from Telegram | Service: {RAILWAY_SERVICE_NAME}")
     except:
         return JSONResponse({'ok': False}, status_code=400)
 
@@ -157,24 +162,19 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks) -> J
     chat = message.get('chat') or {}
     chat_id = str(chat.get('id') or '')
 
-    logging.info(f"📨 Command received: '{text}' from chat {chat_id}")
-
     if text.startswith('/start'):
         await send_telegram_message('👋 Welcome! Type `/daily_pnl` for report.', chat_id)
         return JSONResponse({'ok': True})
 
     elif text in ('/daily_pnl', '/dailypnl'):
         background_tasks.add_task(process_daily_pnl, chat_id)
-        await send_telegram_message('⏳ Generating daily PnL report...', chat_id)  # Immediate feedback
         return JSONResponse({'ok': True})
 
     else:
-        await send_telegram_message('❓ Unknown command. Try /start or /daily_pnl', chat_id)
+        await send_telegram_message('❓ Unknown command. Use /start or /daily_pnl', chat_id)
 
     return JSONResponse({'ok': True})
 
-
-import asyncio
 
 if __name__ == '__main__':
     import uvicorn
