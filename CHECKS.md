@@ -1,13 +1,18 @@
 # 🧩 SYSTEM CHECKS — HEALTH STATUS
 
-| Check | Status | Details |
-|-------|--------|----------|
-| CI Lint/Test | ✅ | Passed on last commit |
-| Railway Web App | ✅ | https://web-production-68ff5.up.railway.app |
-| Telegram Webhook | ✅ | Connected |
-| ENV Variables | ✅ | Loaded (.env example verified) |
-| GitHub Sync | ✅ | MANIFEST auto-updates OK |
-| Worker Loop | ⚠️ | Not deployed yet |
-| Reports Scheduler | ✅ | Scheduled 23:59 daily |
+**Last Updated:** 12 Μαΐου 2026
 
-*(Auto-refreshed during sync job)*
+| Check                  | Status | Details |
+|------------------------|--------|---------|
+| CI Lint/Test           | ✅     | Passing |
+| Railway bot service    | ✅     | Online + Webhook active |
+| Railway web-gpl6       | ✅     | Online (redundant) |
+| Railway worker         | ✅     | Online |
+| Telegram Webhook       | ✅     | Correctly set to bot service |
+| getWebhookInfo         | ✅     | Working |
+| ENV Variables          | ✅     | Synchronized |
+| Deployment SOP         | ✅     | Up to date |
+
+**Worker Loop:** Partially ready (heartbeat active, full DeFi logic next)
+
+*Auto-refreshed during sync jobs*

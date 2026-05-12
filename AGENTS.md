@@ -1,10 +1,14 @@
 # 🤖 AGENTS & MODULE OWNERSHIP MAP
 
-| Module | Responsible Agent | Chat / Mode | Notes |
-|--------|--------------------|--------------|--------|
-| core/ | Codex | /codex_on | Core logic & PnL calculations |
-| telegram/ | ChatGPT | /agent mode: Telegram | Handlers, webhook, alerts |
-| reports/ | ChatGPT | /agent mode: Reports | Daily/EOD summaries |
-| utils/ | ChatGPT | /code_on | HTTP, caching, helpers |
-| tests/ | ChatGPT | /test mode | Unit & integration tests |
-| .github/workflows/ | ChatGPT | /codex_on | CI/CD and sync automation |
+**Last Updated:** 12 Μαΐου 2026
+
+| Module / Area          | Responsible Agent | Notes |
+|------------------------|-------------------|-------|
+| Deployment & Railway   | Grok              | DEPLOYMENT_SOP.md, RAILWAY.md, webhook fixes |
+| Worker Loop (`main.py` + `core/`) | Grok         | Full DeFi logic, Dexscreener, PnL, alerts |
+| Telegram handlers      | Grok / ChatGPT    | Webhook, /daily_pnl |
+| core/PnL & calculations| Codex / Grok      | Refactor pending |
+| Tests & CI             | Grok              | Integration tests next |
+| Documentation          | Grok              | SUMMARY, CHECKS, AGENTS, SOP |
+
+**Current Focus:** Grok is leading the Worker Loop implementation.
