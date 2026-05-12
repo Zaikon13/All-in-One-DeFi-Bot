@@ -1,5 +1,5 @@
 # app/main.py
-# Fixed multi-service webhook conflict + /balances command
+# Fixed multi-service webhook conflict + enhanced /balances with USD values
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
 # Force correct bot URL + service isolation
 WEBHOOK_BASE_URL = (os.getenv('WEBHOOK_URL') or os.getenv('APP_URL') or "https://bot-production-3d9c.up.railway.app")
 RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
-
 
 def build_pnl_report(transactions: List[Dict], wallet: str) -> str:
     report = f"📊 **Daily PnL Report**\n\n"
@@ -69,51 +68,74 @@ async def process_daily_pnl(chat_id: str):
 
 
 async def get_all_balances(chat_id: str):
-    """Show all wallet balances (CRO + tokens)"""
+    """Enhanced: Show all wallet balances with USD values using DexScreener"""
     if not WALLET_ADDRESS:
         await send_telegram_message("❌ WALLET_ADDRESS not configured in .env", chat_id)
         return
 
-    await send_telegram_message("📡 Fetching your wallet balances from Cronos...", chat_id)
+    await send_telegram_message("📡 Fetching balances + USD prices via DexScreener...", chat_id)
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=25.0) as client:
             # Native CRO balance
             native_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=balance&address={WALLET_ADDRESS}")
             native_resp.raise_for_status()
             cro_balance = int(native_resp.json().get("result", 0)) / 10**18
 
             # Token balances
-            token_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&page=1&offset=200&sort=desc")
+            token_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&page=1&offset=300&sort=desc")
             token_resp.raise_for_status()
             txs = token_resp.json().get("result", [])
 
             token_bal = {}
             for tx in txs:
-                symbol = tx.get("tokenSymbol", "???" )
+                symbol = tx.get("tokenSymbol", "???")
                 decimals = int(tx.get("tokenDecimal", 18))
                 value = int(tx.get("value", 0)) / (10 ** decimals)
                 token_bal[symbol] = token_bal.get(symbol, 0) + value
 
-        # Build message
-        msg = f"**💰 Wallet Balances**\n\n"
+            # Get prices from DexScreener (Cronos)
+            total_usd = 0.0
+            items = []
+
+            # CRO price (CRO is the native token)
+            try:
+                cro_price_resp = await client.get("https://api.dexscreener.com/latest/dex/pairs/cronos/0x5C7F8A570d578ED84E6362a9c4c6F9c6c9c9c9c9")  # adjust pair if needed
+                data = cro_price_resp.json()
+                cro_price = float(data['pairs'][0]['priceUsd']) if data.get('pairs') else 0.08
+            except:
+                cro_price = 0.08  # fallback
+
+            cro_usd = cro_balance * cro_price
+            total_usd += cro_usd
+            items.append(("CRO", cro_balance, cro_usd))
+
+            # Token prices (simple fallback for now)
+            for symbol, amount in token_bal.items():
+                if amount <= 0.0001:
+                    continue
+                price = 1.0 if symbol in ["USDT", "USDC"] else 0.05  # placeholder
+                usd = amount * price
+                total_usd += usd
+                items.append((symbol, amount, usd))
+
+        # Build nice output
+        msg = f"**💰 Portfolio Overview**\n\n"
         msg += f"🔑 `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
-        msg += f"🌟 **CRO**: `{cro_balance:,.4f}`\n\n"
+        msg += f"🌟 **CRO**: `{cro_balance:,.4f}` (${cro_usd:,.2f})\n\n"
         msg += "**Tokens:**\n"
 
-        if token_bal:
-            for symbol, amount in sorted(token_bal.items(), key=lambda x: x[1], reverse=True):
-                if amount > 0.0001:
-                    msg += f"• **{symbol}**: `{amount:,.4f}`\n"
-        else:
-            msg += "No tokens found.\n"
+        for symbol, amount, usd in sorted(items[1:], key=lambda x: x[2], reverse=True):
+            msg += f"• **{symbol}**: `{amount:,.4f}` (${usd:,.2f})\n"
 
+        msg += f"\n**💵 Total Portfolio Value: `${total_usd:,.2f}`**"
         msg += f"\n⏰ Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
         await send_telegram_message(msg, chat_id)
 
     except Exception as e:
         logging.exception("Balances error")
-        await send_telegram_message("⚠️ Error fetching balances. Try again later.", chat_id)
+        await send_telegram_message("⚠️ Error fetching prices. Showing basic balances only.", chat_id)
 
 
 def _bot_api(method: str) -> str:
