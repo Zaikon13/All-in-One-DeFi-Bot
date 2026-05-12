@@ -1,5 +1,5 @@
 # app/main.py
-# Fixed multi-service webhook conflict
+# Fixed multi-service webhook conflict + /balances command
 
 from __future__ import annotations
 
@@ -65,7 +65,55 @@ async def process_daily_pnl(chat_id: str):
 
     except Exception as e:
         logging.exception('get_daily_pnl error')
-        await send_telegram_message('⚠️ Cronos Explorer temporarily unavailable. Please try again in a few seconds.', chat_id)
+        await send_telegram_message('⚠️ Cronos Explorer temporarily unavailable.', chat_id)
+
+
+async def get_all_balances(chat_id: str):
+    """Show all wallet balances (CRO + tokens)"""
+    if not WALLET_ADDRESS:
+        await send_telegram_message("❌ WALLET_ADDRESS not configured in .env", chat_id)
+        return
+
+    await send_telegram_message("📡 Fetching your wallet balances from Cronos...", chat_id)
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            # Native CRO balance
+            native_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=balance&address={WALLET_ADDRESS}")
+            native_resp.raise_for_status()
+            cro_balance = int(native_resp.json().get("result", 0)) / 10**18
+
+            # Token balances
+            token_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&page=1&offset=200&sort=desc")
+            token_resp.raise_for_status()
+            txs = token_resp.json().get("result", [])
+
+            token_bal = {}
+            for tx in txs:
+                symbol = tx.get("tokenSymbol", "???" )
+                decimals = int(tx.get("tokenDecimal", 18))
+                value = int(tx.get("value", 0)) / (10 ** decimals)
+                token_bal[symbol] = token_bal.get(symbol, 0) + value
+
+        # Build message
+        msg = f"**💰 Wallet Balances**\n\n"
+        msg += f"🔑 `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
+        msg += f"🌟 **CRO**: `{cro_balance:,.4f}`\n\n"
+        msg += "**Tokens:**\n"
+
+        if token_bal:
+            for symbol, amount in sorted(token_bal.items(), key=lambda x: x[1], reverse=True):
+                if amount > 0.0001:
+                    msg += f"• **{symbol}**: `{amount:,.4f}`\n"
+        else:
+            msg += "No tokens found.\n"
+
+        msg += f"\n⏰ Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        await send_telegram_message(msg, chat_id)
+
+    except Exception as e:
+        logging.exception("Balances error")
+        await send_telegram_message("⚠️ Error fetching balances. Try again later.", chat_id)
 
 
 def _bot_api(method: str) -> str:
@@ -94,17 +142,15 @@ async def send_telegram_message(text: str, chat_id: str = None) -> None:
 
 
 async def delete_webhook() -> None:
-    """Delete current webhook for clean setup"""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(_bot_api('deleteWebhook'))
-            logging.info('🗑️ Old Telegram webhook deleted')
+            logging.info('🗑️ Old webhook deleted')
     except Exception as e:
         logging.warning(f'Failed to delete webhook: {e}')
 
 
 async def set_webhook(webhook_url: str) -> None:
-    """Set new Telegram webhook"""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
@@ -116,11 +162,11 @@ async def set_webhook(webhook_url: str) -> None:
                 }
             )
             if resp.status_code == 200:
-                logging.info(f'✅ Telegram webhook successfully set to: {webhook_url}')
+                logging.info(f'✅ Webhook set to: {webhook_url}')
             else:
-                logging.error(f'Failed to set webhook. Status: {resp.status_code} - {resp.text}')
+                logging.error(f'Webhook set failed: {resp.text}')
     except Exception as e:
-        logging.error(f'Exception while setting webhook: {e}')
+        logging.error(f'Webhook error: {e}')
 
 
 app = FastAPI(title='All-in-One-DeFi-Bot')
@@ -133,27 +179,26 @@ async def _startup() -> None:
 
     await send_telegram_message(f'✅ Bot started on service: **{RAILWAY_SERVICE_NAME}**')
 
-    # ONLY the "bot" service sets the webhook
     if RAILWAY_SERVICE_NAME.lower() == "bot":
         full_webhook_url = f"{WEBHOOK_BASE_URL.rstrip('/')}/telegram/webhook"
         await delete_webhook()
         await asyncio.sleep(2)
         await set_webhook(full_webhook_url)
     else:
-        logging.info(f'⏭️ Service {RAILWAY_SERVICE_NAME} - skipping webhook setup (not the bot service)')
+        logging.info(f'⏭️ Service {RAILWAY_SERVICE_NAME} - skipping webhook setup')
 
 
 @app.get('/')
 @app.get('/health')
 async def health() -> Dict[str, Any]:
-    return {'ok': True, 'name': 'All-in-One-DeFi-Bot', 'service': RAILWAY_SERVICE_NAME}
+    return {'ok': True, 'service': RAILWAY_SERVICE_NAME}
 
 
 @app.post('/telegram/webhook')
 async def telegram_webhook(req: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     try:
         payload = await req.json()
-        logging.info(f"📥 Webhook received from Telegram | Service: {RAILWAY_SERVICE_NAME}")
+        logging.info(f"📥 Webhook received")
     except:
         return JSONResponse({'ok': False}, status_code=400)
 
@@ -163,15 +208,19 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks) -> J
     chat_id = str(chat.get('id') or '')
 
     if text.startswith('/start'):
-        await send_telegram_message('👋 Welcome! Type `/daily_pnl` for report.', chat_id)
+        await send_telegram_message('👋 Welcome!\n\nCommands:\n• /daily_pnl\n• /balances\n• /wallet', chat_id)
         return JSONResponse({'ok': True})
 
     elif text in ('/daily_pnl', '/dailypnl'):
         background_tasks.add_task(process_daily_pnl, chat_id)
         return JSONResponse({'ok': True})
 
+    elif text in ('/balances', '/wallet', '/bal', '/balance'):
+        background_tasks.add_task(get_all_balances, chat_id)
+        return JSONResponse({'ok': True})
+
     else:
-        await send_telegram_message('❓ Unknown command. Use /start or /daily_pnl', chat_id)
+        await send_telegram_message('❓ Unknown command.\nUse: /start, /daily_pnl, /balances', chat_id)
 
     return JSONResponse({'ok': True})
 
