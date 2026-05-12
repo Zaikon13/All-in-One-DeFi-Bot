@@ -1,5 +1,5 @@
 # app/main.py
-# Clean version with Telegram Webhook auto-setup
+# Final version with hard-coded fallback for bot webhook
 
 from __future__ import annotations
 
@@ -15,7 +15,9 @@ from fastapi.responses import JSONResponse
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL') or os.getenv('APP_URL')
+
+# Force correct bot URL - final fix
+WEBHOOK_BASE_URL = (os.getenv('WEBHOOK_URL') or os.getenv('APP_URL') or "https://bot-production-3d9c.up.railway.app")
 
 
 def build_pnl_report(transactions: List[Dict], wallet: str) -> str:
@@ -94,7 +96,7 @@ async def delete_webhook() -> None:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(_bot_api('deleteWebhook'))
-        logging.info('🗑️ Old Telegram webhook deleted')
+            logging.info('🗑️ Old Telegram webhook deleted')
     except Exception as e:
         logging.warning(f'Failed to delete webhook: {e}')
 
@@ -127,15 +129,12 @@ async def _startup() -> None:
     logging.basicConfig(level=logging.INFO)
     logging.info('✅ All-in-One-DeFi-Bot (web/bot service) started')
 
-    await send_telegram_message('✅ All-in-One-DeFi-Bot web service is online.')
+    await send_telegram_message('✅ All-in-One-DeFi-Bot web/bot service is online.')
 
-    # Auto configure Telegram Webhook
-    if WEBHOOK_URL:
-        full_webhook_url = f"{WEBHOOK_URL.rstrip('/')}/telegram/webhook"
-        await delete_webhook()
-        await set_webhook(full_webhook_url)
-    else:
-        logging.warning('⚠️ No WEBHOOK_URL or APP_URL configured - Telegram webhook not set')
+    # Auto configure Telegram Webhook - FINAL FIX
+    full_webhook_url = f"{WEBHOOK_BASE_URL.rstrip('/')}/telegram/webhook"
+    await delete_webhook()
+    await set_webhook(full_webhook_url)
 
 
 @app.get('/')
