@@ -76,7 +76,6 @@ async def get_all_balances(chat_id: str):
                 if amount < 0.0001:
                     continue
                 price = 1.0 if symbol in ["USDT", "USDC"] else 0.0
-                # Add more DexScreener calls if needed
                 usd_value = amount * price
                 total_usd += usd_value
                 portfolio.append((symbol, amount, usd_value))
@@ -136,4 +135,4 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))"
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
