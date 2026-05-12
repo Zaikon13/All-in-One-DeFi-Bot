@@ -44,7 +44,7 @@ async def set_webhook():
                 f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
                 json={"url": url, "allowed_updates": ["message", "edited_message"]}
             )
-        logging.info(f"Webhook set to: {url}")
+        logging.info(f"✅ Webhook set to: {url}")
     except Exception as e:
         logging.error(f"Webhook set failed: {e}")
 
@@ -63,50 +63,68 @@ async def get_all_balances(chat_id: str):
     if not WALLET_ADDRESS:
         await send_telegram_message("❌ WALLET_ADDRESS not configured", chat_id)
         return
-
     await send_telegram_message("📡 Fetching your wallet balances...", chat_id)
-
     try:
         async with httpx.AsyncClient(timeout=25.0) as client:
-            # CRO balance
             native_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=balance&address={WALLET_ADDRESS}")
             cro_balance = int(native_resp.json().get("result", 0)) / 10**18
 
-            # Token balances
             token_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&offset=300&sort=desc")
             txs = token_resp.json().get("result", [])
 
             token_bal = {}
             for tx in txs:
-                symbol = tx.get("tokenSymbol", "???")
+                symbol = tx.get("tokenSymbol", "???" )
                 decimals = int(tx.get("tokenDecimal", 18))
                 value = int(tx.get("value", 0)) / (10 ** decimals)
                 token_bal[symbol] = token_bal.get(symbol, 0) + value
 
-            # Build message
             msg = f"**💰 Wallet Balances**\n\n"
             msg += f"🔑 `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
             msg += f"🌟 **CRO**: `{cro_balance:,.4f}`\n\n"
             msg += "**Tokens:**\n"
-
             for symbol, amount in sorted(token_bal.items(), key=lambda x: x[1], reverse=True):
                 if amount > 0.0001:
                     msg += f"• **{symbol}**: `{amount:,.4f}`\n"
-
-            msg += f"\n⏰ Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            msg += f"\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             await send_telegram_message(msg, chat_id)
-
     except Exception as e:
         logging.exception("Balances error")
         await send_telegram_message("⚠️ Error fetching balances. Try again.", chat_id)
 
-# ================== HEALTH ROUTES ==================
+# ================== DAILY PNL ==================
+async def process_daily_pnl(chat_id: str):
+    if not WALLET_ADDRESS:
+        await send_telegram_message("❌ WALLET_ADDRESS not configured", chat_id)
+        return
+    await send_telegram_message("📡 Fetching recent trades from Cronos Explorer...", chat_id)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&page=1&offset=200&sort=desc")
+            txs = resp.json().get("result", [])
+        if not txs:
+            await send_telegram_message("📭 No recent transactions found.", chat_id)
+            return
+        report = "📊 **Daily PnL Report**\n\n"
+        report += f"🔑 Wallet: `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n"
+        report += f"📦 {len(txs)} recent transactions\n\n"
+        for tx in txs[:20]:
+            time_str = datetime.fromtimestamp(int(tx.get('timeStamp', 0))).strftime('%d/%m %H:%M')
+            symbol = tx.get('tokenSymbol', '???')
+            decimals = int(tx.get('tokenDecimal', 18))
+            value = float(tx.get('value', 0)) / (10 ** decimals)
+            report += f"• {time_str} | {symbol} | {value:,.4f}\n"
+        await send_telegram_message(report, chat_id)
+    except Exception as e:
+        logging.exception("daily_pnl error")
+        await send_telegram_message("⚠️ Error fetching daily PnL", chat_id)
+
+# ================== ROUTES ==================
 @app.get("/")
 @app.get("/health")
 async def health():
     return {"ok": True, "service": RAILWAY_SERVICE_NAME, "status": "running"}
 
-# ================== WEBHOOK ==================
 @app.post("/telegram/webhook")
 async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
     try:
@@ -121,16 +139,16 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         menu = """👋 **Welcome to All-in-One DeFi Bot!**
 
 **Commands:**
-• /daily_pnl
-• /balances
-• /wallet"""
+• /daily_pnl — Daily PnL Report
+• /balances — Wallet Balances
+• /wallet — Same as /balances"""
         await send_telegram_message(menu, chat_id)
 
     elif text in ("/balances", "/wallet", "/bal", "/balance"):
         background_tasks.add_task(get_all_balances, chat_id)
 
     elif text in ("/daily_pnl", "/dailypnl"):
-        await send_telegram_message("📡 Fetching daily PnL...", chat_id)
+        background_tasks.add_task(process_daily_pnl, chat_id)
 
     else:
         await send_telegram_message("❓ Unknown command. Type /start", chat_id)
