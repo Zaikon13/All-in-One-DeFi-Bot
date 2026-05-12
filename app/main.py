@@ -1,5 +1,5 @@
 # app/main.py
-# Final version with hard-coded fallback for bot webhook
+# ABSOLUTE FINAL VERSION - Hardcoded bot-production-3d9c webhook
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
 
-# Force correct bot URL - final fix
-WEBHOOK_BASE_URL = (os.getenv('WEBHOOK_URL') or os.getenv('APP_URL') or "https://bot-production-3d9c.up.railway.app")
+# ABSOLUTE FINAL HARDCODED BOT URL - This will never change again
+WEBHOOK_BASE_URL = "https://bot-production-3d9c.up.railway.app"
 
 
 def build_pnl_report(transactions: List[Dict], wallet: str) -> str:
@@ -65,7 +65,6 @@ async def process_daily_pnl(chat_id: str):
         logging.exception('get_daily_pnl error')
         await send_telegram_message('⚠️ Cronos Explorer temporarily unavailable. Please try again in a few seconds.', chat_id)
 
-
 def _bot_api(method: str) -> str:
     if not BOT_TOKEN:
         raise RuntimeError('Missing TELEGRAM_BOT_TOKEN')
@@ -92,7 +91,6 @@ async def send_telegram_message(text: str, chat_id: str = None) -> None:
 
 
 async def delete_webhook() -> None:
-    """Delete current webhook for clean setup"""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(_bot_api('deleteWebhook'))
@@ -101,24 +99,25 @@ async def delete_webhook() -> None:
         logging.warning(f'Failed to delete webhook: {e}')
 
 
-async def set_webhook(webhook_url: str) -> None:
-    """Set new Telegram webhook"""
+async def set_webhook() -> None:
+    full_url = f"{WEBHOOK_BASE_URL}/telegram/webhook"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 _bot_api('setWebhook'),
                 json={
-                    'url': webhook_url,
+                    'url': full_url,
                     'allowed_updates': ['message', 'edited_message'],
                     'drop_pending_updates': True
                 }
             )
             if resp.status_code == 200:
-                logging.info(f'✅ Telegram webhook successfully set to: {webhook_url}')
+                logging.info(f'✅ Telegram webhook successfully set to: {full_url}')
+                await send_telegram_message('✅ Webhook registered successfully on bot service', CHAT_ID)
             else:
-                logging.error(f'Failed to set webhook. Status: {resp.status_code} - {resp.text}')
+                logging.error(f'Failed to set webhook: {resp.text}')
     except Exception as e:
-        logging.error(f'Exception while setting webhook: {e}')
+        logging.exception('set_webhook failed')
 
 
 app = FastAPI(title='All-in-One-DeFi-Bot')
@@ -127,20 +126,16 @@ app = FastAPI(title='All-in-One-DeFi-Bot')
 @app.on_event('startup')
 async def _startup() -> None:
     logging.basicConfig(level=logging.INFO)
-    logging.info('✅ All-in-One-DeFi-Bot (web/bot service) started')
-
-    await send_telegram_message('✅ All-in-One-DeFi-Bot web/bot service is online.')
-
-    # Auto configure Telegram Webhook - FINAL FIX
-    full_webhook_url = f"{WEBHOOK_BASE_URL.rstrip('/')}/telegram/webhook"
+    logging.info('✅ All-in-One-DeFi-Bot (bot service) started')
+    await send_telegram_message('✅ All-in-One-DeFi-Bot bot service is online.', CHAT_ID)
     await delete_webhook()
-    await set_webhook(full_webhook_url)
+    await set_webhook()
 
 
 @app.get('/')
 @app.get('/health')
 async def health() -> Dict[str, Any]:
-    return {'ok': True, 'name': 'All-in-One-DeFi-Bot', 'service': 'web-bot'}
+    return {'ok': True, 'name': 'All-in-One-DeFi-Bot', 'service': 'bot'}
 
 
 @app.post('/telegram/webhook')
