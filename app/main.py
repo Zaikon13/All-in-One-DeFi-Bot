@@ -1,5 +1,5 @@
 # app/main.py
-# Clean version - Pure Cronos Explorer /daily_pnl (no Grok AI)
+# Clean version with Telegram Webhook auto-setup
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL') or os.getenv('APP_URL')
 
 
 def build_pnl_report(transactions: List[Dict], wallet: str) -> str:
@@ -88,18 +89,59 @@ async def send_telegram_message(text: str, chat_id: str = None) -> None:
         pass
 
 
+async def delete_webhook() -> None:
+    """Delete current webhook for clean setup"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(_bot_api('deleteWebhook'))
+        logging.info('🗑️ Old Telegram webhook deleted')
+    except Exception as e:
+        logging.warning(f'Failed to delete webhook: {e}')
+
+
+async def set_webhook(webhook_url: str) -> None:
+    """Set new Telegram webhook"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                _bot_api('setWebhook'),
+                json={
+                    'url': webhook_url,
+                    'allowed_updates': ['message', 'edited_message'],
+                    'drop_pending_updates': True
+                }
+            )
+            if resp.status_code == 200:
+                logging.info(f'✅ Telegram webhook successfully set to: {webhook_url}')
+            else:
+                logging.error(f'Failed to set webhook. Status: {resp.status_code} - {resp.text}')
+    except Exception as e:
+        logging.error(f'Exception while setting webhook: {e}')
+
+
 app = FastAPI(title='All-in-One-DeFi-Bot')
+
 
 @app.on_event('startup')
 async def _startup() -> None:
     logging.basicConfig(level=logging.INFO)
-    logging.info('✅ All-in-One-DeFi-Bot started')
-    await send_telegram_message('✅ All-in-One-DeFi-Bot is online.')
+    logging.info('✅ All-in-One-DeFi-Bot (web/bot service) started')
+
+    await send_telegram_message('✅ All-in-One-DeFi-Bot web service is online.')
+
+    # Auto configure Telegram Webhook
+    if WEBHOOK_URL:
+        full_webhook_url = f"{WEBHOOK_URL.rstrip('/')}/telegram/webhook"
+        await delete_webhook()
+        await set_webhook(full_webhook_url)
+    else:
+        logging.warning('⚠️ No WEBHOOK_URL or APP_URL configured - Telegram webhook not set')
+
 
 @app.get('/')
 @app.get('/health')
 async def health() -> Dict[str, Any]:
-    return {'ok': True, 'name': 'All-in-One-DeFi-Bot'}
+    return {'ok': True, 'name': 'All-in-One-DeFi-Bot', 'service': 'web-bot'}
 
 
 @app.post('/telegram/webhook')
