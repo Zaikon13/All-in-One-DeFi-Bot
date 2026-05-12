@@ -14,6 +14,8 @@
 
 **Σημαντικό:** Το **bot** service είναι το **μόνο** που έχει registered webhook στο Telegram.
 
-**Αυτό το SOP είναι το μοναδικό επίσημο reference point.**
+**Current State:** Webhook confirmed working on https://bot-production-3d9c.up.railway.app/telegram/webhook
 
-**Current State Locked:** Webhook confirmed working on bot-production-3d9c.up.railway.app
+**This SOP is the single source of truth.** All documentation has been synced to match the current stable working state.
+
+**Locked:** 12 Μαΐου 2026
