@@ -4,8 +4,9 @@ import os
 import logging
 import httpx
 from datetime import datetime
+import asyncio
 
-# Config
+# ================== CONFIG ==================
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
@@ -14,6 +15,7 @@ RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
 
 app = FastAPI(title="All-in-One-DeFi-Bot")
 
+# ================== HELPERS ==================
 async def send_telegram_message(text: str, chat_id: str = None):
     cid = chat_id or CHAT_ID
     if not (BOT_TOKEN and cid):
@@ -27,20 +29,84 @@ async def send_telegram_message(text: str, chat_id: str = None):
     except:
         pass
 
+async def delete_webhook():
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
+    except:
+        pass
+
+async def set_webhook():
+    url = f"{WEBHOOK_BASE_URL.rstrip('/')}/telegram/webhook"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
+                json={"url": url, "allowed_updates": ["message", "edited_message"]}
+            )
+        logging.info(f"Webhook set to: {url}")
+    except Exception as e:
+        logging.error(f"Webhook set failed: {e}")
+
+# ================== STARTUP ==================
+@app.on_event("startup")
+async def startup():
+    logging.basicConfig(level=logging.INFO)
+    logging.info(f"✅ Bot started on service: {RAILWAY_SERVICE_NAME}")
+    if RAILWAY_SERVICE_NAME.lower() == "bot":
+        await delete_webhook()
+        await asyncio.sleep(2)
+        await set_webhook()
+
+# ================== BALANCES ==================
 async def get_all_balances(chat_id: str):
     if not WALLET_ADDRESS:
         await send_telegram_message("❌ WALLET_ADDRESS not configured", chat_id)
         return
-    await send_telegram_message("📡 Fetching balances + USD prices...", chat_id)
-    # Simple version for now
-    await send_telegram_message("💰 /balances feature active", chat_id)
 
+    await send_telegram_message("📡 Fetching your wallet balances...", chat_id)
+
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            # CRO balance
+            native_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=balance&address={WALLET_ADDRESS}")
+            cro_balance = int(native_resp.json().get("result", 0)) / 10**18
+
+            # Token balances
+            token_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&offset=300&sort=desc")
+            txs = token_resp.json().get("result", [])
+
+            token_bal = {}
+            for tx in txs:
+                symbol = tx.get("tokenSymbol", "???")
+                decimals = int(tx.get("tokenDecimal", 18))
+                value = int(tx.get("value", 0)) / (10 ** decimals)
+                token_bal[symbol] = token_bal.get(symbol, 0) + value
+
+            # Build message
+            msg = f"**💰 Wallet Balances**\n\n"
+            msg += f"🔑 `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
+            msg += f"🌟 **CRO**: `{cro_balance:,.4f}`\n\n"
+            msg += "**Tokens:**\n"
+
+            for symbol, amount in sorted(token_bal.items(), key=lambda x: x[1], reverse=True):
+                if amount > 0.0001:
+                    msg += f"• **{symbol}**: `{amount:,.4f}`\n"
+
+            msg += f"\n⏰ Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            await send_telegram_message(msg, chat_id)
+
+    except Exception as e:
+        logging.exception("Balances error")
+        await send_telegram_message("⚠️ Error fetching balances. Try again.", chat_id)
+
+# ================== HEALTH ROUTES ==================
 @app.get("/")
 @app.get("/health")
 async def health():
-    """Health check routes - fixes root URL Not Found error"""
     return {"ok": True, "service": RAILWAY_SERVICE_NAME, "status": "running"}
 
+# ================== WEBHOOK ==================
 @app.post("/telegram/webhook")
 async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
     try:
