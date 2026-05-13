@@ -132,10 +132,18 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         menu = """👋 **Welcome to All-in-One DeFi Bot!**
 
 **Available Commands:**
-• /daily_pnl — Advanced Daily Trade Report + Position PnL (with USDT)
-• /balances — Wallet Balances
-• /wallet — Same as /balances
-• /bal — Quick balance check"""
+
+📊 `/daily_pnl` — Advanced daily trade report
+Shows all your trades grouped by asset + net position with live USDT values
+
+💰 `/balances` — Full wallet balances
+View your current holdings in CRO and all tokens
+
+🔄 `/wallet` — Same as /balances
+
+⚡ `/bal` — Quick balance check
+
+⏰ The worker runs hourly in the background and sends heartbeat messages."""
         await send_telegram_message(menu, chat_id)
 
     elif text in ("/balances", "/wallet", "/bal", "/balance"):
@@ -145,7 +153,7 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         background_tasks.add_task(process_daily_pnl, chat_id)
 
     else:
-        await send_telegram_message("❓ Unknown command. Type /start for menu.", chat_id)
+        await send_telegram_message("❓ Unknown command. Type /start for the full menu.", chat_id)
 
     return JSONResponse({"ok": True})
 
