@@ -6,7 +6,7 @@ import httpx
 from datetime import datetime
 import asyncio
 
-# ================== CONFIG ==================
+# Config
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
@@ -15,7 +15,6 @@ RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
 
 app = FastAPI(title="All-in-One-DeFi-Bot")
 
-# ================== HELPERS ==================
 async def send_telegram_message(text: str, chat_id: str = None):
     cid = chat_id or CHAT_ID
     if not (BOT_TOKEN and cid):
@@ -48,7 +47,6 @@ async def set_webhook():
     except Exception as e:
         logging.error(f"Webhook set failed: {e}")
 
-# ================== STARTUP ==================
 @app.on_event("startup")
 async def startup():
     logging.basicConfig(level=logging.INFO)
@@ -58,7 +56,6 @@ async def startup():
         await asyncio.sleep(2)
         await set_webhook()
 
-# ================== BALANCES ==================
 async def get_all_balances(chat_id: str):
     if not WALLET_ADDRESS:
         await send_telegram_message("❌ WALLET_ADDRESS not configured", chat_id)
@@ -92,7 +89,6 @@ async def get_all_balances(chat_id: str):
         logging.exception("Balances error")
         await send_telegram_message("⚠️ Error fetching balances. Try again.", chat_id)
 
-# ================== DAILY PNL ==================
 async def process_daily_pnl(chat_id: str):
     if not WALLET_ADDRESS:
         await send_telegram_message("❌ WALLET_ADDRESS not configured", chat_id)
@@ -119,7 +115,6 @@ async def process_daily_pnl(chat_id: str):
         logging.exception("daily_pnl error")
         await send_telegram_message("⚠️ Error fetching daily PnL", chat_id)
 
-# ================== ROUTES ==================
 @app.get("/")
 @app.get("/health")
 async def health():
@@ -138,10 +133,11 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
     if text.startswith("/start"):
         menu = """👋 **Welcome to All-in-One DeFi Bot!**
 
-**Commands:**
+**Available Commands:**
 • /daily_pnl — Daily PnL Report
-• /balances — Wallet Balances
-• /wallet — Same as /balances"""
+• /balances — Wallet Balances (CRO + Tokens)
+• /wallet — Same as /balances
+• /bal — Quick balance check"""
         await send_telegram_message(menu, chat_id)
 
     elif text in ("/balances", "/wallet", "/bal", "/balance"):
@@ -151,7 +147,7 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         background_tasks.add_task(process_daily_pnl, chat_id)
 
     else:
-        await send_telegram_message("❓ Unknown command. Type /start", chat_id)
+        await send_telegram_message("❓ Unknown command. Type /start for menu.", chat_id)
 
     return JSONResponse({"ok": True})
 
