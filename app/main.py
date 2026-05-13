@@ -93,7 +93,7 @@ async def process_daily_pnl(chat_id: str):
     if not WALLET_ADDRESS:
         await send_telegram_message("❌ WALLET_ADDRESS not configured", chat_id)
         return
-    await send_telegram_message("📡 Fetching recent trades from Cronos Explorer...", chat_id)
+    await send_telegram_message("📡 Fetching recent trades...", chat_id)
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&page=1&offset=200&sort=desc")
@@ -105,13 +105,13 @@ async def process_daily_pnl(chat_id: str):
 
         from core.pnl_calculator import PnLCalculator
 
-        # Use the new detailed grouped report
-        report = await PnLCalculator.build_detailed_pnl_report(txs, WALLET_ADDRESS)
+        # Use the new ADVANCED report with USDT values
+        report = await PnLCalculator.build_advanced_pnl_report(txs, WALLET_ADDRESS)
         await send_telegram_message(report, chat_id)
 
     except Exception as e:
         logging.exception("daily_pnl error")
-        await send_telegram_message("⚠️ Error fetching daily PnL", chat_id)
+        await send_telegram_message("⚠️ Error generating report", chat_id)
 
 @app.get("/")
 @app.get("/health")
@@ -132,8 +132,8 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         menu = """👋 **Welcome to All-in-One DeFi Bot!**
 
 **Available Commands:**
-• /daily_pnl — Daily Trade Report + Position PnL
-• /balances — Wallet Balances (CRO + Tokens)
+• /daily_pnl — Advanced Daily Trade Report + Position PnL (with USDT)
+• /balances — Wallet Balances
 • /wallet — Same as /balances
 • /bal — Quick balance check"""
         await send_telegram_message(menu, chat_id)

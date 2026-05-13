@@ -1,4 +1,4 @@
-# Modular PnL Calculator for All-in-One-DeFi-Bot
+# Modular PnL Calculator for All-in-One-DeFi-Bot (Advanced version with USDT values)
 
 import logging
 from datetime import datetime
@@ -8,11 +8,16 @@ from core.dexscreener import get_token_price
 class PnLCalculator:
 
     @staticmethod
-    async def build_detailed_pnl_report(transactions: List[Dict], wallet: str) -> str:
+    async def build_advanced_pnl_report(transactions: List[Dict], wallet: str) -> str:
+        """
+        Advanced per-asset daily report with USDT values.
+        Groups trades by token, shows sequence of buys/sells,
+        net position, and current value in USDT.
+        """
         if not transactions:
             return "📭 No recent transactions found."
 
-        # Group transactions by token symbol
+        # Group by token symbol
         token_trades: Dict[str, List[Dict]] = {}
         for tx in transactions:
             try:
@@ -20,86 +25,104 @@ class PnLCalculator:
                 if symbol not in token_trades:
                     token_trades[symbol] = []
                 token_trades[symbol].append(tx)
-            except Exception:
+            except:
                 continue
 
-        report = f"📊 **Daily Trade Report + Position PnL**\n\n"
+        report = "📊 **Advanced Daily Trade Report + Position PnL (USDT)**\n\n"
         report += f"🔑 Wallet: `{wallet[:8]}...{wallet[-6:]}`\n"
-        report += f"📆 Period: Last 24h activity\n\n"
+        report += "📆 Showing last 24h activity with live USDT values\n\n"
 
-        for symbol, trades in sorted(token_trades.items(), key=lambda x: len(x[1]), reverse=True)[:8]:
+        processed = 0
+        for symbol, trades in sorted(token_trades.items(), key=lambda x: len(x[1]), reverse=True):
+            if processed >= 6:  # Limit to top 6 most active tokens
+                break
+            processed += 1
+
             try:
-                # Calculate net position
+                # Get current price (best effort)
+                contract_address = trades[0].get('contractAddress', '') if trades else ''
+                current_price = await get_token_price(contract_address) if contract_address else None
+
+                # Calculate net position + build trade list
                 net_qty = 0.0
+                total_bought = 0.0
+                total_sold = 0.0
                 trade_lines = []
 
                 for tx in sorted(trades, key=lambda x: int(x.get('timeStamp', 0))):
                     decimals = int(tx.get('tokenDecimal', 18))
-                    value = float(tx.get('value', 0)) / (10 ** decimals)
+                    raw_value = float(tx.get('value', 0))
+                    amount = raw_value / (10 ** decimals)
                     time_str = datetime.fromtimestamp(int(tx.get('timeStamp', 0))).strftime('%H:%M')
 
-                    # Determine direction (very simplified - based on to/from if available)
                     to_addr = tx.get('to', '').lower()
-                    from_addr = tx.get('from', '').lower()
                     wallet_lower = wallet.lower()
 
                     if to_addr == wallet_lower:
                         direction = "👉 BUY"
-                        net_qty += value
+                        net_qty += amount
+                        total_bought += amount
                     else:
                         direction = "👋 SELL"
-                        net_qty -= value
+                        net_qty -= amount
+                        total_sold += amount
 
-                    trade_lines.append(f"  {time_str} | {direction} {value:,.2f}")
+                    # USDT value of this specific trade (using current price as approximation)
+                    usdt_value = amount * current_price if current_price else 0
+                    usdt_str = f" (~${usdt_value:,.2f})" if current_price else ""
 
-                # Get current price
-                # Note: We need contract address for accurate price. Using symbol as fallback.
-                current_price = await get_token_price(trades[0].get('contractAddress', '')) if trades else None
+                    trade_lines.append(f"  {time_str} | {direction} {amount:,.2f}{usdt_str}")
 
+                # Build the report section for this token
                 report += f"\n**{symbol}** ({len(trades)} trades)\n"
                 report += "\n".join(trade_lines) + "\n"
 
-                if net_qty != 0:
-                    report += f"\n📊 **Net position**: {net_qty:+,.4f} {symbol}\n"
-
-                    if current_price and current_price > 0:
-                        position_value = abs(net_qty) * current_price
-                        report += f"💰 **Current value**: ${position_value:,.2f} (at ${current_price:.6f})\n"
-
-                        if net_qty > 0:
-                            report += "📈 You are currently **long** this asset from today's activity.\n"
-                        else:
-                            report += "📉 You have **reduced** your position (sold more than bought).\n"
-                    else:
-                        report += "📈 Current price not available for exact PnL.\n"
+                # Summary for this token
+                if net_qty > 0.0001:
+                    report += f"\n📊 **Net Position**: +{net_qty:,.4f} {symbol} (long from today's activity)\n"
+                    if current_price:
+                        position_value = net_qty * current_price
+                        report += f"💰 **Current Value**: ${position_value:,.2f} USDT @ ${current_price:.6f}\n"
+                        report += "📈 You are currently **holding** this position.\n"
+                elif net_qty < -0.0001:
+                    report += f"\n📊 **Net Position**: {net_qty:,.4f} {symbol} (you sold more than you bought today)\n"
+                    if current_price:
+                        report += f"📉 You have **reduced exposure** to this asset.\n"
                 else:
-                    report += "🔄 Position closed (bought and sold similar amounts).\n"
+                    report += "🔄 Position roughly closed (bought ≈ sold).\n"
+
+                # Extra insight
+                if total_bought > 0 and total_sold > 0:
+                    report += f"🔄 You bought {total_bought:,.2f} and sold {total_sold:,.2f} today.\n"
 
             except Exception as e:
-                logging.warning(f"Error building report for {symbol}: {e}")
+                logging.warning(f"Error processing {symbol}: {e}")
                 continue
 
-        report += "\n\n🔄 *Note: PnL is estimated from net position + current price. For precise cost-basis PnL we need historical prices.*"
+        if processed == 0:
+            report += "No meaningful token activity found in the last 24h.\n"
+
+        report += "\n\n🔄 *USDT values are calculated using current live price (approximation). For exact historical cost-basis PnL we would need price at time of each trade.*"
         return report
 
     @staticmethod
     def build_pnl_report(transactions: List[Dict], wallet: str) -> str:
-        # Keep old simple version for backward compatibility
+        # Simple fallback version
         if not transactions:
             return "📭 No recent transactions found."
 
         report = f"📊 **Daily PnL Report**\n\n"
         report += f"🔑 Wallet: `{wallet[:8]}...{wallet[-6:]}`\n"
         report += f"📆 {len(transactions)} recent transactions\n\n"
+
         token_summary = {}
-        for tx in transactions[:30]:
+        for tx in transactions[:25]:
             try:
                 symbol = tx.get('tokenSymbol', 'UNKNOWN')
                 decimals = int(tx.get('tokenDecimal', 18))
                 value = float(tx.get('value', 0)) / (10 ** decimals)
                 time_str = datetime.fromtimestamp(int(tx.get('timeStamp', 0))).strftime('%d/%m %H:%M')
                 report += f"• {time_str} | {symbol} | {value:+,.4f}\n"
-
                 token_summary[symbol] = token_summary.get(symbol, 0) + value
             except:
                 continue
