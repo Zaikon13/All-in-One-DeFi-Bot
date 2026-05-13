@@ -98,19 +98,17 @@ async def process_daily_pnl(chat_id: str):
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&page=1&offset=200&sort=desc")
             txs = resp.json().get("result", [])
+
         if not txs:
             await send_telegram_message("📭 No recent transactions found.", chat_id)
             return
-        report = "📊 **Daily PnL Report**\n\n"
-        report += f"🔑 Wallet: `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n"
-        report += f"📦 {len(txs)} recent transactions\n\n"
-        for tx in txs[:20]:
-            time_str = datetime.fromtimestamp(int(tx.get('timeStamp', 0))).strftime('%d/%m %H:%M')
-            symbol = tx.get('tokenSymbol', '???')
-            decimals = int(tx.get('tokenDecimal', 18))
-            value = float(tx.get('value', 0)) / (10 ** decimals)
-            report += f"• {time_str} | {symbol} | {value:,.4f}\n"
+
+        from core.pnl_calculator import PnLCalculator
+
+        # Use the new detailed grouped report
+        report = await PnLCalculator.build_detailed_pnl_report(txs, WALLET_ADDRESS)
         await send_telegram_message(report, chat_id)
+
     except Exception as e:
         logging.exception("daily_pnl error")
         await send_telegram_message("⚠️ Error fetching daily PnL", chat_id)
@@ -134,7 +132,7 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         menu = """👋 **Welcome to All-in-One DeFi Bot!**
 
 **Available Commands:**
-• /daily_pnl — Daily PnL Report
+• /daily_pnl — Daily Trade Report + Position PnL
 • /balances — Wallet Balances (CRO + Tokens)
 • /wallet — Same as /balances
 • /bal — Quick balance check"""
