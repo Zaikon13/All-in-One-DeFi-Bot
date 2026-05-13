@@ -6,7 +6,6 @@ import httpx
 from datetime import datetime
 import asyncio
 
-# Config
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
@@ -32,8 +31,8 @@ async def send_telegram_message(text: str, chat_id: str = None, reply_markup=Non
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                 json=payload
             )
-    except:
-        pass
+    except Exception as e:
+        logging.error(f"Send message error: {e}")
 
 async def delete_webhook():
     try:
@@ -78,12 +77,12 @@ async def get_all_balances(chat_id: str):
 
             token_bal = {}
             for tx in txs:
-                symbol = tx.get("tokenSymbol", "???" )
+                symbol = tx.get("tokenSymbol", "???")
                 decimals = int(tx.get("tokenDecimal", 18))
                 value = int(tx.get("value", 0)) / (10 ** decimals)
                 token_bal[symbol] = token_bal.get(symbol, 0) + value
 
-            msg = f"**Wallet Balances**
+            msg = f"**💼 Wallet Balances**
 
 "
             msg += f"`{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`
@@ -121,7 +120,6 @@ async def process_daily_pnl(chat_id: str):
 
         from core.pnl_calculator import PnLCalculator
 
-        # Use the new ADVANCED report with USDT values
         report = await PnLCalculator.build_advanced_pnl_report(txs, WALLET_ADDRESS)
         await send_telegram_message(report, chat_id)
 
@@ -145,17 +143,14 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         return JSONResponse({"ok": False}, status_code=400)
 
     if text.startswith("/start"):
-        menu = """**Welcome to All-in-One DeFi Bot!**
-
-**Available Commands:**"""
+        menu = "**👋 Welcome to All-in-One DeFi Bot!**\n\n**Available Commands:**"
         reply_markup = {
             "keyboard": [
                 ["/daily_pnl"],
                 ["/balances", "/wallet"],
                 ["/bal"]
             ],
-            "resize_keyboard": True,
-            "one_time_keyboard": False
+            "resize_keyboard": True
         }
         await send_telegram_message(menu, chat_id, reply_markup=reply_markup)
 
