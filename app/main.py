@@ -93,27 +93,25 @@ async def process_daily_pnl(chat_id: str):
     if not WALLET_ADDRESS:
         await send_telegram_message("❌ WALLET_ADDRESS not configured", chat_id)
         return
-    await send_telegram_message("📡 Fetching recent trades from Cronos Explorer...", chat_id)
+    await send_telegram_message("📡 Fetching recent trades...", chat_id)
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&page=1&offset=200&sort=desc")
             txs = resp.json().get("result", [])
+
         if not txs:
             await send_telegram_message("📭 No recent transactions found.", chat_id)
             return
-        report = "📊 **Daily PnL Report**\n\n"
-        report += f"🔑 Wallet: `{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n"
-        report += f"📦 {len(txs)} recent transactions\n\n"
-        for tx in txs[:20]:
-            time_str = datetime.fromtimestamp(int(tx.get('timeStamp', 0))).strftime('%d/%m %H:%M')
-            symbol = tx.get('tokenSymbol', '???')
-            decimals = int(tx.get('tokenDecimal', 18))
-            value = float(tx.get('value', 0)) / (10 ** decimals)
-            report += f"• {time_str} | {symbol} | {value:,.4f}\n"
+
+        from core.pnl_calculator import PnLCalculator
+
+        # Use the new ADVANCED report with USDT values
+        report = await PnLCalculator.build_advanced_pnl_report(txs, WALLET_ADDRESS)
         await send_telegram_message(report, chat_id)
+
     except Exception as e:
         logging.exception("daily_pnl error")
-        await send_telegram_message("⚠️ Error fetching daily PnL", chat_id)
+        await send_telegram_message("⚠️ Error generating report", chat_id)
 
 @app.get("/")
 @app.get("/health")
@@ -134,10 +132,18 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         menu = """👋 **Welcome to All-in-One DeFi Bot!**
 
 **Available Commands:**
-• /daily_pnl — Daily PnL Report
-• /balances — Wallet Balances (CRO + Tokens)
-• /wallet — Same as /balances
-• /bal — Quick balance check"""
+
+📊 `/daily_pnl` — Advanced daily trade report
+Shows all your trades grouped by asset + net position with live USDT values
+
+💰 `/balances` — Full wallet balances
+View your current holdings in CRO and all tokens
+
+🔄 `/wallet` — Same as /balances
+
+⚡ `/bal` — Quick balance check
+
+⏰ The worker runs hourly in the background and sends heartbeat messages."""
         await send_telegram_message(menu, chat_id)
 
     elif text in ("/balances", "/wallet", "/bal", "/balance"):
@@ -147,7 +153,7 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         background_tasks.add_task(process_daily_pnl, chat_id)
 
     else:
-        await send_telegram_message("❓ Unknown command. Type /start for menu.", chat_id)
+        await send_telegram_message("❓ Unknown command. Type /start for the full menu.", chat_id)
 
     return JSONResponse({"ok": True})
 
