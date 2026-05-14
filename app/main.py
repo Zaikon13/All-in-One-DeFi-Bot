@@ -63,16 +63,19 @@ async def startup():
         await asyncio.sleep(2)
         await set_webhook()
 
-async def get_price(symbol: str) -> float:
-    """Simple price lookup for major tokens"""
+async def get_price(contract: str) -> float:
+    """Live price from DexScreener"""
+    if not contract:
+        return 0.0
     try:
         async with httpx.AsyncClient(timeout=8) as client:
-            if symbol == "CRO":
-                return 0.08 # placeholder
-            # Add more for other tokens
-            return 0.0
+            url = f"https://api.dexscreener.com/latest/dex/tokens/{contract}"
+            data = (await client.get(url)).json()
+            if data.get("pairs"):
+                return float(data["pairs"][0]["priceUsd"])
     except:
-        return 0.0
+        pass
+    return 0.0
 
 async def get_all_balances(chat_id: str):
     if not WALLET_ADDRESS:
@@ -81,10 +84,12 @@ async def get_all_balances(chat_id: str):
     await send_telegram_message("Fetching your wallet balances...", chat_id)
     try:
         async with httpx.AsyncClient(timeout=25.0) as client:
+            # Native CRO balance
             native_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=balance&address={WALLET_ADDRESS}")
             cro_balance = int(native_resp.json().get("result", 0)) / 10**18
 
-            token_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&offset=300&sort=desc")
+            # Token transactions for net balance calculation
+            token_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&offset=500&sort=desc")
             txs = token_resp.json().get("result", [])
 
             token_bal = {}
@@ -92,17 +97,24 @@ async def get_all_balances(chat_id: str):
                 symbol = tx.get("tokenSymbol", "???")
                 decimals = int(tx.get("tokenDecimal", 18))
                 value = int(tx.get("value", 0)) / (10 ** decimals)
-                token_bal[symbol] = token_bal.get(symbol, 0) + value
+                contract = tx.get("contractAddress", "")
+                # Net balance based on direction
+                if tx.get("to", "").lower() == WALLET_ADDRESS.lower():
+                    token_bal[symbol] = token_bal.get(symbol, 0) + value
+                else:
+                    token_bal[symbol] = token_bal.get(symbol, 0) - value
 
             # Calculate total value for %
-            total_value = cro_balance * 0.08  # placeholder CRO price
+            total_value = cro_balance * 0.08  # CRO price placeholder, can be improved
             msg = f"**💼 Wallet Balances**\n\n"
             msg += f"`{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
             msg += f"**CRO**: `{cro_balance:,.4f}` ~ ${cro_balance * 0.08:,.2f}\n\n"
             msg += "**Tokens:**\n"
             for symbol, amount in sorted(token_bal.items(), key=lambda x: x[1], reverse=True):
                 if amount > 0.0001:
-                    usd = amount * 0.01 # placeholder
+                    # Get live price if contract available
+                    price = await get_price(contract) if 'contract' in locals() else 0.0
+                    usd = amount * price if price > 0 else 0.0
                     percent = (usd / max(total_value, 1)) * 100 if total_value > 0 else 0
                     msg += f"• **{symbol}**: `{amount:,.4f}` ~ ${usd:,.2f} ({percent:.1f}%)\n"
             msg += f"\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -182,4 +194,4 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))"
