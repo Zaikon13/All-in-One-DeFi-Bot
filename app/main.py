@@ -6,10 +6,11 @@ import httpx
 from datetime import datetime
 import asyncio
 
+# Config
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
-WEBHOOK_BASE_URL = os.getenv('WEBHOOK_URL') or os.getenv('APP_URL') or "https://bot-production-3d9c.up.railway.app"
+WEBHOOK_BASE_URL = os.getenv('WEBHOOK_URL') or os.getenv('APP_URL') or "https://web-gpl6-production.up.railway.app"
 RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
 
 app = FastAPI(title="All-in-One-DeFi-Bot")
@@ -82,23 +83,14 @@ async def get_all_balances(chat_id: str):
                 value = int(tx.get("value", 0)) / (10 ** decimals)
                 token_bal[symbol] = token_bal.get(symbol, 0) + value
 
-            msg = f"**💼 Wallet Balances**
-
-"
-            msg += f"`{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`
-
-"
-            msg += f"**CRO**: `{cro_balance:,.4f}`
-
-"
-            msg += "**Tokens:**
-"
+            msg = f"**💼 Wallet Balances**\n\n"
+            msg += f"`{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
+            msg += f"**CRO**: `{cro_balance:,.4f}`\n\n"
+            msg += "**Tokens:**\n"
             for symbol, amount in sorted(token_bal.items(), key=lambda x: x[1], reverse=True):
                 if amount > 0.0001:
-                    msg += f"• **{symbol}**: `{amount:,.4f}`
-"
-            msg += f"
-{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    msg += f"• **{symbol}**: `{amount:,.4f}`\n"
+            msg += f"\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             await send_telegram_message(msg, chat_id)
     except Exception as e:
         logging.exception("Balances error")
@@ -143,14 +135,17 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         return JSONResponse({"ok": False}, status_code=400)
 
     if text.startswith("/start"):
-        menu = "**👋 Welcome to All-in-One DeFi Bot!**\n\n**Available Commands:**"
+        menu = """**👋 Welcome to All-in-One DeFi Bot!**
+
+**Available Commands:**"""
         reply_markup = {
             "keyboard": [
                 ["/daily_pnl"],
                 ["/balances", "/wallet"],
                 ["/bal"]
             ],
-            "resize_keyboard": True
+            "resize_keyboard": True,
+            "one_time_keyboard": False
         }
         await send_telegram_message(menu, chat_id, reply_markup=reply_markup)
 
