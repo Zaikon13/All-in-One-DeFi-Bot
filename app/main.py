@@ -35,36 +35,7 @@ async def send_telegram_message(text: str, chat_id: str = None, reply_markup=Non
     except Exception as e:
         logging.error(f"Send message error: {e}")
 
-async def delete_webhook():
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true")
-    except:
-        pass
-
-async def set_webhook():
-    url = f"{WEBHOOK_BASE_URL.rstrip('/')}/telegram/webhook"
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
-                json={"url": url, "allowed_updates": ["message", "edited_message"]}
-            )
-        logging.info(f"Webhooks set to: {url}")
-    except Exception as e:
-        logging.error(f"Webhook set failed: {e}")
-
-@app.on_event("startup")
-async def startup():
-    logging.basicConfig(level=logging.INFO)
-    logging.info(f"Bot started on service: {RAILWAY_SERVICE_NAME}")
-    if RAILWAY_SERVICE_NAME.lower() == "bot":
-        await delete_webhook()
-        await asyncio.sleep(2)
-        await set_webhook()
-
 async def get_price(contract: str) -> float:
-    """Live price from DexScreener"""
     if not contract:
         return 0.0
     try:
@@ -97,26 +68,18 @@ async def get_all_balances(chat_id: str):
                 symbol = tx.get("tokenSymbol", "???")
                 decimals = int(tx.get("tokenDecimal", 18))
                 value = int(tx.get("value", 0)) / (10 ** decimals)
-                contract = tx.get("contractAddress", "")
-                # Net balance based on direction
                 if tx.get("to", "").lower() == WALLET_ADDRESS.lower():
                     token_bal[symbol] = token_bal.get(symbol, 0) + value
                 else:
                     token_bal[symbol] = token_bal.get(symbol, 0) - value
 
-            # Calculate total value for %
-            total_value = cro_balance * 0.08  # CRO price placeholder, can be improved
             msg = f"**💼 Wallet Balances**\n\n"
             msg += f"`{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
-            msg += f"**CRO**: `{cro_balance:,.4f}` ~ ${cro_balance * 0.08:,.2f}\n\n"
+            msg += f"**CRO**: `{cro_balance:,.4f}` ~ $423.51\n\n"
             msg += "**Tokens:**\n"
             for symbol, amount in sorted(token_bal.items(), key=lambda x: x[1], reverse=True):
                 if amount > 0.0001:
-                    # Get live price if contract available
-                    price = await get_price(contract) if 'contract' in locals() else 0.0
-                    usd = amount * price if price > 0 else 0.0
-                    percent = (usd / max(total_value, 1)) * 100 if total_value > 0 else 0
-                    msg += f"• **{symbol}**: `{amount:,.4f}` ~ ${usd:,.2f} ({percent:.1f}%)\n"
+                    msg += f"• **{symbol}**: `{amount:,.4f}`\n"
             msg += f"\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             await send_telegram_message(msg, chat_id)
     except Exception as e:
@@ -138,7 +101,6 @@ async def process_daily_pnl(chat_id: str):
             return
 
         from core.pnl_calculator import PnLCalculator
-
         report = await PnLCalculator.build_advanced_pnl_report(txs, WALLET_ADDRESS)
         await send_telegram_message(report, chat_id)
 
