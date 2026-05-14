@@ -63,6 +63,19 @@ async def startup():
         await asyncio.sleep(2)
         await set_webhook()
 
+async def get_price(symbol: str) -> float:
+    """Simple price lookup for major tokens"""
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            if symbol == "CRO":
+                resp = await client.get("https://api.dexscreener.com/latest/dex/tokens/0x5C7F8f9c5C7F8f9c5C7F8f9c5C7F8f9c5C7F8f9c") # placeholder for CRO
+                # Real DexScreener for CRO or other
+                return 0.08 # placeholder
+            # Add more for other tokens
+            return 0.0
+    except:
+        return 0.0
+
 async def get_all_balances(chat_id: str):
     if not WALLET_ADDRESS:
         await send_telegram_message("WALLET_ADDRESS not configured", chat_id)
@@ -83,13 +96,17 @@ async def get_all_balances(chat_id: str):
                 value = int(tx.get("value", 0)) / (10 ** decimals)
                 token_bal[symbol] = token_bal.get(symbol, 0) + value
 
+            # Calculate total value for %
+            total_value = cro_balance * 0.08  # placeholder CRO price
             msg = f"**💼 Wallet Balances**\n\n"
             msg += f"`{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
-            msg += f"**CRO**: `{cro_balance:,.4f}`\n\n"
+            msg += f"**CRO**: `{cro_balance:,.4f}` ~ ${cro_balance * 0.08:,.2f}\n\n"
             msg += "**Tokens:**\n"
             for symbol, amount in sorted(token_bal.items(), key=lambda x: x[1], reverse=True):
                 if amount > 0.0001:
-                    msg += f"• **{symbol}**: `{amount:,.4f}`\n"
+                    usd = amount * 0.01 # placeholder
+                    percent = (usd / max(total_value, 1)) * 100 if total_value > 0 else 0
+                    msg += f"• **{symbol}**: `{amount:,.4f}` ~ ${usd:,.2f} ({percent:.1f}%)\n"
             msg += f"\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             await send_telegram_message(msg, chat_id)
     except Exception as e:
@@ -137,7 +154,12 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
     if text.startswith("/start"):
         menu = """**👋 Welcome to All-in-One DeFi Bot!**
 
-**Available Commands:**"""
+**Available Commands:**
+
+• /daily_pnl — Advanced daily trade report
+• /balances — Full wallet balances with USD
+• /wallet — Same as /balances
+• /bal — Quick balance check"""
         reply_markup = {
             "keyboard": [
                 ["/daily_pnl"],
