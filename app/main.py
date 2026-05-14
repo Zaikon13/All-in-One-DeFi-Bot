@@ -68,8 +68,6 @@ async def get_price(symbol: str) -> float:
     try:
         async with httpx.AsyncClient(timeout=8) as client:
             if symbol == "CRO":
-                resp = await client.get("https://api.dexscreener.com/latest/dex/tokens/0x5C7F8f9c5C7F8f9c5C7F8f9c5C7F8f9c5C7F8f9c") # placeholder for CRO
-                # Real DexScreener for CRO or other
                 return 0.08 # placeholder
             # Add more for other tokens
             return 0.0
