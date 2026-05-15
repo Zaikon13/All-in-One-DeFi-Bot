@@ -107,17 +107,17 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
 **Available Commands:**
 
 • /daily_pnl — Advanced daily PnL report
-• /balances — Full wallet balances with USD value
-
-Just type the command or tap the buttons below."""
+• /balances — Full wallet balances with USD
+• /wallet — Same as /balances
+• /bal — Quick balance check"""
         reply_markup = {
-            "keyboard": ["/daily_pnl", "/balances"],
+            "keyboard": ["/daily_pnl", "/balances", "/wallet", "/bal"],
             "resize_keyboard": True,
             "one_time_keyboard": False
         }
         await send_telegram_message(menu, chat_id, reply_markup=reply_markup)
 
-    elif text == "/balances":
+    elif text in ("/balances", "/wallet", "/bal", "/balance"):
         background_tasks.add_task(get_all_balances, chat_id)
 
     elif text in ("/daily_pnl", "/dailypnl"):
