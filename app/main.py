@@ -33,23 +33,9 @@ async def send_telegram_message(text: str, chat_id: str = None, reply_markup=Non
                 payload["reply_markup"] = reply_markup
             await client.post(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json=payload
-            )
+                json=payload)
     except Exception as e:
         logging.error(f"Send message error: {e}")
-
-async def get_price(contract: str) -> float:
-    if not contract:
-        return 0.0
-    try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            url = f"https://api.dexscreener.com/latest/dex/tokens/{contract}"
-            data = (await client.get(url)).json()
-            if data.get("pairs"):
-                return float(data["pairs"][0]["priceUsd"])
-    except:
-        pass
-    return 0.0
 
 async def get_all_balances(chat_id: str):
     if not WALLET_ADDRESS:
@@ -58,14 +44,10 @@ async def get_all_balances(chat_id: str):
     await send_telegram_message("Fetching your wallet balances...", chat_id)
     try:
         async with httpx.AsyncClient(timeout=25.0) as client:
-            # Native CRO balance
             native_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=balance&address={WALLET_ADDRESS}")
             cro_balance = int(native_resp.json().get("result", 0)) / 10**18
-
-            # Token transactions for net balance calculation
             token_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&offset=500&sort=desc")
             txs = token_resp.json().get("result", [])
-
             token_bal = {}
             for tx in txs:
                 symbol = tx.get("tokenSymbol", "???")
@@ -75,11 +57,7 @@ async def get_all_balances(chat_id: str):
                     token_bal[symbol] = token_bal.get(symbol, 0) + value
                 else:
                     token_bal[symbol] = token_bal.get(symbol, 0) - value
-
-            msg = f"**💼 Wallet Balances**\n\n"
-            msg += f"`{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n"
-            msg += f"**CRO**: `{cro_balance:,.4f}` ~ $423.51\n\n"
-            msg += "**Tokens:**\n"
+            msg = f"**💼 Wallet Balances**\n\n`{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n**CRO**: `{cro_balance:,.4f}` ~ $423.51\n\n**Tokens:**\n"
             for symbol, amount in sorted(token_bal.items(), key=lambda x: x[1], reverse=True):
                 if amount > 0.0001:
                     msg += f"• **{symbol}**: `{amount:,.4f}`\n"
@@ -98,15 +76,12 @@ async def process_daily_pnl(chat_id: str):
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&page=1&offset=200&sort=desc")
             txs = resp.json().get("result", [])
-
         if not txs:
             await send_telegram_message("No recent transactions found.", chat_id)
             return
-
         from core.pnl_calculator import PnLCalculator
         report = await PnLCalculator.build_advanced_pnl_report(txs, WALLET_ADDRESS)
         await send_telegram_message(report, chat_id)
-
     except Exception as e:
         logging.exception("daily_pnl error")
         await send_telegram_message("Error generating report", chat_id)
@@ -131,29 +106,25 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
 
 **Available Commands:**
 
-• /daily_pnl — Advanced daily trade report
-• /balances — Full wallet balances with USD
-• /wallet — Same as /balances
-• /bal — Quick balance check"""
+• /daily_pnl — Advanced daily PnL report
+• /balances — Full wallet balances with USD value
+
+Just type the command or tap the buttons below."""
         reply_markup = {
-            "keyboard": [
-                ["/daily_pnl"],
-                ["/balances", "/wallet"],
-                ["/bal"]
-            ],
+            "keyboard": ["/daily_pnl", "/balances"],
             "resize_keyboard": True,
             "one_time_keyboard": False
         }
         await send_telegram_message(menu, chat_id, reply_markup=reply_markup)
 
-    elif text in ("/balances", "/wallet", "/bal", "/balance"):
+    elif text == "/balances":
         background_tasks.add_task(get_all_balances, chat_id)
 
     elif text in ("/daily_pnl", "/dailypnl"):
         background_tasks.add_task(process_daily_pnl, chat_id)
 
     else:
-        await send_telegram_message("Unknown command. Type /start for the full menu.", chat_id)
+        await send_telegram_message("Unknown command. Type /start for the menu.", chat_id)
 
     return JSONResponse({"ok": True})
 
