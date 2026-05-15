@@ -40,11 +40,11 @@ async def send_telegram_message(text: str, chat_id: str = None, reply_markup=Non
         logging.error(f"Send message error: {e}")
 
 async def call_grok(prompt: str) -> str:
-    """Call Grok API for analysis"""
+    """Call Grok API for analysis - improved version"""
     if not GROK_API_KEY:
-        return "GROK_API_KEY not configured."
+        return "GROK_API_KEY not configured in Railway."
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=45) as client:
             response = await client.post(
                 "https://api.x.ai/v1/chat/completions",
                 headers={
@@ -52,17 +52,19 @@ async def call_grok(prompt: str) -> str:
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "grok-2-latest",
+                    "model": "grok-beta",
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 800,
-                    "temperature": 0.3
+                    "max_tokens": 600,
+                    "temperature": 0.2
                 }
             )
+            if response.status_code != 200:
+                return f"Grok API error: {response.status_code} - {response.text[:200]}"
             data = response.json()
             return data["choices"][0]["message"]["content"]
     except Exception as e:
-        logging.error(f"Grok API error: {e}")
-        return "Error calling Grok. Try again later."
+        logging.error(f"Grok API exception: {e}")
+        return f"Error calling Grok: {str(e)[:100]}"
 
 async def get_all_balances(chat_id: str):
     if not WALLET_ADDRESS:
@@ -124,15 +126,7 @@ async def grok_analyze(req: Request):
     try:
         data = await req.json()
         wallet = data.get("wallet", WALLET_ADDRESS)
-        prompt = f"""Analyze this Cronos wallet: {wallet}
-
-Give me:
-1. Current portfolio summary
-2. Risk level (Low/Medium/High)
-3. Key observations from recent trades
-4. One actionable suggestion
-
-Be concise and direct."""
+        prompt = f"Analyze Cronos wallet {wallet}. Give: 1) Portfolio summary 2) Risk level 3) Key observations 4) One suggestion. Be concise."
         insight = await call_grok(prompt)
         return {"ok": True, "analysis": insight}
     except Exception as e:
@@ -157,7 +151,7 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
 • /balances — Full wallet balances with USD
 • /wallet — Same as /balances
 • /bal — Quick balance check
-• /grok-analyze — AI-powered wallet analysis"""
+• /grok-analyze — AI-powered analysis"""
         reply_markup = {
             "keyboard": ["/daily_pnl", "/balances", "/grok-analyze"],
             "resize_keyboard": True,
@@ -172,7 +166,7 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         background_tasks.add_task(process_daily_pnl, chat_id)
 
     elif text == "/grok-analyze":
-        prompt = f"Analyze wallet {WALLET_ADDRESS} on Cronos. Give PnL estimate, risk level, and one suggestion."
+        prompt = f"Analyze wallet {WALLET_ADDRESS} on Cronos. Give PnL estimate, risk level (Low/Medium/High), and one clear suggestion. Be direct and concise."
         insight = await call_grok(prompt)
         await send_telegram_message(insight, chat_id)
 
