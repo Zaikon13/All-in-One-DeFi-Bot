@@ -52,7 +52,7 @@ async def call_grok(prompt: str) -> str:
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "grok-beta",
+                    "model": "grok-4.3",
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 600,
                     "temperature": 0.2
