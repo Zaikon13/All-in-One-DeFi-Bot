@@ -18,70 +18,51 @@ jobs:
           fetch-depth: 0
 
       - name: Get diff
-        id: get_diff
         run: |
           git diff origin/${{ github.base_ref }}...HEAD > pr.diff || true
 
-      - name: Analyze with Grok
-        id: analyze
+      - name: Review with Grok
+        id: review
         env:
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
         run: |
           if [ ! -s pr.diff ]; then
-            echo 'review<<EOF' >> $GITHUB_OUTPUT
-            echo 'No code changes to review.' >> $GITHUB_OUTPUT
+            echo 'output<<EOF' >> $GITHUB_OUTPUT
+            echo 'No significant changes to review.' >> $GITHUB_OUTPUT
             echo 'EOF' >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          DIFF=$(head -180 pr.diff | sed 's/"/\\"/g')
+          DIFF=$(head -200 pr.diff)
 
-          JSON_PAYLOAD=$(jq -n \
+          JSON=$(jq -n \
             --arg model "grok-4.3" \
-            --arg system "You are a senior software engineer. Review code changes and give concise, actionable feedback on bugs, security and best practices." \
-            --arg user "Review these changes:\n\n```diff\n$DIFF\n```" \
-            '{
-              model: $model,
-              messages: [
-                {role: "system", content: $system},
-                {role: "user", content: $user}
-              ],
-              temperature: 0.2,
-              max_tokens: 700
-            }')
+            --arg system "You are a senior software engineer performing code review. Focus on: bugs, security issues, performance problems, code smells, and best practices. Be constructive and specific. Keep feedback concise." \
+            --arg user "Please review the following code changes:\n\n```diff\n$DIFF\n```" \
+            '{model: $model, messages: [{role:"system", content:$system}, {role:"user", content:$user}], temperature: 0.2, max_tokens: 800}')
 
-          RESPONSE=$(curl -s -w "\n%{http_code}" https://api.x.ai/v1/chat/completions \
+          RESP=$(curl -s https://api.x.ai/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $GROK_API_KEY" \
-            -d "$JSON_PAYLOAD")
+            -d "$JSON")
 
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
+          REVIEW=$(echo "$RESP" | jq -r '.choices[0].message.content // "No review generated"')
 
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo 'review<<EOF' >> $GITHUB_OUTPUT
-            echo "Grok API returned HTTP $HTTP_CODE" >> $GITHUB_OUTPUT
-            echo 'EOF' >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          REVIEW=$(echo "$BODY" | jq -r '.choices[0].message.content // "No review content"' 2>/dev/null || echo "Failed to parse response")
-
-          echo 'review<<EOF' >> $GITHUB_OUTPUT
+          echo 'output<<EOF' >> $GITHUB_OUTPUT
           echo "$REVIEW" >> $GITHUB_OUTPUT
           echo 'EOF' >> $GITHUB_OUTPUT
 
-      - name: Post comment
+      - name: Post Review Comment
         uses: actions/github-script@v7
-        if: steps.analyze.outputs.review != ''
+        if: steps.review.outputs.output != ''
         with:
           script: |
-            const reviewText = `${{ steps.analyze.outputs.review }}`;
+            const review = `${{ steps.review.outputs.output }}`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
               body: `## 🤖 Grok Code Review
 
-${reviewText}`
+${review}`
             });
