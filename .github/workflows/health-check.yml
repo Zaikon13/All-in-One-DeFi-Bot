@@ -1,0 +1,57 @@
+name: Health Check Report
+
+on:
+  schedule:
+    - cron: '0 8 * * *'     # Every day at 08:00 UTC
+  workflow_dispatch:        # Manual trigger
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Railway Health
+        id: railway
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://bot-production-3d9c.up.railway.app/health || echo "000")
+          echo "status=$HTTP_CODE" >> $GITHUB_OUTPUT
+
+      - name: Generate Health Report
+        id: report
+        run: |
+          REPORT="## 🏥 All-in-One-DeFi-Bot - Daily Health Report\n\n"
+          REPORT+="**Date:** $(date '+%Y-%m-%d %H:%M UTC')\n\n"
+
+          if [ "${{ steps.railway.outputs.status }}" = "200" ]; then
+            REPORT+="✅ **Railway Health:** Healthy (200 OK)\n"
+          else
+            REPORT+="❌ **Railway Health:** Unhealthy (Status: ${{ steps.railway.outputs.status }})\n"
+          fi
+
+          REPORT+="\n**Services Checked:**\n"
+          REPORT+="- Railway Web Service\n"
+          REPORT+="- Health Endpoint\n\n"
+          REPORT+="**Repository:** Zaikon13/All-in-One-DeFi-Bot\n"
+          REPORT+="**Workflow:** Health Check Report\n"
+
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$REPORT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Print Report to Logs
+        run: |
+          echo "${{ steps.report.outputs.report }}"
+
+      - name: Send to Telegram (Optional)
+        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.HEALTH_CHECK_CHAT_ID || secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" \
+            -d text="${{ steps.report.outputs.report }}" \
+            -d parse_mode="Markdown"
