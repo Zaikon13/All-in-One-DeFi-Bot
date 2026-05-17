@@ -21,9 +21,6 @@ jobs:
         id: diff
         run: |
           git diff origin/main...HEAD > pr.diff
-          echo "diff<<EOF" >> $GITHUB_OUTPUT
-          cat pr.diff >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Send to Grok for Review
         id: grok
@@ -35,7 +32,7 @@ jobs:
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $GROK_API_KEY" \
             -d '{
-              "model": "grok-2-latest",
+              "model": "grok-4.3",
               "messages": [
                 {"role": "system", "content": "You are an expert senior developer. Review the following code changes and provide constructive feedback. Be concise but useful. Focus on bugs, security, performance, and best practices."},
                 {"role": "user", "content": "Here are the code changes:\n\n```diff\n'"$DIFF"'\n```"}
@@ -43,7 +40,7 @@ jobs:
               "temperature": 0.3
             }')
           echo "review<<EOF" >> $GITHUB_OUTPUT
-          echo "$RESPONSE" | jq -r '.choices[0].message.content' >> $GITHUB_OUTPUT
+          echo "$RESPONSE" | jq -r '.choices[0].message.content // "No review generated"' >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Post Review Comment on PR
