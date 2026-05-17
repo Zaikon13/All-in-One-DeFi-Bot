@@ -1,0 +1,36 @@
+name: Sync Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 8 * * *'  # Daily at 08:00 UTC
+
+jobs:
+  sync-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check repository sync status
+        run: |
+          echo "🔍 Running Sync Check..."
+          git fetch origin
+          LOCAL=$(git rev-parse @)
+          REMOTE=$(git rev-parse origin/main)
+
+          if [ "$LOCAL" = "$REMOTE" ]; then
+            echo "✅ Repository is in sync with GitHub."
+          else
+            echo "::warning::Repository is OUT OF SYNC with GitHub!"
+            echo "Local:  $LOCAL"
+            echo "Remote: $REMOTE"
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: echo "Sync check completed."
