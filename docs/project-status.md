@@ -22,25 +22,25 @@ Build a professional **All-in-One DeFi Telegram Bot** specialized for the **Cron
 
 ## 📊 Current Status Overview
 
-| # | Area                        | Task                                           | Status     | Notes / Priority          |
-|---|-----------------------------|------------------------------------------------|------------|---------------------------|
-| 1 | **Repository Hygiene**      | Clean `.gitignore`, proper sync                | ✅ Done     | Local & GitHub in sync   |
-| 2 | **Grok Integration**        | `core/grok_client.py` + external prompts       | ✅ Done     | Basic structure ready    |
-| 3 | **Sync Check Automation**   | `.github/workflows/sync-check.yml`             | ✅ Done     | Working                  |
-| 4 | **Project Context**         | `docs/project-status.md`                       | ✅ Done     | This file                |
-| 5 | **Code Review Automation**  | Workflow with Grok + PR comments               | ✅ **Done** | Uses Grok + posts review |
-| 6 | **Health Check Report**     | Daily report for bot health                    | ⏳ Pending  | High value               |
-| 7 | **Dependency Update Check** | Auto check for outdated packages               | ⏳ Pending  | Low priority             |
-| 8 | **Improve `/grok-analyze`** | Make Grok analysis more powerful               | ⏳ Pending  | High impact              |
-| 9 | **Telegram Commands Polish**| Fix `/start`, consistency                      | ⏳ Pending  | Needs cleanup            |
+| # | Area                        | Task                                           | Status          | Notes / Priority               |
+|---|-----------------------------|------------------------------------------------|-----------------|--------------------------------|
+| 1 | **Repository Hygiene**      | Clean `.gitignore`, proper sync                | ✅ Done         | Local & GitHub in sync        |
+| 2 | **Grok Integration**        | `core/grok_client.py` + external prompts       | ✅ Done         | Basic structure ready         |
+| 3 | **Sync Check Automation**   | `.github/workflows/sync-check.yml`             | ✅ Done         | Working                       |
+| 4 | **Project Context**         | `docs/project-status.md`                       | ✅ Done         | This file                     |
+| 5 | **Code Review Automation**  | Workflow with Grok + PR comments               | ✅ **Done**     | Uses Grok + posts review      |
+| 6 | **Health Check Report**     | Daily report for bot health                    | 🔄 **In Progress** | Workflow created             |
+| 7 | **Dependency Update Check** | Auto check for outdated packages               | ⏳ Pending      | Low priority                  |
+| 8 | **Improve `/grok-analyze`** | Make Grok analysis more powerful               | ⏳ Pending      | High impact                   |
+| 9 | **Telegram Commands Polish**| Fix `/start`, consistency                      | ⏳ Pending      | Needs cleanup                 |
 
 ---
 
 ## 🚀 Next Immediate Steps
 
 1. ✅ Code Review workflow (with Grok) — **Completed**
-2. Improve Grok analysis quality (`/grok-analyze`)
-3. Add Health Check automation
+2. 🔄 Health Check Report automation — **In Progress**
+3. Improve Grok analysis quality (`/grok-analyze`)
 4. Polish Telegram commands
 5. Refactor PnL module
 
@@ -56,7 +56,7 @@ Build a professional **All-in-One DeFi Telegram Bot** specialized for the **Cron
 ---
 
 **Status Legend:**  
-✅ Done | ⏳ Pending
+✅ Done | 🔄 In Progress | ⏳ Pending
 
 ---
 
