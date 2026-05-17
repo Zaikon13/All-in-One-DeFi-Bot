@@ -1,0 +1,9 @@
+Analyze the wallet {wallet_address} on the Cronos blockchain.
+
+Provide:
+1. A short portfolio summary
+2. Current risk level (Low / Medium / High)
+3. Key observations (positive and negative)
+4. One clear, actionable suggestion
+
+Be direct, concise, and professional.
