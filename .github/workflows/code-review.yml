@@ -12,45 +12,73 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Get PR diff
-        id: diff
+      - name: Get diff
+        id: get_diff
         run: |
-          git diff origin/main...HEAD > pr.diff
+          git diff origin/${{ github.base_ref }}...HEAD > pr.diff || echo "Could not generate diff"
+          echo "diff_length=$(wc -l < pr.diff)" >> $GITHUB_OUTPUT
 
-      - name: Send to Grok for Review
-        id: grok
+      - name: Analyze with Grok
+        id: analyze
         env:
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
         run: |
-          DIFF=$(cat pr.diff | head -300)
-          RESPONSE=$(curl -s https://api.x.ai/v1/chat/completions \
+          if [ ! -s pr.diff ]; then
+            echo 'review<<EOF' >> $GITHUB_OUTPUT
+            echo 'No significant code changes detected.' >> $GITHUB_OUTPUT
+            echo 'EOF' >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          DIFF=$(head -200 pr.diff)
+          RESPONSE=$(curl -s -w "\n%{http_code}" https://api.x.ai/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $GROK_API_KEY" \
-            -d '{
-              "model": "grok-4.3",
-              "messages": [
-                {"role": "system", "content": "You are an expert senior developer. Review the following code changes and provide constructive feedback. Be concise but useful. Focus on bugs, security, performance, and best practices."},
-                {"role": "user", "content": "Here are the code changes:\n\n```diff\n'"$DIFF"'\n```"}
-              ],
-              "temperature": 0.3
-            }')
-          echo "review<<EOF" >> $GITHUB_OUTPUT
-          echo "$RESPONSE" | jq -r '.choices[0].message.content // "No review generated"' >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+            -d @- << JSON
+{
+  "model": "grok-4.3",
+  "messages": [
+    {"role": "system", "content": "You are a senior software engineer. Review the code changes and give concise, actionable feedback focused on bugs, security, performance and best practices."},
+    {"role": "user", "content": "Review these changes:\n\n```diff\n$DIFF\n```"}
+  ],
+  "temperature": 0.2,
+  "max_tokens": 700
+}
+JSON
+)
 
-      - name: Post Review Comment on PR
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo 'review<<EOF' >> $GITHUB_OUTPUT
+            echo "Grok API error (HTTP $HTTP_CODE)" >> $GITHUB_OUTPUT
+            echo 'EOF' >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          REVIEW=$(echo "$BODY" | jq -r '.choices[0].message.content // "No review content"' 2>/dev/null || echo "Failed to parse Grok response")
+
+          echo 'review<<EOF' >> $GITHUB_OUTPUT
+          echo "$REVIEW" >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+
+      - name: Post comment
         uses: actions/github-script@v7
+        if: steps.analyze.outputs.review != ''
         with:
           script: |
-            const review = `${{ steps.grok.outputs.review }}`;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
+            const reviewText = `${{ steps.analyze.outputs.review }}`;
+            await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `## 🤖 Grok Code Review\n\n${review}`
+              issue_number: context.issue.number,
+              body: `## 🤖 Grok Code Review
+
+${reviewText}`
             });
