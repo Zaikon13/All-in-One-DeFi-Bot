@@ -1,0 +1,22 @@
+name: Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        run: git diff origin/main...HEAD > pr.diff
+
+      - name: Run Code Review
+        run: |
+          echo "Code Review workflow started"
+          echo "Ready to analyze changes with Grok"
