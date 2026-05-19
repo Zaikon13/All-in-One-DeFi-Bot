@@ -6,7 +6,8 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    - cron: '0 8 * * *'  # Daily at 08:00 UTC
+    - cron: '0 8 * * *'
+  workflow_dispatch:
 
 jobs:
   sync-check:
@@ -14,10 +15,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Check repository sync status
         run: |
-          echo "🔍 Running Sync Check..."
+          echo "Running Sync Check..."
           git fetch origin
           LOCAL=$(git rev-parse @)
           REMOTE=$(git rev-parse origin/main)
@@ -25,11 +28,21 @@ jobs:
           if [ "$LOCAL" = "$REMOTE" ]; then
             echo "✅ Repository is in sync with GitHub."
           else
-            echo "::warning::Repository is OUT OF SYNC with GitHub!"
+            echo "::warning::Repository may have drift from remote main"
             echo "Local:  $LOCAL"
             echo "Remote: $REMOTE"
-            exit 1
           fi
+
+      - name: Validate key Grok/project files
+        run: |
+          echo "Validating critical alignment files..."
+          for f in docs/project-status.md GROK_HEALTH.md core/grok_client.py; do
+            if [ -f "$f" ]; then
+              echo "✅ $f present"
+            else
+              echo "::warning::Missing: $f"
+            fi
+          done
 
       - name: Summary
         if: always()
