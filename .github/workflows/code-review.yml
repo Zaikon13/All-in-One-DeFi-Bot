@@ -4,78 +4,46 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   grok-code-review:
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      contents: read
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Checkout
+        uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
 
       - name: Get PR diff
-        id: diff
-        run: |
-          git diff origin/main...HEAD > pr.diff || true
+        run: git diff origin/main...HEAD > pr.diff
 
       - name: Call Grok for Review
         id: grok
+        if: hashFiles('pr.diff') != ''
+        continue-on-error: true
         env:
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
         run: |
-          if [ ! -s pr.diff ]; then
-            echo 'review<<EOF' >> $GITHUB_OUTPUT
-            echo 'No significant code changes to review.' >> $GITHUB_OUTPUT
-            echo 'EOF' >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
           DIFF=$(head -c 6000 pr.diff)
-
-          RESPONSE=$(curl -s https://api.x.ai/v1/chat/completions \
-            -H "Content-Type: application/json" \
+          RESPONSE=$(curl -s -X POST https://api.x.ai/v1/chat/completions \
             -H "Authorization: Bearer $GROK_API_KEY" \
-            -d @- << JSON
-{
-  "model": "grok-4.3",
-  "messages": [
-    {
-      "role": "system",
-      "content": "You are a senior software engineer doing code review for a DeFi Telegram bot. Focus on bugs, security, performance, code quality, and best practices. Be constructive and concise."
-    },
-    {
-      "role": "user",
-      "content": "Please review these code changes:\n\n```diff\n$DIFF\n```"
-    }
-  ],
-  "max_tokens": 1200,
-  "temperature": 0.2
-}
-JSON
-)
-
-          REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Grok could not generate a review."')
-
-          echo 'review<<EOF' >> $GITHUB_OUTPUT
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"grok-4.3\",\"messages\":[{\"role\":\"system\",\"content\":\"You are a senior software engineer doing code review for a DeFi Telegram bot. Focus on bugs, security, performance, code quality, and best practices. Be constructive and concise.\"},{\"role\":\"user\",\"content\":\"Please review these code changes:\\n\\n\`\`\`diff\\n$DIFF\\n\`\`\`\"}],\"max_tokens\":1200,\"temperature\":0.2}" || echo '{"choices":[{"message":{"content":"Grok review failed"}}]}')
+          REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Grok unavailable"')
+          echo "review<<EOF" >> $GITHUB_OUTPUT
           echo "$REVIEW" >> $GITHUB_OUTPUT
-          echo 'EOF' >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Post Grok Review on PR
-        uses: actions/github-script@v7
         if: steps.grok.outputs.review != ''
+        uses: actions/github-script@v7
         with:
           script: |
-            const review = `${{ steps.grok.outputs.review }}`;
-            
-            await github.rest.issues.createComment({
+            github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `## 🤖 Grok Code Review
-
-${review}`
+              body: `## 🤖 Grok Code Review\n\n${{ steps.grok.outputs.review }}`
             });
