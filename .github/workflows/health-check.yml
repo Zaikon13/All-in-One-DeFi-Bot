@@ -5,6 +5,10 @@ on:
     - cron: '0 8 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   health-check:
     runs-on: ubuntu-latest
@@ -18,10 +22,10 @@ jobs:
       - name: Railway Health
         id: health
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://bot-production-3d9c.up.railway.app/health || echo "000")
+          STATUS=$(curl -s -o /dev/null -w "%s" https://bot-production-3d9c.up.railway.app/health || echo "000")
           echo "status=$STATUS" >> $GITHUB_OUTPUT
 
-      - name: Grok Analysis (optional)
+      - name: Grok Analysis
         id: grok
         if: steps.health.outputs.status != '200'
         continue-on-error: true
@@ -29,19 +33,19 @@ jobs:
         run: |
           RESPONSE=$(curl -s -X POST https://api.x.ai/v1/chat/completions \
             -H "Authorization: Bearer $GROK_API_KEY" -H "Content-Type: application/json" \
-            -d '{"model":"grok-3","messages":[{"role":"system","content":"DeFi bot DevOps. Analyze Railway failure."},{"role":"user","content":"HTTP ${{ steps.health.outputs.status }} - suggest fixes"}],"max_tokens":400}' || echo '{"choices":[{"message":{"content":"Grok failed"}}]}')
-          ANALYSIS=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Grok unavailable"' | head -c 1500)
+            -d '{"model":"grok-4.3","messages":[{"role":"system","content":"DeFi bot DevOps. Analyze Railway failure and suggest fixes."},{"role":"user","content":"HTTP status: ${{ steps.health.outputs.status }} - provide root cause and action items."}],"max_tokens":400}' || echo '{"choices":[{"message":{"content":"Grok failed - check API key"}}]}')
+          ANALYSIS=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Grok unavailable"' | head -c 1200)
           echo "analysis<<EOF" >> $GITHUB_OUTPUT
           echo "$ANALYSIS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Create Issue (optional)
+      - name: Create Issue
         if: steps.health.outputs.status != '200'
         continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
-            const a = `${{ steps.grok.outputs.analysis || 'Check logs' }}`;
+            const a = `${{ steps.grok.outputs.analysis || 'Check Railway logs' }}`;
             github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title: 'Health Alert', body: a }).catch(()=>{});
 
       - name: Report
@@ -55,7 +59,7 @@ jobs:
       - name: Print
         run: echo "${{ steps.report.outputs.report }}"
 
-      - name: Telegram (optional)
+      - name: Telegram
         env: { TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}, CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }} }
         run: |
           if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$CHAT_ID" ]; then
