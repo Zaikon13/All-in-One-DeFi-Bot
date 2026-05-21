@@ -6,73 +6,60 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    - cron: '0 8 * * *'  # Daily at 08:00 UTC
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 jobs:
   sync-check:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
-      - name: Full Repository Sync Check
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Full Sync Check
         id: sync
         run: |
-          echo "🔍 Running Full Repo Sync Check..."
           git fetch origin
-          
           LOCAL=$(git rev-parse @)
           REMOTE=$(git rev-parse origin/main)
           UNCOMMITTED=$(git status --porcelain | wc -l)
-          
-          if [ "$LOCAL" = "$REMOTE" ] && [ "$UNCOMMITTED" -eq 0 ]; then
+          if [ "$LOCAL" = "$REMOTE" ] && [ $UNCOMMITTED -eq 0 ]; then
             echo "status=synced" >> $GITHUB_OUTPUT
-            echo "✅ Repository is FULLY in sync with GitHub (no uncommitted changes)."
           else
             echo "status=out_of_sync" >> $GITHUB_OUTPUT
-            echo "::warning::Repository is OUT OF SYNC!"
-            echo "Local: $LOCAL | Remote: $REMOTE | Uncommitted: $UNCOMMITTED"
-            git diff origin/main > sync-diff.txt || true
+            git diff origin/main > /tmp/diff.txt || true
           fi
 
-      - name: Grok Sync Analysis
+      - name: Grok Analysis (optional)
         id: grok
-        if: steps.sync.outputs.status == 'out_of_sync' && hashFiles('sync-diff.txt') != ''
-        env:
-          GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
+        if: steps.sync.outputs.status == 'out_of_sync' && hashFiles('/tmp/diff.txt') != ''
+        continue-on-error: true
+        env: { GROK_API_KEY: ${{ secrets.GROK_API_KEY }} }
         run: |
-          DIFF=$(head -c 4000 sync-diff.txt)
-          RESPONSE=$(curl -s -X POST "https://api.x.ai/v1/chat/completions" \
-            -H "Authorization: Bearer $GROK_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"model":"grok-4.3","messages":[{"role":"system","content":"You are a senior DevOps engineer for All-in-One-DeFi-Bot. Analyze git diff and give concise summary + recommended actions."},{"role":"user","content":"Analyze this diff:\n$DIFF"}],"max_tokens":400}')
-          ANALYSIS=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Grok analysis failed"' | head -c 2000)
+          DIFF=$(head -c 3000 /tmp/diff.txt)
+          RESPONSE=$(curl -s -X POST https://api.x.ai/v1/chat/completions \
+            -H "Authorization: Bearer $GROK_API_KEY" -H "Content-Type: application/json" \
+            -d '{"model":"grok-3","messages":[{"role":"system","content":"DeFi bot DevOps. Summarize diff briefly."},{"role":"user","content":"$DIFF"}],"max_tokens":300}' || echo '{"choices":[{"message":{"content":"Grok call failed"}}]}')
+          ANALYSIS=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Grok unavailable"' | head -c 1500)
           echo "analysis<<EOF" >> $GITHUB_OUTPUT
           echo "$ANALYSIS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Create Awareness Issue if Out of Sync
+      - name: Create Issue (if needed)
         if: steps.sync.outputs.status == 'out_of_sync'
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
-            const analysis = `${{ steps.grok.outputs.analysis || 'Manual review required - check workflow logs' }}`;
+            const a = `${{ steps.grok.outputs.analysis || 'Review manually' }}`;
             github.rest.issues.create({
               owner: context.repo.owner, repo: context.repo.repo,
-              title: '🚨 Repo Sync Alert',
-              body: `## Sync Issue Detected
-
-**Status:** Out of sync
-
-**Grok Analysis:**
-${analysis}
-
-**Action:** Review 'git status' and push fixes.
-`});
+              title: 'Repo Sync Alert', body: `**Grok:** ${a}`
+            }).catch(()=>{});
 
       - name: Summary
-        if: always()
-        run: echo "Sync check completed."
+        run: echo "Done"
