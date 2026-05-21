@@ -45,9 +45,7 @@ jobs:
         env: { GROK_API_KEY: ${{ secrets.GROK_API_KEY }} }
         run: |
           DIFF=$(head -c 3000 /tmp/diff.txt 2>/dev/null || echo "no diff")
-          RESPONSE=$(curl -s -X POST https://api.x.ai/v1/chat/completions \
-            -H "Authorization: Bearer $GROK_API_KEY" -H "Content-Type: application/json" \
-            -d '{"model":"grok-4.3","messages":[{"role":"system","content":"DeFi bot DevOps. Summarize sync diff briefly and suggest action."},{"role":"user","content":"Analyze:\n'$DIFF'"}],"max_tokens":300}' || echo '{"choices":[{"message":{"content":"Grok call failed - check API key or rate limit"}}]}')
+          RESPONSE=$(curl -s -X POST https://api.x.ai/v1/chat/completions -H "Authorization: Bearer $GROK_API_KEY" -H "Content-Type: application/json" -d '{"model":"grok-4.3","messages":[{"role":"system","content":"DeFi bot DevOps. Summarize sync diff briefly."},{"role":"user","content":"Analyze: '$DIFF'"}],"max_tokens":300}' || echo '{"choices":[{"message":{"content":"Grok call failed"}}]}')
           ANALYSIS=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Grok unavailable"' | head -c 1200)
           echo "analysis<<EOF" >> $GITHUB_OUTPUT
           echo "$ANALYSIS" >> $GITHUB_OUTPUT
@@ -60,10 +58,7 @@ jobs:
         with:
           script: |
             const a = `${{ steps.grok.outputs.analysis || 'Manual review needed' }}`;
-            github.rest.issues.create({
-              owner: context.repo.owner, repo: context.repo.repo,
-              title: 'Repo Sync Alert', body: `**Grok Analysis:** ${a}`
-            }).catch(()=>{});
+            github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title: 'Repo Sync Alert', body: `**Grok:** ${a}` }).catch(()=>{});
 
       - name: Summary
         run: echo "Sync check completed."
