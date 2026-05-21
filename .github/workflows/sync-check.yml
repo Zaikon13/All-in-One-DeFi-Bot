@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with: { fetch-depth: 0 }
 
       - name: Install jq
@@ -66,7 +66,12 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: '🚨 Repo Sync Alert - Full Awareness',
-              body: `## Full Repo Sync Issue Detected\n\n**Grok Analysis:**\n${a}\n\n**Next Steps:** Review local changes, commit, and push.`
+              body: `## Full Repo Sync Issue Detected
+
+**Grok Analysis:**
+${a}
+
+**Next Steps:** Review local changes, commit, and push.`
             }).catch(() => {});
 
       - name: Summary
