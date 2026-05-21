@@ -27,10 +27,19 @@ jobs:
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
         run: |
           DIFF=$(head -c 6000 pr.diff)
+          JSON=$(jq -n --arg diff "$DIFF" '{
+            model: "grok-4.3",
+            messages: [
+              {role: "system", content: "You are a senior software engineer doing code review for a DeFi Telegram bot. Focus on bugs, security, performance, code quality, and best practices. Be constructive and concise."},
+              {role: "user", content: ("Please review these code changes:\n\n```diff\n" + $diff + "\n```")}
+            ],
+            max_tokens: 1200,
+            temperature: 0.2
+          }')
           RESPONSE=$(curl -s -X POST https://api.x.ai/v1/chat/completions \
             -H "Authorization: Bearer $GROK_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "{\"model\":\"grok-4.3\",\"messages\":[{\"role\":\"system\",\"content\":\"You are a senior software engineer doing code review for a DeFi Telegram bot. Focus on bugs, security, performance, code quality, and best practices. Be constructive and concise.\"},{\"role\":\"user\",\"content\":\"Please review these code changes:\\n\\n\`\`\`diff\\n$DIFF\\n\`\`\`\"}],\"max_tokens\":1200,\"temperature\":0.2}" || echo '{"choices":[{"message":{"content":"Grok review failed"}}]}')
+            -d "$JSON" || echo '{"choices":[{"message":{"content":"Grok review failed"}}]}')
           REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Grok unavailable"')
           echo "review<<EOF" >> $GITHUB_OUTPUT
           echo "$REVIEW" >> $GITHUB_OUTPUT
