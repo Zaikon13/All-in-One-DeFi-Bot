@@ -1,79 +1,58 @@
-name: Health Check Report
+name: Code Review
 
 on:
-  schedule:
-    - cron: '0 8 * * *'
-  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
-  issues: write
+  pull-requests: write
 
 jobs:
-  health-check:
+  grok-code-review:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Get PR diff
+        run: git diff origin/main...HEAD > pr.diff
 
-      - name: Railway Health
-        id: health
-        run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://bot-production-3d9c.up.railway.app/health || echo "000")
-          echo "status=$STATUS" >> $GITHUB_OUTPUT
-
-      - name: Grok Analysis (Awareness)
+      - name: Call Grok for Review
         id: grok
-        if: steps.health.outputs.status != '200'
+        if: hashFiles('pr.diff') != ''
         continue-on-error: true
         env:
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
         run: |
+          DIFF=$(head -c 6000 pr.diff)
+          JSON=$(jq -n --arg diff "$DIFF" '{
+            model: "grok-4.3",
+            messages: [
+              {role: "system", content: "You are a senior software engineer doing code review for a DeFi Telegram bot. Focus on bugs, security, performance, code quality, and best practices. Be constructive and concise."},
+              {role: "user", content: ("Please review these code changes:\n\n```diff\n" + $diff + "\n```")}
+            ],
+            max_tokens: 1200,
+            temperature: 0.2
+          }')
           RESPONSE=$(curl -s -X POST https://api.x.ai/v1/chat/completions \
             -H "Authorization: Bearer $GROK_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "{\"model\":\"grok-4.3\",\"messages\":[{\"role\":\"system\",\"content\":\"DeFi bot DevOps. Analyze Railway failure and suggest fixes.\"},{\"role\":\"user\",\"content\":\"HTTP status: ${{ steps.health.outputs.status }} - provide root cause and action items.\"}],\"max_tokens\":400}" || echo '{"choices":[{"message":{"content":"Grok call failed"}}]}')
-          ANALYSIS=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Grok unavailable"' | head -c 1200)
-          echo "analysis<<EOF" >> $GITHUB_OUTPUT
-          echo "$ANALYSIS" >> $GITHUB_OUTPUT
+            -d "$JSON" || echo '{"choices":[{"message":{"content":"Grok review failed"}}]}')
+          REVIEW=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Grok unavailable"')
+          echo "review<<EOF" >> $GITHUB_OUTPUT
+          echo "$REVIEW" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Create Awareness Issue
-        if: steps.health.outputs.status != '200'
-        continue-on-error: true
+      - name: Post Grok Review on PR
+        if: steps.grok.outputs.review != ''
         uses: actions/github-script@v7
         with:
           script: |
-            const a = `${{ steps.grok.outputs.analysis || 'Check Railway logs' }}`;
-            github.rest.issues.create({
+            github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: 'Health Alert - Railway Unhealthy',
-              body: `## Health Check Failure\n\n**Grok Analysis:**\n${a}\n\n**Immediate Actions:** Check Railway dashboard for bot-production-3d9c`
-            }).catch(() => {});
-
-      - name: Report
-        id: report
-        run: |
-          R="## Health Check\n**Status:** ${{ steps.health.outputs.status == '200' && '✅ Healthy' || '❌ Unhealthy' }}"
-          echo "report<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$R" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Print
-        run: echo "${{ steps.report.outputs.report }}"
-
-      - name: Telegram (optional)
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$CHAT_ID" ]; then
-            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-              -d chat_id="$CHAT_ID" \
-              -d text="${{ steps.report.outputs.report }}" \
-              -d parse_mode="Markdown" || true
-          fi
+              issue_number: context.issue.number,
+              body: `## 🤖 Grok Code Review\n\n${{ steps.grok.outputs.review }}`
+            });
