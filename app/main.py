@@ -124,35 +124,9 @@ async def process_daily_pnl(chat_id: str):
             if not txs:
                 await send_telegram_message("No recent transactions found.", chat_id)
                 return
-
-            from collections import defaultdict
-            token_data = defaultdict(lambda: {"buys": 0, "sells": 0, "trades": []})
-
-            for tx in txs:
-                symbol = tx.get("tokenSymbol", "CRO")
-                decimals = int(tx.get("tokenDecimal", 18))
-                value = int(tx.get("value", 0)) / (10 ** decimals)
-                tx_type = "BUY" if tx.get("to", "").lower() == WALLET_ADDRESS.lower() else "SELL"
-
-                token_data[symbol]["buys" if tx_type == "BUY" else "sells"] += value
-                token_data[symbol]["trades"].append({
-                    "time": datetime.fromtimestamp(int(tx.get("timeStamp", 0))).strftime("%H:%M"),
-                    "type": tx_type,
-                    "amount": round(value, 4),
-                    "symbol": symbol
-                })
-
-            msg = f"**📊 Daily PnL Report** ({datetime.now().strftime('%Y-%m-%d')})\n\n`{WALLET_ADDRESS[:6]}...{WALLET_ADDRESS[-4:]}`\n"
-
-            for symbol, data in token_data.items():
-                net = data["buys"] - data["sells"]
-                msg += f"\n**{symbol}** ({len(data['trades'])} trades)\n"
-                for t in data["trades"]:
-                    msg += f"{t['time']} | {t['type']} {t['amount']} {symbol}\n"
-                msg += f"**Net:** {net:+.4f} {symbol}\n"
-
-            await send_telegram_message(msg, chat_id)
-
+            from core.pnl_calculator import PnLCalculator
+            report = await PnLCalculator.build_advanced_pnl_report(txs, WALLET_ADDRESS)
+            await send_telegram_message(report, chat_id)
     except Exception as e:
         logging.exception("daily_pnl error")
         await send_telegram_message("Error generating report", chat_id)
