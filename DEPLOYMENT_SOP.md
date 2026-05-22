@@ -1,21 +1,37 @@
-# 🚀 DEPLOYMENT SOP – Single Point of Truth
+# 🚀 DEPLOYMENT SOP – All-in-One-DeFi-Bot
 
-**Last updated:** 12 Μαΐου 2026  
-**Repo:** Zaikon13/All-in-One-DeFi-Bot  
-**Railway Services:** 3 ενεργά (bot = primary)
+**Last Updated**: 22 Μαΐου 2026
+**Repo**: Zaikon13/All-in-One-DeFi-Bot
 
-## Τρέχουσα Αρχιτεκτονική
+## Current Architecture (3 Services)
 
-| Service       | Type     | Start Command                          | Σκοπός                                      | Status     | Webhook |
-|---------------|----------|----------------------------------------|---------------------------------------------|------------|---------|
-| **bot**       | Web      | uvicorn app.main:app                   | **Primary** Telegram webhook + /daily_pnl  | ✅ Online  | **Active** |
-| **web-gpl6**  | Web      | uvicorn app.main:app                   | Redundant (ίδιος κώδικας)                   | ✅ Online  | Inactive |
-| **worker**    | Worker   | python -u main.py                      | Background jobs, DeFi logic, scheduler     | ✅ Online  | — |
+| Service | Type | Start Command | Purpose | Status | Webhook |
+|---------|------|---------------|---------|--------|---------|
+| **bot** | Web | `uvicorn app.main:app` | Primary Telegram webhook + /daily_pnl | ✅ Online | Active |
+| **web-gpl6** | Web | `uvicorn app.main:app` | Redundant (same code) | ✅ Online | Inactive |
+| **worker** | Worker | `python -u main.py` | Background jobs, DeFi logic, scheduler | ✅ Online | — |
 
-**Σημαντικό:** Το **bot** service είναι το **μόνο** που έχει registered webhook στο Telegram.
+**Important**: The **bot** service is the only one with the registered Telegram webhook.
 
-**Current State:** Webhook confirmed working on https://bot-production-3d9c.up.railway.app/telegram/webhook
+## Railway Services
 
-**This SOP is the single source of truth.** All documentation has been synced to match the current stable working state.
+- **bot-production-3d9c** → Primary (Telegram webhook)
+- **web-gpl6-production** → Redundant
+- **worker** → Background tasks
 
-**Locked:** 12 Μαΐου 2026
+## How to Redeploy
+
+1. Push to `main` (or merge PR)
+2. Railway auto-redeploys all services
+3. Check logs of **bot** service for "All-in-One-DeFi-Bot started"
+4. Verify webhook: `getWebhookInfo`
+
+## Environment Variables (Required)
+
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `WALLET_ADDRESS`
+- `GROK_API_KEY`
+- `APP_URL` = `https://bot-production-3d9c.up.railway.app`
+
+**Single Source of Truth**: `docs/project-status.md`
