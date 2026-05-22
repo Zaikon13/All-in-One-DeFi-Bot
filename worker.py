@@ -6,6 +6,10 @@ from datetime import datetime
 import os
 
 import httpx
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # ==================== CONFIGURATION ====================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -19,7 +23,7 @@ WALLET_CHECK_INTERVAL = 600
 CRONOS_RPC = "https://evm.cronos.org"
 
 MONITORED_TOKENS = {
-    # Add your tokens here, example:
+    # Add your tokens here
     # "0x...Mery...": "MERY",
 }
 
@@ -32,7 +36,7 @@ class WorkerLoop:
         self.running = True
         self.last_balance = None
         self.last_token_balances = {}
-        self.known_pairs = set()  # For new pair detection
+        self.known_pairs = set()
 
     async def send_telegram(self, text: str):
         if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
@@ -52,7 +56,7 @@ class WorkerLoop:
             await self.send_telegram(msg)
             await asyncio.sleep(HEARTBEAT_INTERVAL)
 
-    # ==================== IMPROVED DEXSCREENER (New Pairs) ====================
+    # ==================== DEXSCREENER (New Pairs) ====================
     async def poll_dexscreener(self):
         while self.running:
             try:
@@ -70,7 +74,6 @@ class WorkerLoop:
                                 self.known_pairs.add(pair_id)
                                 new_pairs_found.append(pair)
 
-                        # Send alert for new pairs (limit to 2 per check)
                         for pair in new_pairs_found[:2]:
                             base = pair.get("baseToken", {})
                             quote = pair.get("quoteToken", {})
@@ -90,7 +93,7 @@ class WorkerLoop:
 
             await asyncio.sleep(DEXSCREENER_INTERVAL)
 
-    # ==================== REAL WALLET + ERC-20 ====================
+    # ==================== WALLET + ERC-20 ====================
     async def monitor_wallet(self):
         if not WALLET_ADDRESS:
             await asyncio.sleep(WALLET_CHECK_INTERVAL)
@@ -133,7 +136,7 @@ class WorkerLoop:
                         last = self.last_token_balances.get(symbol)
                         if last is not None and abs(balance - last) > 0.0001:
                             diff = balance - last
-                            msg = f"💰 **{symbol} Balance Changed**\n\n**New:** {balance:.6f} {symbol}\n**Change:** {diff:+.6f} {symbol}"
+                            msg = f"💰 **{symbol} Balance Changed**\n\n**New:** {balance:.6f} {symbol}\n"**Change:** {diff:+.6f} {symbol}"
                             await self.send_telegram(msg)
 
                         self.last_token_balances[symbol] = balance
