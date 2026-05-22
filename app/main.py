@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 load_dotenv()
+
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 import os
@@ -19,6 +20,7 @@ RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
 
 app = FastAPI(title="All-in-One-DeFi-Bot")
 
+
 def load_prompt(filename: str, **kwargs) -> str:
     """Load prompt from prompts/ folder and format it."""
     try:
@@ -29,6 +31,7 @@ def load_prompt(filename: str, **kwargs) -> str:
         return f"[ERROR] Prompt file not found: prompts/{filename}"
     except Exception as e:
         return f"[ERROR] Failed to load prompt: {str(e)}"
+
 
 async def send_telegram_message(text: str, chat_id: str = None, reply_markup=None):
     cid = chat_id or CHAT_ID
@@ -48,6 +51,7 @@ async def send_telegram_message(text: str, chat_id: str = None, reply_markup=Non
                 json=payload)
     except Exception as e:
         logging.error(f"Send message error: {e}")
+
 
 async def call_grok(prompt: str) -> str:
     """Call Grok API for analysis - improved version"""
@@ -75,6 +79,7 @@ async def call_grok(prompt: str) -> str:
     except Exception as e:
         logging.error(f"Grok API exception: {e}")
         return f"Error calling Grok: {str(e)[:100]}"
+
 
 async def get_all_balances(chat_id: str):
     if not WALLET_ADDRESS:
@@ -106,6 +111,7 @@ async def get_all_balances(chat_id: str):
         logging.exception("Balances error")
         await send_telegram_message("Error fetching balances. Try again.", chat_id)
 
+
 async def process_daily_pnl(chat_id: str):
     if not WALLET_ADDRESS:
         await send_telegram_message("WALLET_ADDRESS not configured", chat_id)
@@ -118,17 +124,21 @@ async def process_daily_pnl(chat_id: str):
             if not txs:
                 await send_telegram_message("No recent transactions found.", chat_id)
                 return
-            from core.pnl_calculator import PnLCalculator
-            report = await PnLCalculator.build_advanced_pnl_report(txs, WALLET_ADDRESS)
+            # Use new PnL calculator functions
+            from core.pnl_calculator import calculate_daily_pnl, format_pnl_report
+            pnl_data = calculate_daily_pnl()
+            report = format_pnl_report(pnl_data)
             await send_telegram_message(report, chat_id)
     except Exception as e:
         logging.exception("daily_pnl error")
         await send_telegram_message("Error generating report", chat_id)
 
+
 @app.get("/")
 @app.get("/health")
 async def health():
     return {"ok": True, "service": RAILWAY_SERVICE_NAME, "status": "running"}
+
 
 @app.post("/grok/analyze")
 async def grok_analyze(req: Request):
@@ -141,6 +151,7 @@ async def grok_analyze(req: Request):
         return {"ok": True, "analysis": insight}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
@@ -156,6 +167,7 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         menu = """**👋 Welcome to All-in-One DeFi Bot!**
 
 **Available Commands:**
+
 • /daily_pnl — Advanced daily PnL report
 • /balances — Full wallet balances with USD
 • /wallet — Same as /balances
@@ -167,17 +179,23 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
             "one_time_keyboard": False
         }
         await send_telegram_message(menu, chat_id, reply_markup=reply_markup)
+
     elif text in ("/balances", "/wallet", "/bal", "/balance"):
         background_tasks.add_task(get_all_balances, chat_id)
+
     elif text in ("/daily_pnl", "/dailypnl"):
         background_tasks.add_task(process_daily_pnl, chat_id)
+
     elif text == "/grok-analyze":
         prompt = load_prompt("grok_wallet_analysis.txt", wallet_address=WALLET_ADDRESS)
         insight = await call_grok(prompt)
         await send_telegram_message(insight, chat_id)
+
     else:
         await send_telegram_message("Unknown command. Type /start for the menu.", chat_id)
+
     return JSONResponse({"ok": True})
+
 
 if __name__ == "__main__":
     import uvicorn
