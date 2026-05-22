@@ -1,4 +1,4 @@
-# core/pnl_calculator.py - Accurate Daily PnL Calculator
+# core/pnl_calculator.py - Accurate Daily PnL Calculator (Debug Mode)
 
 import os
 import traceback
@@ -14,7 +14,7 @@ COVALENT_BASE = "https://api.covalenthq.com/v1"
 
 
 def get_today_transactions() -> List[Dict]:
-    """Fetch today's transactions using Covalent"""
+    """Fetch today's transactions using Covalent with full debug"""
     if not WALLET_ADDRESS:
         print("[ERROR] Missing WALLET_ADDRESS")
         return []
@@ -22,23 +22,28 @@ def get_today_transactions() -> List[Dict]:
     today = datetime.now().strftime("%Y-%m-%d")
     url = f"{COVALENT_BASE}/25/address/{WALLET_ADDRESS}/transactions_v3/?key={COVALENT_API_KEY}"
 
+    print(f"[DEBUG] Calling Covalent URL: {url}")
+
     try:
         with httpx.Client(timeout=30) as client:
             r = client.get(url)
-            print(f"[DEBUG] Covalent status: {r.status_code}")
+            print(f"[DEBUG] Status Code: {r.status_code}")
+            print(f"[DEBUG] Response Headers: {dict(r.headers)}")
+            print(f"[DEBUG] Response Text (first 500 chars): {r.text[:500]}")
 
             if r.status_code == 200:
                 data = r.json()
                 items = data.get("data", {}).get("items", [])
-                print(f"[DEBUG] Total transactions: {len(items)}")
+                print(f"[DEBUG] Total items returned: {len(items)}")
 
                 today_tx = [tx for tx in items if tx.get("block_signed_at", "").startswith(today)]
                 print(f"[DEBUG] Today's transactions: {len(today_tx)}")
                 return today_tx
             else:
-                print(f"[ERROR] Covalent API error: {r.text}")
+                print(f"[ERROR] Covalent returned non-200: {r.status_code}")
+                print(f"[ERROR] Full response: {r.text}")
     except Exception as e:
-        print(f"[ERROR] Exception in get_today_transactions: {str(e)}")
+        print(f"[ERROR] Exception occurred: {str(e)}")
         traceback.print_exc()
     return []
 
@@ -48,7 +53,7 @@ def calculate_daily_pnl() -> Dict:
     try:
         transactions = get_today_transactions()
         if not transactions:
-            return {"error": "No transactions today or API error. Check terminal logs for details."}
+            return {"error": "No transactions today or API error. Check terminal logs for full debug output."}
 
         token_data: Dict[str, Dict] = {}
 
