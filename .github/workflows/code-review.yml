@@ -30,7 +30,7 @@ jobs:
           JSON=$(jq -n --arg diff "$DIFF" '{
             model: "grok-4.3",
             messages: [
-              {role: "system", content: "You are a senior software engineer doing code review for a DeFi Telegram bot. Focus on bugs, security, performance, code quality, and best practices. Be constructive and concise."},
+              {role: "system", content: "You are a senior software engineer reviewing a DeFi Telegram bot. Focus on bugs, security, performance, code quality and best practices. Be constructive and concise."},
               {role: "user", content: ("Please review these code changes:\n\n```diff\n" + $diff + "\n```")}
             ],
             max_tokens: 1200,
