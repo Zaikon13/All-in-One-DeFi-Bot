@@ -8,7 +8,6 @@ import os
 import httpx
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
 # ==================== CONFIGURATION ====================
@@ -23,8 +22,7 @@ WALLET_CHECK_INTERVAL = 600
 CRONOS_RPC = "https://evm.cronos.org"
 
 MONITORED_TOKENS = {
-    # Add your tokens here
-    # "0x...Mery...": "MERY",
+    # Add tokens here
 }
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -56,11 +54,12 @@ class WorkerLoop:
             await self.send_telegram(msg)
             await asyncio.sleep(HEARTBEAT_INTERVAL)
 
-    # ==================== DEXSCREENER (New Pairs) ====================
+    # ==================== DEXSCREENER (Correct Endpoint) ====================
     async def poll_dexscreener(self):
         while self.running:
             try:
-                url = "https://api.dexscreener.com/latest/dex/pairs/cronos"
+                # Correct endpoint for new pairs on Cronos
+                url = "https://api.dexscreener.com/latest/dex/search?q=cronos"
                 async with httpx.AsyncClient(timeout=15) as client:
                     r = await client.get(url)
                     if r.status_code == 200:
@@ -136,7 +135,7 @@ class WorkerLoop:
                         last = self.last_token_balances.get(symbol)
                         if last is not None and abs(balance - last) > 0.0001:
                             diff = balance - last
-                            msg = f"💰 **{symbol} Balance Changed**\n\n**New:** {balance:.6f} {symbol}\n"**Change:** {diff:+.6f} {symbol}"
+                            msg = f"💰 **{symbol} Balance Changed**\n\n**New:** {balance:.6f} {symbol}\n**Change:** {diff:+.6f} {symbol}"
                             await self.send_telegram(msg)
 
                         self.last_token_balances[symbol] = balance
