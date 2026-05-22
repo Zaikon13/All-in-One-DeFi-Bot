@@ -18,6 +18,12 @@ WALLET_CHECK_INTERVAL = 600
 
 CRONOS_RPC = "https://evm.cronos.org"
 
+# Add tokens you want to monitor (address: symbol)
+MONITORED_TOKENS = {
+    "0x...MeryTokenAddress...": "MERY",
+    # Add more tokens here
+}
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("worker")
 
@@ -26,6 +32,7 @@ class WorkerLoop:
     def __init__(self):
         self.running = True
         self.last_balance = None
+        self.last_token_balances = {}
 
     async def send_telegram(self, text: str):
         if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
@@ -45,7 +52,7 @@ class WorkerLoop:
             await self.send_telegram(msg)
             await asyncio.sleep(HEARTBEAT_INTERVAL)
 
-    # ==================== DEXSCREENER ====================
+    # ==================== DEXSCREENER NEW PAIRS ====================
     async def poll_dexscreener(self):
         while self.running:
             try:
@@ -53,21 +60,25 @@ class WorkerLoop:
                 async with httpx.AsyncClient(timeout=15) as client:
                     r = await client.get(url)
                     if r.status_code == 200:
-                        logger.info("Dexscreener poll OK")
+                        data = r.json()
+                        pairs = data.get("pairs", [])
+                        # Simple new pair detection (placeholder logic)
+                        if len(pairs) > 0:
+                            latest = pairs[0]
+                            logger.info(f"Dexscreener: {latest.get('baseToken', {}).get('symbol')} pair active")
             except Exception as e:
                 logger.error(f"Dexscreener error: {e}")
             await asyncio.sleep(DEXSCREENER_INTERVAL)
 
-    # ==================== REAL WALLET MONITORING ====================
+    # ==================== REAL WALLET + ERC-20 MONITORING ====================
     async def monitor_wallet(self):
-        """Check native CRO balance on Cronos"""
         if not WALLET_ADDRESS:
             await asyncio.sleep(WALLET_CHECK_INTERVAL)
             return
 
         while self.running:
             try:
-                # Get native CRO balance
+                # 1. Native CRO Balance
                 payload = {
                     "jsonrpc": "2.0",
                     "method": "eth_getBalance",
@@ -77,23 +88,41 @@ class WorkerLoop:
                 async with httpx.AsyncClient(timeout=15) as client:
                     r = await client.post(CRONOS_RPC, json=payload)
                     if r.status_code == 200:
-                        data = r.json()
-                        hex_balance = data.get("result", "0x0")
-                        balance_wei = int(hex_balance, 16)
-                        balance_cro = balance_wei / 10**18
+                        hex_balance = r.json().get("result", "0x0")
+                        balance_cro = int(hex_balance, 16) / 10**18
 
-                        # Send alert if balance changed significantly
-                        if self.last_balance is not None:
+                        if self.last_balance is not None and abs(balance_cro - self.last_balance) > 0.1:
                             diff = balance_cro - self.last_balance
-                            if abs(diff) > 0.1:  # Alert if change > 0.1 CRO
-                                msg = f"💰 **Wallet Alert**\n\n**Address:** `{WALLET_ADDRESS[:6]}...{WALLET_ADDRESS[-4:]}`\n**New Balance:** {balance_cro:.4f} CRO\n**Change:** {diff:+.4f} CRO"
-                                await self.send_telegram(msg)
+                            msg = f"💰 **CRO Balance Changed**\n\n**New:** {balance_cro:.4f} CRO\n**Change:** {diff:+.4f} CRO"
+                            await self.send_telegram(msg)
 
                         self.last_balance = balance_cro
-                        logger.info(f"Wallet balance: {balance_cro:.4f} CRO")
+
+                # 2. ERC-20 Token Balances
+                for token_address, symbol in MONITORED_TOKENS.items():
+                    # ERC-20 balanceOf call
+                    data = "0x70a08231000000000000000000000000" + WALLET_ADDRESS[2:].zfill(40)
+                    payload = {
+                        "jsonrpc": "2.0",
+                        "method": "eth_call",
+                        "params": [{"to": token_address, "data": data}, "latest"],
+                        "id": 1
+                    }
+                    r = await client.post(CRONOS_RPC, json=payload)
+                    if r.status_code == 200:
+                        hex_bal = r.json().get("result", "0x0")
+                        balance = int(hex_bal, 16) / 10**18
+
+                        last = self.last_token_balances.get(symbol)
+                        if last is not None and abs(balance - last) > 0.0001:
+                            diff = balance - last
+                            msg = f"💰 **{symbol} Balance Changed**\n\n**New:** {balance:.6f} {symbol}\n**Change:** {diff:+.6f} {symbol}"
+                            await self.send_telegram(msg)
+
+                        self.last_token_balances[symbol] = balance
 
             except Exception as e:
-                logger.error(f"Wallet monitoring error: {e}")
+                logger.error(f"Wallet error: {e}")
 
             await asyncio.sleep(WALLET_CHECK_INTERVAL)
 
