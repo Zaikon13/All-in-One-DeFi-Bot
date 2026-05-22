@@ -1,54 +1,18 @@
-# main.py
-from __future__ import annotations
+# main.py - All-in-One-DeFi-Bot Entry Point
 
-from dotenv import load_dotenv
-load_dotenv()
+"""
+This file is kept for backward compatibility.
+The main worker logic has been moved to worker.py
 
-import os
-import time
+To run the worker:
+    python -u worker.py
+"""
+
 import logging
-from datetime import datetime
 
-import schedule
-import httpx
-
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-TZ = os.getenv("TZ", "UTC")
-
-def bot_api(method: str) -> str:
-    if not BOT_TOKEN:
-        raise RuntimeError("Missing TELEGRAM_BOT_TOKEN")
-    return f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
-
-def send_telegram(text: str) -> None:
-    if not (BOT_TOKEN and CHAT_ID):
-        logging.warning("Skipping Telegram send (missing token or chat id)")
-        return
-    try:
-        with httpx.Client(timeout=10) as client:
-            client.post(
-                bot_api("sendMessage"),
-                json={"chat_id": int(CHAT_ID), "text": text},
-            )
-    except Exception as e:
-        logging.exception("Telegram send failed: %s", e)
-
-def job_heartbeat():
-    now = datetime.now().strftime("%H:%M:%S")
-    send_telegram(f"⏱️ Worker heartbeat ({now})")
-
-def run_forever():
-    logging.basicConfig(level=logging.INFO)
-    logging.info("Starting Worker (TZ=%s)", TZ)
-    send_telegram("✅ All-in-One-DeFi-Bot worker is online.")
-
-    # === ΕΔΩ θα προσθέσουμε αργότερα Dexscreener polls, wallet monitor κ.λπ. ===
-    schedule.every(30).minutes.do(job_heartbeat)
-
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("main")
 
 if __name__ == "__main__":
-    run_forever()
+    logger.info("Please run: python -u worker.py")
+    logger.info("The worker logic has been moved to worker.py for better structure.")
