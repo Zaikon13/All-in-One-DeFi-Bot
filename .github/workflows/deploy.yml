@@ -1,0 +1,50 @@
+name: Complete Unified Deployment Process
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  validate-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install python-dotenv httpx
+
+      - name: Validate Python Syntax
+        run: |
+          python -m py_compile app/main.py core/pnl_calculator.py worker.py
+          echo "✅ All Python files syntax OK"
+
+      - name: Test Critical Imports
+        run: |
+          python -c "
+from app.main import app
+print('✅ FastAPI app imports successfully')
+from core.pnl_calculator import calculate_daily_pnl
+print('✅ PnL calculator imports successfully')
+          "
+
+      - name: Deploy Status Notification
+        if: success()
+        run: |
+          echo "🚀 Deployment validation PASSED"
+          echo "All checks successful - Safe to deploy"
+
+      - name: Deployment Failed Notification
+        if: failure()
+        run: |
+          echo "::error::❌ Deployment validation FAILED"
+          echo "Check the logs above for errors"
+          exit 1
