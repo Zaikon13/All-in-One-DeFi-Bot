@@ -25,26 +25,23 @@ jobs:
       - name: Validate Python Syntax
         run: |
           python -m py_compile app/main.py core/pnl_calculator.py worker.py
-          echo "✅ All Python files syntax OK"
+          echo "All Python files syntax OK"
 
       - name: Test Critical Imports
         run: |
           python -c "
 from app.main import app
-print('✅ FastAPI app imports successfully')
+print('FastAPI app imports successfully')
 from core.pnl_calculator import calculate_daily_pnl
-print('✅ PnL calculator imports successfully')
+print('PnL calculator imports successfully')
           "
 
-      - name: Deploy Status Notification
+      - name: Deployment Status
         if: success()
-        run: |
-          echo "🚀 Deployment validation PASSED"
-          echo "All checks successful - Safe to deploy"
+        run: echo "Deployment validation PASSED - Safe to deploy"
 
-      - name: Deployment Failed Notification
+      - name: Deployment Failed
         if: failure()
         run: |
-          echo "::error::❌ Deployment validation FAILED"
-          echo "Check the logs above for errors"
+          echo "::error::Deployment validation FAILED"
           exit 1
