@@ -1,14 +1,25 @@
-# 🤖 AGENTS & MODULE OWNERSHIP MAP
+# AGENTS & MODULE OWNERSHIP MAP
 
-**Last Updated:** 12 Μαΐου 2026
+**Last Updated**: 22 Μαΐου 2026
 
-| Module / Area          | Responsible Agent | Notes |
-|------------------------|-------------------|-------|
-| Deployment & Railway   | Grok              | DEPLOYMENT_SOP.md, RAILWAY.md, webhook fixes |
-| Worker Loop (`main.py` + `core/`) | Grok         | Full DeFi logic, Dexscreener, PnL, alerts |
-| Telegram handlers      | Grok / ChatGPT    | Webhook, /daily_pnl |
-| core/PnL & calculations| Codex / Grok      | Refactor pending |
-| Tests & CI             | Grok              | Integration tests next |
-| Documentation          | Grok              | SUMMARY, CHECKS, AGENTS, SOP |
+## Current Ownership
 
-**Current Focus:** Grok is leading the Worker Loop implementation.
+| Module / Area                    | Primary Owner     | Secondary     | Status      |
+|----------------------------------|-------------------|---------------|-------------|
+| Deployment & Railway             | Grok              | -             | ✅ Active   |
+| Worker Loop & Background Jobs    | Grok              | -             | In Progress |
+| Telegram Handlers & Commands     | Grok + ChatGPT    | -             | Stable      |
+| PnL Calculation & Reports        | Grok              | Codex         | Refactoring |
+| GitHub Actions & CI/CD           | Grok              | -             | ✅ Clean    |
+| Documentation (all .md files)    | Grok              | -             | ✅ Updated  |
+| Grok Integration (API calls)     | Grok              | -             | ✅ Stable   |
+
+## Current Focus
+
+**Grok** is leading:
+- Full Worker Loop implementation
+- Grok Code Review workflow
+- Documentation cleanup
+- Workflow stability
+
+**Next Priority**: Complete Worker Loop + PnL refactoring.

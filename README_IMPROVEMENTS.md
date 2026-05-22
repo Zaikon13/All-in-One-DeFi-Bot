@@ -1,8 +1,21 @@
-# Improvements for Worker Heartbeat and Daily PnL
+# README_IMPROVEMENTS.md
 
-## Changes
-- Fixed worker heartbeat to run every hour on the hour
-- Improved /daily_pnl with clean USD formatted output
-- Enhanced /balances with portfolio values
+**Last Updated**: 22 Μαΐου 2026
 
-See PR for details.
+## Recent Improvements to README.md
+
+- Added full project description
+- Added current features list
+- Added workflows status table
+- Added local run instructions
+- Added links to all important documentation
+- Updated last modified date
+
+## Suggested Future Improvements
+
+- Add screenshots of the Telegram bot
+- Add architecture diagram
+- Add contribution guidelines
+- Add license information
+
+**Status**: ✅ Completed (22 May 2026)
