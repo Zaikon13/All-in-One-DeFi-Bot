@@ -10,7 +10,8 @@ import httpx
 # Configuration
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-HEARTBEAT_INTERVAL = 3600  # 1 hour in seconds
+HEARTBEAT_INTERVAL = 3600  # 1 hour
+DEXSCREENER_POLL_INTERVAL = 300  # 5 minutes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,13 +23,11 @@ logger = logging.getLogger("worker")
 class WorkerLoop:
     def __init__(self):
         self.running = True
+        self.last_heartbeat = None
 
     async def send_telegram_message(self, text: str):
-        """Send message to Telegram chat"""
         if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
-            logger.warning("Telegram credentials not set")
             return
-
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         try:
             async with httpx.AsyncClient(timeout=10) as client:
@@ -38,46 +37,49 @@ class WorkerLoop:
                     "parse_mode": "Markdown"
                 })
         except Exception as e:
-            logger.error(f"Failed to send Telegram message: {e}")
+            logger.error(f"Telegram error: {e}")
 
     async def heartbeat(self):
-        """Send heartbeat every 1 hour"""
         while self.running:
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            message = f"💓 **All-in-One-DeFi-Bot Worker**
+            timestamp = datetime.now().strftime("%H:%M")
+            message = (
+                f"💓 **Worker Heartbeat**
 
-Worker is online and healthy.
-
-**Time:** {timestamp}
-**Next heartbeat:** in 1 hour"
-
-            logger.info(f"Worker heartbeat sent at {timestamp}")
+"
+                f"**Time:** {timestamp}
+"
+                f"**Status:** Online & Healthy
+"
+                f"**Next:** in 1 hour"
+            )
             await self.send_telegram_message(message)
-
+            self.last_heartbeat = datetime.now()
             await asyncio.sleep(HEARTBEAT_INTERVAL)
 
-    async def scheduled_tasks(self):
-        """Placeholder for future periodic tasks"""
+    async def poll_dexscreener(self):
+        """Poll Dexscreener for new pairs/tokens (placeholder)"""
         while self.running:
-            # TODO: Add Dexscreener polling
-            # TODO: Add wallet monitoring
-            # TODO: Add PnL calculations
-            # TODO: Add alert checking
-            await asyncio.sleep(300)  # Check every 5 minutes
+            try:
+                # TODO: Add real Dexscreener API call here
+                # Example: Check for new pairs or price movements
+                logger.info("Dexscreener poll completed (placeholder)")
+            except Exception as e:
+                logger.error(f"Dexscreener poll error: {e}")
+            await asyncio.sleep(DEXSCREENER_POLL_INTERVAL)
 
     async def run(self):
-        logger.info("🚀 Worker Loop started")
+        logger.info("🚀 Worker started")
         await self.send_telegram_message("✅ **All-in-One-DeFi-Bot worker is online.**")
 
         try:
             await asyncio.gather(
                 self.heartbeat(),
-                self.scheduled_tasks()
+                self.poll_dexscreener()
             )
         except asyncio.CancelledError:
-            logger.info("Worker loop cancelled")
+            pass
         finally:
-            logger.info("🛑 Worker loop stopped")
+            logger.info("🛑 Worker stopped")
 
 
 if __name__ == "__main__":
