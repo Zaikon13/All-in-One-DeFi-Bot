@@ -125,7 +125,6 @@ async def process_daily_pnl(chat_id: str):
                 await send_telegram_message("No recent transactions found.", chat_id)
                 return
 
-            # Build simple daily PnL from the same data as /wallet
             from collections import defaultdict
             token_data = defaultdict(lambda: {"buys": 0, "sells": 0, "trades": []})
 
