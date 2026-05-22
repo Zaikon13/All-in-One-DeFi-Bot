@@ -13,12 +13,14 @@ WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 def get_today_transactions() -> List[Dict]:
     """Fetch only today's transactions from Cronos via Etherscan"""
     if not (ETHERSCAN_API_KEY and WALLET_ADDRESS):
+        print("Missing ETHERSCAN_API_KEY or WALLET_ADDRESS")
         return []
 
     today = datetime.now().date()
     start_time = int(datetime.combine(today, datetime.min.time()).timestamp())
     end_time = int(datetime.combine(today, datetime.max.time()).timestamp())
 
+    # Correct Etherscan V2 API for Cronos
     url = (
         f"https://api.etherscan.io/v2/api?chainid=25"
         f"&module=account&action=txlist"
@@ -30,18 +32,22 @@ def get_today_transactions() -> List[Dict]:
     try:
         with httpx.Client(timeout=30) as client:
             r = client.get(url)
+            print(f"Etherscan status: {r.status_code}")
             if r.status_code == 200:
                 data = r.json()
+                print(f"Etherscan response status: {data.get('status')}")
                 if data.get("status") == "1":
                     all_tx = data.get("result", [])
-                    # Filter only today's transactions
                     today_tx = [
                         tx for tx in all_tx
                         if start_time <= int(tx.get("timeStamp", 0)) <= end_time
                     ]
+                    print(f"Found {len(today_tx)} transactions today")
                     return today_tx
+                else:
+                    print(f"Etherscan error: {data.get('message')}")
     except Exception as e:
-        print(f"Etherscan error: {e}")
+        print(f"Etherscan exception: {e}")
     return []
 
 
@@ -49,7 +55,7 @@ def calculate_daily_pnl() -> Dict:
     """Calculate accurate daily PnL per token"""
     transactions = get_today_transactions()
     if not transactions:
-        return {"error": "No transactions today or API error"}
+        return {"error": "No transactions today or API error. Check logs."}
 
     token_data: Dict[str, Dict] = {}
 
@@ -78,7 +84,6 @@ def calculate_daily_pnl() -> Dict:
             "symbol": token_symbol
         })
 
-    # Calculate Net and format
     result = []
     for symbol, data in token_data.items():
         net = data["buys"] - data["sells"]
