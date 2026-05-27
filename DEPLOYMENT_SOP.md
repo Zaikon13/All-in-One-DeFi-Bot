@@ -9,7 +9,7 @@
 |---------|------|---------------|---------|--------|---------|
 | **bot** | Web | `uvicorn app.main:app` | Primary Telegram webhook + /daily_pnl | ✅ Online | Active |
 | **web-gpl6** | Web | `uvicorn app.main:app` | Redundant (same code) | ✅ Online | Inactive |
-| **worker** | Worker | `python -u main.py` | Background jobs, DeFi logic, scheduler | ✅ Online | — |
+| **worker** | Worker | `python -u worker.py` | Background jobs, DeFi logic, scheduler | ✅ Online | — |
 
 **Important**: The **bot** service is the only one with the registered Telegram webhook.
 

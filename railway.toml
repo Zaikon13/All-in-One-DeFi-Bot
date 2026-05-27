@@ -20,4 +20,4 @@ deployment = { disabled = true }
 [[services]]
 name = "worker"
 type = "worker"
-startCommand = "python -u main.py"
+startCommand = "python -u worker.py"
