@@ -1,6 +1,7 @@
 # worker.py - Final Stable Version with Real Alerts + Wallet Monitoring
 
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime
@@ -33,6 +34,43 @@ async def send_telegram(text: str):
         logger.error(f"Telegram error: {e}")
 
 
+# --- Known Pairs Persistence (basic JSON) ---
+# IMPORTANT CAVEAT:
+# This provides durability across in-process restarts and local development restarts.
+# On Railway, the worker filesystem is ephemeral by default.
+# Files written here will be lost on redeploys / container replacements
+# unless a Railway Volume is attached and the path is updated accordingly.
+#
+# TODO (future): Add support for Railway Volume via RAILWAY_VOLUME_MOUNT_PATH
+#                and make the persistence path configurable.
+KNOWN_PAIRS_FILE = "data/known_pairs.json"
+
+
+def load_known_pairs() -> set:
+    """Load previously seen pairs from disk. Returns empty set on first run or error."""
+    if not os.path.exists(KNOWN_PAIRS_FILE):
+        return set()
+
+    try:
+        with open(KNOWN_PAIRS_FILE, "r") as f:
+            data = json.load(f)
+            return set(data) if isinstance(data, list) else set()
+    except Exception as e:
+        logger.error(f"Failed to load known_pairs from disk: {e}")
+        return set()
+
+
+def save_known_pairs(pairs: set):
+    """Persist the current set of known pairs to disk."""
+    try:
+        os.makedirs(os.path.dirname(KNOWN_PAIRS_FILE) or ".", exist_ok=True)
+        # Convert set to sorted list for stable, readable JSON
+        with open(KNOWN_PAIRS_FILE, "w") as f:
+            json.dump(sorted(list(pairs)), f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save known_pairs to disk: {e}")
+
+
 async def heartbeat():
     while True:
         ts = datetime.now().strftime("%H:%M")
@@ -54,6 +92,8 @@ async def poll_dexscreener():
                         pair_address = pair.get("pairAddress")
                         if pair_address and pair_address not in seen_pairs:
                             seen_pairs.add(pair_address)
+                            save_known_pairs(seen_pairs)   # persist immediately
+
                             base = pair.get("baseToken", {})
                             quote = pair.get("quoteToken", {})
                             msg = (
@@ -83,7 +123,14 @@ async def monitor_wallet():
 
 
 async def main():
+    global seen_pairs
     logger.info("🚀 Worker started")
+
+    # Load previously discovered pairs (survives in-process / local restarts)
+    seen_pairs = load_known_pairs()
+    if seen_pairs:
+        logger.info(f"Loaded {len(seen_pairs)} known pairs from disk")
+
     await send_telegram("✅ **All-in-One-DeFi-Bot worker is online.**")
     await asyncio.gather(
         heartbeat(),
