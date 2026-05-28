@@ -6,7 +6,7 @@
 
 | Check                            | Status     | Details |
 |----------------------------------|------------|---------|
-| CI / Lint (Flake8 + CodeQL)      | ✅ Passing | All workflows green |
+| CI / Lint + Dependency Automation | ✅ Passing | All workflows green + Dependabot (pip, GitHub Actions, Docker) + weekly dependency audit |
 | Railway Services (bot, web-gpl6, worker) | ✅ Online | All 3 services healthy |
 | Telegram Webhook                 | ✅ Active  | Registered on bot service |
 | Environment Variables            | ✅ OK      | All required secrets set |

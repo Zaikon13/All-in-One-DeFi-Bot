@@ -7,5 +7,12 @@ Vars:
 - Μοιράζεται τα υπόλοιπα με το Web (βλ. RAILWAY.md).
 
 Σκοπός:
-- Wallet monitor, Dexscreener discovery, alerts, schedulers (EOD report).
-- Τώρα: heartbeat/logging. Έτοιμο για επόμενα PRs.
+- Real-time wallet balance monitoring with change alerts
+- Dexscreener new pair discovery + Telegram alerts for new Cronos tokens
+- Heartbeat + background jobs
+
+**Current Features (Implemented):**
+- ✅ New pair detection on Cronos with rich alerts
+- ✅ Periodic wallet monitoring (CRO + ERC-20 tokens)
+- ✅ Heartbeat messages
+- In-memory pair tracking (resets on restart)

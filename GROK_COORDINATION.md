@@ -25,9 +25,9 @@ This is the **central coordination and Single Source of Truth** document for all
 |--------------------|-----------------------------------|----------------|
 | **HTTP / Telegram** | `app/main.py`, `app/commands/`, `app/github_webhook.py`, `app/health.py` | FastAPI webhook handler, command routing (`/daily_pnl`, `/balances`, `/grok-analyze`), balances & PnL orchestration |
 | **Core Logic**     | `core/` (grok_client.py, pnl_calculator.py, wallet.py, dexscreener.py) | Grok API wrapper, PnL computation (Cronos Explorer + advanced reports), wallet helpers, Dexscreener polling |
-| **Background Worker** | `worker.py` (WorkerLoop class) | Asyncio loops: heartbeat (1h), Dexscreener new pairs (5m), wallet/ERC-20 monitoring (10m). Telegram alerts |
+| **Background Worker** | `worker.py` (WorkerLoop class) | Full Worker Loop: real Dexscreener new pair alerts, wallet balance monitoring + change alerts, heartbeat. All loops active. |
 | **Deployment**     | `railway.toml`, `Dockerfile`, `Procfile`, `DEPLOYMENT_SOP.md` | 3 Railway services |
-| **CI/CD**          | `.github/workflows/` (5 files) | sync-check, health-check (Grok analysis + auto-issue), grok-code-review, dependency-check, ci |
+| **CI/CD**          | `.github/` (workflows + dependabot.yml) | sync-check, health-check, grok-code-review, dependency-check, ci + **Dependabot** (pip + GitHub Actions + Docker) |
 | **Docs & Coordination** | Root `.md` files + `docs/project-status.md` + this file | See SOT section |
 
 **Railway Services (Current)**:
@@ -159,11 +159,11 @@ This project uses multiple Grok sessions / chats (TUI, different terminals, sche
 - **Documentation Inconsistency**:
   - Conflicting SOT claims (`docs/project-status.md` vs `SYNC.md` SPOT list).
   - Legacy files (README_SYNC.md, MANIFEST.md) reference dead ChatGPT/Codex/OPENAI setup.
-- **Worker Loop Incomplete**: Heartbeat/Dexscreener/wallet polling exists but full schedulers (EOD PnL), robust error handling, and integration pending (AGENTS.md priority).
+- **Worker Loop**: Major improvements delivered (real new pair alerts + wallet monitoring now active). Remaining: persistence for known pairs, EOD PnL reports, better error handling.
 - **Minor Technical**:
   - `grok-code-review.yml` has stray leading `##last ` line.
   - Local workspace was 15 commits behind (now resolved).
-- **Dependency**: One open automated issue (#14) — minor outdated packages (no vulns).
+- **Dependency Management**: Now handled proactively by **Dependabot** (weekly updates for pip, GitHub Actions, and Docker with PR limits). The existing `dependency-check.yml` workflow remains as a secondary security/outdated audit that creates issues. The previous open issue (#14) is superseded by Dependabot automation.
 - **Redundant Service**: web-gpl6 still active and healthy but unnecessary.
 
 **Priorities (Ranked)**:

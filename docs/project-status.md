@@ -7,13 +7,15 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 - **Web**: https://bot-production-3d9c.up.railway.app
 - **Telegram**: [@AllInOneDeFiBot](https://t.me/AllInOneDeFiBot)
 
-**Current Workflows (All Clean)**
+**Current Workflows & Automation (All Clean)**
 
-| Workflow | Status | Key Features |
-|----------|--------|--------------|
+| Automation | Status | Key Features |
+|------------|--------|--------------|
 | **Sync Check** | ✅ Green | Full commit + uncommitted changes check, clean YAML |
 | **Health Check Report** | ✅ Green | Railway monitoring + Grok-4.3 analysis + auto Issue + Telegram |
 | **Grok Code Review** | ✅ Ready | New clean workflow (`grok-code-review.yml`), triggers on PRs, Grok-4.3 reviews |
+| **Dependabot** | ✅ Active | Weekly automated PRs for pip, GitHub Actions, and Docker (new) |
+| **Dependency Check** | ✅ Active | Weekly security + outdated package audit (creates issues) |
 
 **Key Improvements Made**
 - All workflows updated to `actions/checkout@v5` (Node.js 24 support)
@@ -21,6 +23,7 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 - Added `continue-on-error: true` for resilience
 - Consistent clean structure across all workflows
 - `docs/project-status.md` updated as Single Source of Truth
+- Added `.github/dependabot.yml` for automated dependency updates (pip, GitHub Actions, Docker)
 
 **Next Steps**
 - Test `Grok Code Review` with a small Pull Request (optional)
