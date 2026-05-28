@@ -20,12 +20,14 @@ def load_prompt(filename: str, **kwargs) -> str:
         return f"[ERROR] Failed to load prompt: {e}"
 
 
-async def call_grok(prompt: str) -> str:
-    """Call Grok API for analysis."""
+async def call_grok(prompt: str, timeout: float = 45.0) -> str:
+    """Call Grok API for analysis.
+    Supports optional timeout for caller-controlled hard limits (addresses prior review feedback on Grok timeout control for command paths).
+    """
     if not GROK_API_KEY:
         return "GROK_API_KEY not configured in Railway."
     try:
-        async with httpx.AsyncClient(timeout=45) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 "https://api.x.ai/v1/chat/completions",
                 headers={

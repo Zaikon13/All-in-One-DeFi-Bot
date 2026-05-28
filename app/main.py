@@ -113,23 +113,24 @@ async def get_all_balances(chat_id: str):
 
 
 async def process_daily_pnl(chat_id: str):
+    """Production webhook handler for /daily_pnl (and /dailypnl).
+    Now delegates to core.pnl_calculator.get_daily_pnl_report() for:
+    - Async-safe Covalent data (no event loop block)
+    - Grok AI insights with hard timeout + reliable fallback
+    Broken inline Explorer + PnLCalculator import removed (was non-functional).
+    """
     if not WALLET_ADDRESS:
         await send_telegram_message("WALLET_ADDRESS not configured", chat_id)
         return
-    await send_telegram_message("Fetching recent trades...", chat_id)
+    await send_telegram_message("🔄 Generating daily PnL report...", chat_id)
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&page=1&offset=200&sort=desc")
-            txs = resp.json().get("result", [])
-            if not txs:
-                await send_telegram_message("No recent transactions found.", chat_id)
-                return
-            from core.pnl_calculator import PnLCalculator
-            report = await PnLCalculator.build_advanced_pnl_report(txs, WALLET_ADDRESS)
-            await send_telegram_message(report, chat_id)
+        # Core async path (Grok-enhanced with safe fallback). Reuses core/ logic.
+        from core.pnl_calculator import get_daily_pnl_report
+        report = await get_daily_pnl_report()
+        await send_telegram_message(report, chat_id)
     except Exception as e:
         logging.exception("daily_pnl error")
-        await send_telegram_message("Error generating report", chat_id)
+        await send_telegram_message("Error generating daily PnL report. Please try again.", chat_id)
 
 
 @app.get("/")
