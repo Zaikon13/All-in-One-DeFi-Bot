@@ -107,6 +107,62 @@ def format_pnl_report(data: Dict) -> str:
 
 
 # -------------------------------------------------------------------
+# Production async formatter for improved /daily_pnl quality (Option A, post-Review Agent 2026-05-28)
+# Per refined brief: new function called EXCLUSIVELY from inside get_daily_pnl_report().
+# Implements clean aggregates + Top Movers (Python-owned) + optional Grok insight (commentary only).
+# -------------------------------------------------------------------
+def format_daily_pnl_report(data: Dict, grok_insight: str | None = None) -> str:
+    """Clean, modern daily PnL report for the production async path only.
+
+    Production async formatter (used only by get_daily_pnl_report).
+    Legacy sync path (telegram/handlers.py) continues to use the original format_pnl_report() unchanged.
+
+    Post-Review Agent clarifications incorporated:
+    - Grok Output Contract: Grok returns ONLY 3-6 sentence qualitative paragraph (no data/numbers/headers).
+    - Telegram Markdown Safety: defensive comment on append; prompt enforces **bold** + simple lists only.
+    - All structure/numbers computed here safely in Python.
+    """
+    if "error" in data:
+        return data["error"]
+
+    date = data.get("date", "today")
+    tokens = data.get("tokens", [])
+    wallet = WALLET_ADDRESS or "unknown"
+    preview = f"{wallet[:6]}...{wallet[-4:]}" if len(wallet) > 10 else wallet
+
+    total_trades = sum(t.get("trades", 0) for t in tokens)
+    active_token_count = len(tokens)
+
+    # Top movers by |net| (pre-computed for prompt + report; Python side only)
+    sorted_tokens = sorted(tokens, key=lambda t: abs(t.get("net", 0)), reverse=True)
+    top_movers = sorted_tokens[:5]
+
+    lines = [
+        f"📊 **Daily PnL — {date}**",
+        "",
+        f"🔑 Wallet: {preview}",
+        f"Active tokens: {active_token_count} | Total trades: {total_trades}",
+        "",
+    ]
+
+    if top_movers:
+        lines.append("**Top Movers** (by |net delta|)")
+        for t in top_movers:
+            lines.append(f"• {t['symbol']} — net {t['net']:+.4f} ({t['trades']} trades)")
+        lines.append("")
+
+    if grok_insight:
+        # Grok insight appended raw. Prompt strictly constrains output to safe Telegram Markdown v1.
+        # If future changes relax the prompt, consider adding light escaping here.
+        # (Review Agent clarification #2)
+        lines.append("🤖 **Grok Daily Insight:**")
+        lines.append(grok_insight.strip())
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# -------------------------------------------------------------------
 # Shared pure aggregation logic (reused by sync + async paths to avoid duplication)
 # -------------------------------------------------------------------
 def _aggregate_pnl(transactions: List[Dict]) -> Dict:
@@ -234,19 +290,26 @@ async def get_daily_pnl_report() -> str:
 
     # Try Grok enhancement (with hard timeout for responsiveness/safety)
     try:
-        # Build compact summary for the prompt (avoid sending full raw txs)
+        # Build richer context for new prompt (post-Review Agent 2026-05-28, clarification #1):
+        # total_trades, active_token_count, top_movers_summary (pre-computed in Python).
+        # Old daily_summary removed (new prompt uses structured movers only; Grok forbidden from numbers).
         tokens = data.get("tokens", [])
-        summary_lines = [
-            f"- {t['symbol']}: {t['trades']} trades, net delta {t['net']:+.4f}"
-            for t in tokens
+        total_trades = sum(t.get("trades", 0) for t in tokens)
+        active_token_count = len(tokens)
+        sorted_movers = sorted(tokens, key=lambda t: abs(t.get("net", 0)), reverse=True)[:5]
+        top_movers_lines = [
+            f"- {m['symbol']}: net {m['net']:+.4f} ({m['trades']} trades)"
+            for m in sorted_movers
         ]
-        daily_summary = "\n".join(summary_lines) if summary_lines else "No activity details."
+        top_movers_summary = "\n".join(top_movers_lines) if top_movers_lines else "No activity."
 
         prompt = load_prompt(
             "grok_daily_pnl.txt",
             date=data.get("date", "today"),
-            daily_summary=daily_summary,
-            wallet_preview=f"{WALLET_ADDRESS[:6]}...{WALLET_ADDRESS[-4:]}" if WALLET_ADDRESS else "unknown"
+            wallet_preview=f"{WALLET_ADDRESS[:6]}...{WALLET_ADDRESS[-4:]}" if WALLET_ADDRESS else "unknown",
+            total_trades=total_trades,
+            active_token_count=active_token_count,
+            top_movers_summary=top_movers_summary
         )
 
         # Hard timeout (25s) for this command path - per Review Agent feedback
@@ -257,12 +320,10 @@ async def get_daily_pnl_report() -> str:
         if (insight and
             not insight.startswith(("Grok API error", "Error calling Grok", "[ERROR]", "GROK_API_KEY")) and
             len(insight.strip()) > 15):
-            enhanced = (
-                base_report +
-                "\n\n🤖 **Grok Daily Insight:**\n" +
-                insight.strip()
-            )
-            return enhanced
+            # Use the improved formatter for the production webhook path only.
+            # Old format_pnl_report() remains untouched for telegram/handlers.py compatibility.
+            # (Review Agent clarification #3 - legacy sync path protection; Option A)
+            return format_daily_pnl_report(data, insight.strip())
         else:
             # Low quality or empty -> silent fallback (user sees base report)
             logging.info("Grok daily PnL insight low-quality or failed; using fallback")

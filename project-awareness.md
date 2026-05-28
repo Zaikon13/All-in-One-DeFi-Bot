@@ -68,7 +68,7 @@ All-in-One-DeFi-Bot is a professional DeFi Telegram bot focused on the **Cronos*
   - Sub-agent usage is improving but not yet standardized
   - No formal "Grok Native Sub-Agents" framework defined yet
   - Limited scheduled automations
-  - Basic Grok-enhanced `/daily_pnl` added (small increment): uses `core/` with async safety + hard timeout + fallback. Honest limitations: net delta only (no cost basis / true USD PnL); Covalent preferred here (Explorer consistency is future work per GROK_COORDINATION). See code comments in core/pnl_calculator.py.
+  - Basic Grok-enhanced `/daily_pnl` added (small increment + follow-up quality pass): uses `core/` with async safety + 25s timeout + fallback. Output quality improved (structured Top Movers + strict Grok commentary-only contract from Review Agent). Honest limitations: net delta only (no cost basis / true USD PnL); Covalent preferred here (Explorer consistency is future work per GROK_COORDINATION). See code comments in core/pnl_calculator.py.
 
 ---
 

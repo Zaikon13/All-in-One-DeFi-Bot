@@ -18,7 +18,7 @@ Vars:
   - **Important Railway limitation**: The filesystem is ephemeral by default. Pairs will be lost on redeploys unless a Railway Volume is mounted (see TODO in worker.py).
 - ✅ Periodic wallet balance monitoring (CRO + ERC-20 tokens) with change detection alerts
 - ✅ Heartbeat messages (hourly)
-- ✅ Basic Grok-enhanced `/daily_pnl` (via webhook in app/main.py calling core.pnl_calculator) with async-safe Covalent + timeout + fallback. (Note: EOD scheduling still pending; this is net-delta only, not full PnL.)
+- ✅ Grok-enhanced `/daily_pnl` (production webhook path via `core.pnl_calculator.get_daily_pnl_report()`) with improved structured output (header + Top Movers aggregates) + higher-quality Grok commentary (refined prompt + Grok Output Contract per Review Agent). Async Covalent + 25s timeout + fully preserved reliable fallbacks. (EOD scheduling pending; still net-delta only.)
 
 **Remaining Tasks:**
 - Improved new pair filtering (liquidity/volume thresholds)
