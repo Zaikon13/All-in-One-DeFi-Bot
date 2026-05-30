@@ -2,7 +2,7 @@
 
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict
 
 import httpx
@@ -22,7 +22,7 @@ def get_today_transactions() -> List[Dict]:
         print("[ERROR] Missing WALLET_ADDRESS")
         return []
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # UTC for tx date filter (minimal targeted fix approved by Review Agent 2026-05-28)
     url = f"{COVALENT_BASE}/25/address/{WALLET_ADDRESS}/transactions_v3/?key={COVALENT_API_KEY}"
 
     try:
@@ -175,6 +175,9 @@ def _aggregate_pnl(transactions: List[Dict]) -> Dict:
     token_data = {}
 
     for tx in transactions:
+        # Filter to successful tx only (data quality; minimal targeted fix approved by Review Agent 2026-05-28)
+        if not tx.get("successful", True):
+            continue
         for transfer in tx.get("transfers", []):
             symbol = transfer.get("contract_ticker_symbol", "CRO")
             decimals = transfer.get("contract_decimals", 18)
@@ -228,7 +231,7 @@ async def get_today_transactions_async() -> List[Dict]:
         logging.error("[ERROR] Missing WALLET_ADDRESS")
         return []
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # UTC for tx date filter (minimal targeted fix approved by Review Agent 2026-05-28)
     url = f"{COVALENT_BASE}/25/address/{WALLET_ADDRESS}/transactions_v3/?key={COVALENT_API_KEY}"
 
     try:
