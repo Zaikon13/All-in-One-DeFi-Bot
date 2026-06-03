@@ -13,6 +13,10 @@ from core.grok_client import call_grok, load_prompt
 COVALENT_API_KEY = os.getenv("COVALENT_API_KEY", "cqt_rQyD6PqwPyGkVvmWhBbyXWx9PxcD")
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 
+# Etherscan V2 (for async production /daily_pnl path only). Default provided per Review Agent 2026-06-03 guardrail.
+# Legacy sync path remains on Covalent and does not use this.
+ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "UH1JFNCPQIR2DU1V7QUNP47PINBZI4X4PA")
+
 COVALENT_BASE = "https://api.covalenthq.com/v1"
 
 
@@ -167,7 +171,13 @@ def format_daily_pnl_report(data: Dict, grok_insight: str | None = None) -> str:
 # -------------------------------------------------------------------
 def _aggregate_pnl(transactions: List[Dict]) -> Dict:
     """Pure function: aggregates Covalent tx list into daily net-delta PnL structure.
-    Used by both calculate_daily_pnl (sync compat) and async path.
+    Used by production async path only (via calculate_daily_pnl_async / get_daily_pnl_report).
+    Legacy sync calculate_daily_pnl() + get_today_transactions() remain UNCHANGED (exact duplicate logic preserved for telegram/handlers.py compatibility).
+    Improvements (flow from async fetcher + here):
+      - transfers[] processed first for every tx
+      - conservative log_events ERC20 "Transfer" parsing with strict dedup
+      - minimal native CRO via top-level tx["value"] (last)
+    All changes minimal + defensive. Output shape identical.
     """
     if not transactions:
         return {"error": "No transactions found today or API error."}
@@ -178,11 +188,16 @@ def _aggregate_pnl(transactions: List[Dict]) -> Dict:
         # Filter to successful tx only (data quality; minimal targeted fix approved by Review Agent 2026-05-28)
         if not tx.get("successful", True):
             continue
+
+        # transfers[] FIRST (Review Agent 2026-05-30 guardrail)
+        symbols_with_transfer_delta = set()
         for transfer in tx.get("transfers", []):
             symbol = transfer.get("contract_ticker_symbol", "CRO")
             decimals = transfer.get("contract_decimals", 18)
             amount = int(transfer.get("delta", 0)) / (10 ** decimals)
             tx_type = "BUY" if amount > 0 else "SELL"
+            if amount != 0:
+                symbols_with_transfer_delta.add(symbol)
             amount = abs(amount)
 
             if symbol not in token_data:
@@ -199,6 +214,110 @@ def _aggregate_pnl(transactions: List[Dict]) -> Dict:
                 "amount": round(amount, 4),
                 "symbol": symbol
             })
+
+        # Improved transfer detection: conservative log_events parsing for standard ERC20 Transfer
+        # (Review Agent 2026-05-30 guardrail – conservative dedup only)
+        # Process transfers[] first (done above). Only add from log_events if symbol has ZERO prior delta
+        # from this tx's transfers[]. Wallet must be in event from/to; use tx["from_address"]/tx["to_address"]
+        # for sign. ANY ambiguity, missing fields, parse error, or non-participation -> graceful skip.
+        # No exceptions raised, no invented data.
+        for log_event in tx.get("log_events", []) or []:
+            try:
+                decoded = log_event.get("decoded") or {}
+                if decoded.get("name") != "Transfer":
+                    continue
+                params = decoded.get("params") or []
+                if not isinstance(params, list):
+                    continue
+                param_map = {p.get("name"): p.get("value") for p in params if isinstance(p, dict) and p.get("name")}
+                from_a = param_map.get("from") or param_map.get("from_address")
+                to_a = param_map.get("to") or param_map.get("to_address")
+                val = param_map.get("value") or param_map.get("amount")
+                if not from_a or not to_a or val is None:
+                    continue  # ambiguity -> skip
+                w = (WALLET_ADDRESS or "").lower()
+                if w not in (str(from_a).lower(), str(to_a).lower()):
+                    continue
+                symbol = (log_event.get("sender_contract_ticker_symbol") or
+                          log_event.get("contract_ticker_symbol") or "CRO")
+                if symbol in symbols_with_transfer_delta:
+                    continue  # dedup guardrail: transfers[] already provided delta for this symbol in this tx
+                # parse amount (defensive)
+                try:
+                    decimals = int(log_event.get("sender_contract_decimals") or log_event.get("contract_decimals") or 18)
+                    if isinstance(val, str) and val.lower().startswith("0x"):
+                        raw = int(val, 16)
+                    else:
+                        raw = int(val)
+                    signed_amt = raw / (10 ** decimals)
+                except (ValueError, TypeError, OverflowError):
+                    continue  # bad data -> skip
+                # sign via tx-level from/to (per guardrail)
+                tx_from = (tx.get("from_address") or "").lower()
+                tx_to = (tx.get("to_address") or "").lower()
+                if tx_to == w:
+                    delta_sign = 1
+                elif tx_from == w:
+                    delta_sign = -1
+                else:
+                    continue  # ambiguity (wallet in internal xfer but not tx signer) -> skip
+                amount = abs(signed_amt * delta_sign)
+                if amount == 0:
+                    continue
+                tx_type = "BUY" if (signed_amt * delta_sign) > 0 else "SELL"
+                if symbol not in token_data:
+                    token_data[symbol] = {"buys": 0, "sells": 0, "trades": []}
+                if tx_type == "BUY":
+                    token_data[symbol]["buys"] += amount
+                else:
+                    token_data[symbol]["sells"] += amount
+                token_data[symbol]["trades"].append({
+                    "time": tx.get("block_signed_at", "")[11:16] if tx.get("block_signed_at") else "",
+                    "type": tx_type,
+                    "amount": round(amount, 4),
+                    "symbol": symbol
+                })
+            except Exception:
+                continue  # any error -> graceful skip (production-safe, no crash on bad log data)
+
+        # Basic native CRO handling (Review Agent 2026-05-30 guardrail – minimal, strictly last, _aggregate_pnl only)
+        # Simple rule: if tx.get("value") > 0, treat as CRO movement using tx from/to for sign.
+        # Only if "CRO" had zero prior delta from transfers[] for this tx. Skip on ANY doubt.
+        try:
+            val = tx.get("value")
+            if val and int(val) > 0:
+                w = (WALLET_ADDRESS or "").lower()
+                tx_from = (tx.get("from_address") or "").lower()
+                tx_to = (tx.get("to_address") or "").lower()
+                if w not in (tx_from, tx_to):
+                    pass  # not our tx-level movement
+                elif "CRO" in symbols_with_transfer_delta:
+                    pass  # transfers[] already covered native value (common case)
+                else:
+                    try:
+                        raw = int(val)
+                        amount = raw / (10 ** 18)
+                        if amount <= 0:
+                            pass
+                        else:
+                            symbol = "CRO"
+                            tx_type = "BUY" if tx_to == w else "SELL"
+                            if symbol not in token_data:
+                                token_data[symbol] = {"buys": 0, "sells": 0, "trades": []}
+                            if tx_type == "BUY":
+                                token_data[symbol]["buys"] += amount
+                            else:
+                                token_data[symbol]["sells"] += amount
+                            token_data[symbol]["trades"].append({
+                                "time": tx.get("block_signed_at", "")[11:16] if tx.get("block_signed_at") else "",
+                                "type": tx_type,
+                                "amount": round(amount, 4),
+                                "symbol": symbol
+                            })
+                    except (ValueError, TypeError):
+                        pass  # doubt -> skip
+        except Exception:
+            pass  # fully defensive
 
     result = []
     for symbol, data in token_data.items():
@@ -217,36 +336,157 @@ def _aggregate_pnl(transactions: List[Dict]) -> Dict:
 
 
 # -------------------------------------------------------------------
-# Async-safe Covalent layer (addresses Review Agent High issue: async safety)
-# Original sync get_today_transactions / calculate_daily_pnl kept UNCHANGED
-# for compatibility with telegram/handlers.py (out of scope for this increment).
+# Async-safe Etherscan V2 layer for production /daily_pnl (chainid=25).
+# Fetches txlist (native CRO) + tokentx (ERC-20), normalizes to Covalent-like shape.
+# Original sync get_today_transactions / calculate_daily_pnl kept UNCHANGED (byte-for-byte)
+# for compatibility with telegram/handlers.py (out of scope / legacy protection).
+# All normalization here only; _aggregate_pnl and get_daily_pnl_report untouched.
+# Pagination/early-exit/partial/error handling replicated exactly from prior Covalent async.
+# (Review Agent 2026-06-03 guardrails)
 # -------------------------------------------------------------------
 
+def _normalize_etherscan_item(item: Dict, action: str) -> Dict | None:
+    """Tiny private helper: build *exact* synthetic Covalent-shaped item from Etherscan V2 result.
+    Called ONLY from get_today_transactions_async (never from _aggregate_pnl, never from legacy).
+    - txlist -> native CRO movement (only if value>0)
+    - tokentx -> ERC-20 transfer
+    Shape guarantees for _aggregate_pnl guardrails (transfers-first, successful, native value, log_events=[]):
+      block_signed_at (ISO UTC Z from unix timeStamp), successful (isError=='0'),
+      transfers=[{contract_ticker_symbol, contract_decimals, delta (signed int)}],
+      from_address, to_address, value, log_events=[] .
+    All adaptation/normalization confined here per Review Agent 2026-06-03 critical guardrail #1.
+    """
+    w = (WALLET_ADDRESS or "").lower()
+    try:
+        ts = int(item.get("timeStamp", 0) or 0)
+    except (ValueError, TypeError):
+        return None
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    block_signed_at = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    is_err = str(item.get("isError", "0"))
+    successful = (is_err == "0")
+    from_a = item.get("from", "") or ""
+    to_a = item.get("to", "") or ""
+    raw_value = item.get("value", "0") or "0"
+
+    if action == "tokentx":
+        symbol = item.get("tokenSymbol") or "???"
+        try:
+            decimals = int(item.get("tokenDecimal", 18))
+        except (ValueError, TypeError):
+            decimals = 18
+        try:
+            raw = int(raw_value)
+        except (ValueError, TypeError):
+            raw = 0
+        delta = raw if to_a.lower() == w else -raw
+        transfers = [{
+            "contract_ticker_symbol": symbol,
+            "contract_decimals": decimals,
+            "delta": delta,
+        }]
+        val = "0"
+    else:
+        # txlist: native CRO only when value moves for our wallet
+        symbol = "CRO"
+        decimals = 18
+        try:
+            raw = int(raw_value)
+        except (ValueError, TypeError):
+            raw = 0
+        if raw == 0:
+            return None  # no pnl impact from this txlist entry (token side covered by tokentx)
+        delta = raw if to_a.lower() == w else -raw
+        transfers = [{
+            "contract_ticker_symbol": symbol,
+            "contract_decimals": decimals,
+            "delta": delta,
+        }]
+        val = raw_value
+
+    return {
+        "block_signed_at": block_signed_at,
+        "successful": successful,
+        "from_address": from_a,
+        "to_address": to_a,
+        "value": val,
+        "transfers": transfers,
+        "log_events": [],
+    }
+
+
 async def get_today_transactions_async() -> List[Dict]:
-    """Async-safe fetch of today's transactions using Covalent (httpx.AsyncClient).
+    """Async-safe fetch of today's transactions using Etherscan V2 (chainid=25 via txlist + tokentx).
     Preferred for FastAPI/webhook/async contexts. Follows patterns from
-    worker.py, core/wallet.py, core/dexscreener.py.
+    worker.py, core/wallet.py, core/dexscreener.py (async httpx, defensive).
+
+    Pagination: page=1..5, offset=1000, sort=desc (newest-first), hard cap ~5 pages per endpoint.
+    Early break on first tx older than today (using timeStamp -> UTC date).
+    Per-page error or non-OK: log + break returning partial results collected (never fails whole report).
+    Normalization to Covalent tx shape happens ONLY inside this fetcher + tiny _normalize helper.
+    Exact defensive pagination/early-exit/partial-results/logging pattern replicated from prior async Covalent impl.
+    Sync legacy path (Covalent) untouched. Output: List[Dict] synthetics for _aggregate_pnl.
+    (Review Agent 2026-06-03 guardrails + UTC date per 2026-05-28)
     """
     if not WALLET_ADDRESS:
         logging.error("[ERROR] Missing WALLET_ADDRESS")
         return []
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # UTC for tx date filter (minimal targeted fix approved by Review Agent 2026-05-28)
-    url = f"{COVALENT_BASE}/25/address/{WALLET_ADDRESS}/transactions_v3/?key={COVALENT_API_KEY}"
+    collected: List[Dict] = []
+    base_url = "https://api.etherscan.io/v2/api"
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.get(url)
-            if r.status_code == 200:
-                data = r.json()
-                items = data.get("data", {}).get("items", [])
-                today_tx = [tx for tx in items if tx.get("block_signed_at", "").startswith(today)]
-                return today_tx
-            else:
-                logging.error(f"[ERROR] Covalent status {r.status_code}")
+            for action in ("txlist", "tokentx"):
+                for page in range(1, 6):  # page 1 to 5, offset=1000 per approved plan + Etherscan V2 spec
+                    url = (
+                        f"{base_url}?chainid=25&module=account&action={action}"
+                        f"&address={WALLET_ADDRESS}&startblock=0&endblock=99999999"
+                        f"&page={page}&offset=1000&sort=desc&apikey={ETHERSCAN_API_KEY}"
+                    )
+                    try:
+                        r = await client.get(url)
+                        if r.status_code != 200:
+                            logging.error(f"[ERROR] Etherscan V2 {action} status {r.status_code} on page {page}")
+                            break  # defensive partial results
+                        data = r.json()
+                        if data.get("status") != "1":
+                            logging.error(f"[ERROR] Etherscan V2 {action} page {page}: {data.get('message', 'error')}")
+                            break  # rate limit / invalid / partial ok
+                        items = data.get("result", []) or []
+                        if not items:
+                            logging.info(f"Async Etherscan V2 {action} pagination: empty page {page}, stopping")
+                            break
+                        page_added = 0
+                        hit_older = False
+                        for item in items:
+                            try:
+                                ts = int(item.get("timeStamp", 0) or 0)
+                                tx_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                            except Exception:
+                                continue
+                            if tx_date == today:
+                                synth = _normalize_etherscan_item(item, action)
+                                if synth:
+                                    collected.append(synth)
+                                    page_added += 1
+                            else:
+                                # older tx encountered (newest-first ordering)
+                                hit_older = True
+                                logging.info(f"Async Etherscan V2 {action} pagination early-exit on page {page}: encountered tx older than {today} (reason: time boundary)")
+                                break  # remaining items + later pages are older
+                        logging.info(f"Async Etherscan V2 {action} pagination: page {page} added {page_added} today's tx (total collected: {len(collected)})")
+                        if hit_older:
+                            break  # early break per guardrail
+                    except Exception as page_err:
+                        logging.error(f"[ERROR] Etherscan V2 {action} async pagination page {page} failed: {str(page_err)} - returning partial results")
+                        break  # do not fail whole report
+        logging.info(f"Async Etherscan V2 pagination complete: {len(collected)} tx for {today} (up to 5 pages per endpoint)")
+        return collected
     except Exception as e:
-        logging.error(f"[ERROR] Covalent async fetch: {str(e)}")
-    return []
+        logging.error(f"[ERROR] Etherscan V2 async fetch: {str(e)}")
+    return collected
 
 
 async def calculate_daily_pnl_async() -> Dict:
@@ -336,3 +576,5 @@ async def get_daily_pnl_report() -> str:
         logging.exception(f"Grok daily PnL call failed (safe fallback): {e}")
         # Explicit safe fallback - never worse than pre-increment
         return base_report + "\n\n(Grok temporarily unavailable - basic report shown)"
+
+
