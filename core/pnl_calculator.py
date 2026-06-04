@@ -434,7 +434,7 @@ async def get_today_transactions_async() -> List[Dict]:
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # UTC for tx date filter (minimal targeted fix approved by Review Agent 2026-05-28)
     collected: List[Dict] = []
-    base_url = "https://api.etherscan.io/v2/api"
+    base_url = "https://api.cronoscan.com/v2/api"  # CronoScan (Etherscan-powered for Cronos) V2; api.etherscan.io/v2 does not support chainid=25
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
