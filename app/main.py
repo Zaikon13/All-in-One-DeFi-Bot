@@ -10,6 +10,11 @@ from datetime import datetime
 import asyncio
 import json
 
+# Reuse Grok client + wallet helpers from core/ (preferred over duplication in app/main.py)
+# (Review Agent 2026-06-04: switch for timeout/quality support; balances/tx for live grok-analyze)
+from core.grok_client import call_grok, load_prompt
+from core.wallet import get_wallet_balances, get_recent_transactions
+
 # Config
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
@@ -19,18 +24,6 @@ WEBHOOK_BASE_URL = os.getenv('WEBHOOK_URL') or os.getenv('APP_URL') or "https://
 RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
 
 app = FastAPI(title="All-in-One-DeFi-Bot")
-
-
-def load_prompt(filename: str, **kwargs) -> str:
-    """Load prompt from prompts/ folder and format it."""
-    try:
-        with open(f"prompts/{filename}", "r", encoding="utf-8") as f:
-            content = f.read()
-        return content.format(**kwargs)
-    except FileNotFoundError:
-        return f"[ERROR] Prompt file not found: prompts/{filename}"
-    except Exception as e:
-        return f"[ERROR] Failed to load prompt: {str(e)}"
 
 
 async def send_telegram_message(text: str, chat_id: str = None, reply_markup=None):
@@ -51,34 +44,6 @@ async def send_telegram_message(text: str, chat_id: str = None, reply_markup=Non
                 json=payload)
     except Exception as e:
         logging.error(f"Send message error: {e}")
-
-
-async def call_grok(prompt: str) -> str:
-    """Call Grok API for analysis - improved version"""
-    if not GROK_API_KEY:
-        return "GROK_API_KEY not configured in Railway."
-    try:
-        async with httpx.AsyncClient(timeout=45) as client:
-            response = await client.post(
-                "https://api.x.ai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {GROK_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": "grok-4.3",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 600,
-                    "temperature": 0.2
-                }
-            )
-            if response.status_code != 200:
-                return f"Grok API error: {response.status_code} - {response.text[:200]}"
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
-    except Exception as e:
-        logging.error(f"Grok API exception: {e}")
-        return f"Error calling Grok: {str(e)[:100]}"
 
 
 async def get_all_balances(chat_id: str):
@@ -133,6 +98,70 @@ async def process_daily_pnl(chat_id: str):
         await send_telegram_message("Error generating daily PnL report. Please try again.", chat_id)
 
 
+# --- Live Grok Analyze support (Review Agent 2026-06-04 binding requirements) ---
+# Reuses core/ for balances + new tx helper. Python compacts data before prompt.
+# Quality gate + 25s timeout + safe fallback modeled on get_daily_pnl_report.
+# Command path uses background_tasks (like balances/daily_pnl); HTTP direct.
+async def _get_grok_live_context(wallet_address: str) -> dict:
+    """Build compact live summaries for the Grok prompt (balances + recent txs).
+    Defensive: returns safe defaults on any fetch error. No impact on /balances or /wallet.
+    """
+    if not wallet_address:
+        return {"preview": "unknown", "balances": "N/A", "txs": "N/A"}
+    try:
+        balances = await get_wallet_balances(wallet_address)
+        recent = await get_recent_transactions(wallet_address, 15)
+        preview = f"{wallet_address[:6]}...{wallet_address[-4:]}"
+        b_lines = [f"CRO: {balances.get('cro', 0):,.4f}"]
+        for sym, amt in sorted((balances.get("tokens") or {}).items(), key=lambda x: -x[1])[:5]:
+            if amt > 0.0001:
+                b_lines.append(f"• {sym}: {amt:,.4f}")
+        bsum = "\n".join(b_lines)
+        tsum = "\n".join(f"• {t}" for t in recent) if recent else "No recent transactions found."
+        return {"preview": preview, "balances": bsum, "txs": tsum}
+    except Exception as e:
+        logging.exception("grok live context fetch error")
+        return {"preview": "error", "balances": "fetch error", "txs": "fetch error"}
+
+
+async def process_grok_analyze(chat_id: str):
+    """Background worker for /grok-analyze (Telegram). Sends thinking msg before dispatch.
+    Fetches live data via core/, builds prompt, calls Grok with timeout + gate + fallback.
+    """
+    if not WALLET_ADDRESS:
+        await send_telegram_message("WALLET_ADDRESS not configured", chat_id)
+        return
+    try:
+        ctx = await _get_grok_live_context(WALLET_ADDRESS)
+        prompt = load_prompt(
+            "grok_wallet_analysis.txt",
+            wallet_preview=ctx["preview"],
+            balances_summary=ctx["balances"],
+            recent_txs_summary=ctx["txs"],
+        )
+        # Hard timeout (25s) + quality gate + safe fallback (exact pattern from pnl_calculator.py:558-578)
+        # (Review Agent 2026-06-04)
+        insight = await call_grok(prompt, timeout=25.0)
+        if (
+            insight
+            and not insight.startswith(("Grok API error", "Error calling Grok", "[ERROR]", "GROK_API_KEY"))
+            and len(insight.strip()) > 15
+        ):
+            await send_telegram_message(insight.strip(), chat_id)
+        else:
+            logging.info("Grok live analyze low-quality or failed; using fallback")
+            await send_telegram_message(
+                f"Live data fetched for {ctx['preview']}.\n\n"
+                f"**Balances:**\n{ctx['balances']}\n\n"
+                f"**Recent activity:**\n{ctx['txs']}\n\n"
+                "(Grok insight temporarily unavailable - raw context shown above)",
+                chat_id,
+            )
+    except Exception as e:
+        logging.exception("grok analyze error")
+        await send_telegram_message("Error generating live Grok analysis. Please try again.", chat_id)
+
+
 @app.get("/")
 @app.get("/health")
 async def health():
@@ -141,14 +170,41 @@ async def health():
 
 @app.post("/grok/analyze")
 async def grok_analyze(req: Request):
-    """Grok-powered wallet analysis"""
+    """Grok-powered wallet analysis (live data).
+    Updated for live balances + recent txs (Review Agent 2026-06-04).
+    Uses core.grok_client with timeout + quality gate. Supports custom wallet in payload.
+    """
     try:
         data = await req.json()
         wallet = data.get("wallet", WALLET_ADDRESS)
-        prompt = load_prompt("grok_wallet_analysis.txt", wallet_address=wallet)
-        insight = await call_grok(prompt)
-        return {"ok": True, "analysis": insight}
+        ctx = await _get_grok_live_context(wallet)
+        prompt = load_prompt(
+            "grok_wallet_analysis.txt",
+            wallet_preview=ctx["preview"],
+            balances_summary=ctx["balances"],
+            recent_txs_summary=ctx["txs"],
+        )
+        insight = await call_grok(prompt, timeout=25.0)
+        if (
+            insight
+            and not insight.startswith(("Grok API error", "Error calling Grok", "[ERROR]", "GROK_API_KEY"))
+            and len(insight.strip()) > 15
+        ):
+            return {"ok": True, "analysis": insight.strip(), "live_context_used": True}
+        else:
+            # safe fallback: return raw context + note (never worse than before)
+            return {
+                "ok": True,
+                "analysis": (
+                    f"Live data for {ctx['preview']}.\n\n"
+                    f"**Balances:**\n{ctx['balances']}\n\n"
+                    f"**Recent activity:**\n{ctx['txs']}\n\n"
+                    "(Grok insight unavailable this time - raw context shown)"
+                ),
+                "live_context_used": True,
+            }
     except Exception as e:
+        logging.exception("grok/analyze http error")
         return {"ok": False, "error": str(e)}
 
 
@@ -186,9 +242,9 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         background_tasks.add_task(process_daily_pnl, chat_id)
 
     elif text == "/grok-analyze":
-        prompt = load_prompt("grok_wallet_analysis.txt", wallet_address=WALLET_ADDRESS)
-        insight = await call_grok(prompt)
-        await send_telegram_message(insight, chat_id)
+        # Per Review Agent 2026-06-04: immediate thinking msg + background dispatch (matches balances/daily_pnl pattern)
+        await send_telegram_message("🔄 Generating live Grok analysis...", chat_id)
+        background_tasks.add_task(process_grok_analyze, chat_id)
 
     else:
         await send_telegram_message("Unknown command. Type /start for the menu.", chat_id)
