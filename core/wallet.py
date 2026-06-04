@@ -47,6 +47,7 @@ async def get_recent_transactions(wallet_address: str, limit: int = 20) -> list[
     Partial results on any error (never raises). Silent fail per existing core/wallet style.
     Do NOT use for PnL or modify /daily_pnl -- this is isolated for Grok context.
     """
+    # Review Agent 2026-06-04: minimal, defensive, explorer-only, returns partial on error
     if not wallet_address:
         return []
     w = wallet_address.lower()

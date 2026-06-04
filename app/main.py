@@ -110,7 +110,7 @@ async def _get_grok_live_context(wallet_address: str) -> dict:
         return {"preview": "unknown", "balances": "N/A", "txs": "N/A"}
     try:
         balances = await get_wallet_balances(wallet_address)
-        recent = await get_recent_transactions(wallet_address, 15)
+        recent = await get_recent_transactions(wallet_address, 20)  # limit=20 per Review Agent 2026-06-04 helper spec
         preview = f"{wallet_address[:6]}...{wallet_address[-4:]}"
         b_lines = [f"CRO: {balances.get('cro', 0):,.4f}"]
         for sym, amt in sorted((balances.get("tokens") or {}).items(), key=lambda x: -x[1])[:5]:
@@ -125,8 +125,9 @@ async def _get_grok_live_context(wallet_address: str) -> dict:
 
 
 async def process_grok_analyze(chat_id: str):
-    """Background worker for /grok-analyze (Telegram). Sends thinking msg before dispatch.
+    """Background worker for /grok-analyze (Telegram).
     Fetches live data via core/, builds prompt, calls Grok with timeout + gate + fallback.
+    (Thinking message sent *immediately* in webhook handler before background_tasks.add_task per Review Agent 2026-06-04.)
     """
     if not WALLET_ADDRESS:
         await send_telegram_message("WALLET_ADDRESS not configured", chat_id)
@@ -142,11 +143,9 @@ async def process_grok_analyze(chat_id: str):
         # Hard timeout (25s) + quality gate + safe fallback (exact pattern from pnl_calculator.py:558-578)
         # (Review Agent 2026-06-04)
         insight = await call_grok(prompt, timeout=25.0)
-        if (
-            insight
-            and not insight.startswith(("Grok API error", "Error calling Grok", "[ERROR]", "GROK_API_KEY"))
-            and len(insight.strip()) > 15
-        ):
+        if (insight and
+            not insight.startswith(("Grok API error", "Error calling Grok", "[ERROR]", "GROK_API_KEY")) and
+            len(insight.strip()) > 15):
             await send_telegram_message(insight.strip(), chat_id)
         else:
             logging.info("Grok live analyze low-quality or failed; using fallback")
@@ -185,14 +184,13 @@ async def grok_analyze(req: Request):
             recent_txs_summary=ctx["txs"],
         )
         insight = await call_grok(prompt, timeout=25.0)
-        if (
-            insight
-            and not insight.startswith(("Grok API error", "Error calling Grok", "[ERROR]", "GROK_API_KEY"))
-            and len(insight.strip()) > 15
-        ):
+        if (insight and
+            not insight.startswith(("Grok API error", "Error calling Grok", "[ERROR]", "GROK_API_KEY")) and
+            len(insight.strip()) > 15):
             return {"ok": True, "analysis": insight.strip(), "live_context_used": True}
         else:
             # safe fallback: return raw context + note (never worse than before)
+            # (Review Agent 2026-06-04)
             return {
                 "ok": True,
                 "analysis": (

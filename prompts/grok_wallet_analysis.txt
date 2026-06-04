@@ -15,8 +15,8 @@ GROK OUTPUT CONTRACT (MANDATORY - HIGHEST PRIORITY):
   - (bullet list of 2-4 points: positive or risks like concentration, recent activity patterns, etc. Use only data provided.)
   **Recommendations**
   (0-2 short, practical suggestions if any. Or "No immediate recommendations.")
-- Base analysis **strictly** on the provided live balances and recent txs. Do not invent prices, USD values, external market data, or hypothetical activity.
-- You are **STRICTLY FORBIDDEN** from using data not in the input, or claiming lack of live data.
+- Base analysis **only on the provided live data**. Strictly use only the balances_summary and recent_txs_summary passed in this prompt. Do not invent prices, USD values, external market data, hypothetical activity, or any information not explicitly given.
+- You are **STRICTLY FORBIDDEN** from using any prior knowledge, claiming you lack live data, or referencing data sources outside the input provided here.
 
 TELEGRAM MARKDOWN SAFETY (MANDATORY):
 - Use ONLY the safe subset for Telegram Markdown v1: **bold** text and simple - or • bullet lists.
