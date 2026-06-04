@@ -47,34 +47,9 @@ async def send_telegram_message(text: str, chat_id: str = None, reply_markup=Non
 
 
 async def get_all_balances(chat_id: str):
-    if not WALLET_ADDRESS:
-        await send_telegram_message("WALLET_ADDRESS not configured", chat_id)
-        return
-    await send_telegram_message("Fetching your wallet balances...", chat_id)
-    try:
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            native_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=balance&address={WALLET_ADDRESS}")
-            cro_balance = int(native_resp.json().get("result", 0)) / 10**18
-            token_resp = await client.get(f"https://cronos.org/explorer/api?module=account&action=tokentx&address={WALLET_ADDRESS}&offset=500&sort=desc")
-            txs = token_resp.json().get("result", [])
-            token_bal = {}
-            for tx in txs:
-                symbol = tx.get("tokenSymbol", "???")
-                decimals = int(tx.get("tokenDecimal", 18))
-                value = int(tx.get("value", 0)) / (10 ** decimals)
-                if tx.get("to", "").lower() == WALLET_ADDRESS.lower():
-                    token_bal[symbol] = token_bal.get(symbol, 0) + value
-                else:
-                    token_bal[symbol] = token_bal.get(symbol, 0) - value
-            msg = f"**💼 Wallet Balances**\n\n`{WALLET_ADDRESS[:8]}...{WALLET_ADDRESS[-6:]}`\n\n**CRO**: `{cro_balance:,.4f}` ~ $423.51\n\n**Tokens:**\n"
-            for symbol, amount in sorted(token_bal.items(), key=lambda x: x[1], reverse=True):
-                if amount > 0.0001:
-                    msg += f"• **{symbol}**: `{amount:,.4f}`\n"
-            msg += f"\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            await send_telegram_message(msg, chat_id)
-    except Exception as e:
-        logging.exception("Balances error")
-        await send_telegram_message("Error fetching balances. Try again.", chat_id)
+    """Delegate to the canonical balances command to avoid duplicate balance logic."""
+    from app.commands import get_all_balances as cmd_get_all_balances
+    return await cmd_get_all_balances(chat_id)
 
 
 async def process_daily_pnl(chat_id: str):

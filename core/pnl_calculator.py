@@ -10,12 +10,17 @@ import httpx
 # Reuse Grok client (core/ preferred over duplication in app/main.py)
 from core.grok_client import call_grok, load_prompt
 
-COVALENT_API_KEY = os.getenv("COVALENT_API_KEY", "cqt_rQyD6PqwPyGkVvmWhBbyXWx9PxcD")
+# Require API keys from environment; do NOT fall back to hardcoded defaults.
+COVALENT_API_KEY = os.getenv("COVALENT_API_KEY")
+if not COVALENT_API_KEY:
+    raise ValueError("COVALENT_API_KEY is missing from environment variables")
+
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 
-# Etherscan V2 (for async production /daily_pnl path only). Default provided per Review Agent 2026-06-03 guardrail.
-# Legacy sync path remains on Covalent and does not use this.
-ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "UH1JFNCPQIR2DU1V7QUNP47PINBZI4X4PA")
+# Etherscan V2 (for async production /daily_pnl path only). Legacy sync path remains on Covalent.
+ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY")
+if not ETHERSCAN_API_KEY:
+    raise ValueError("ETHERSCAN_API_KEY is missing from environment variables")
 
 COVALENT_BASE = "https://api.covalenthq.com/v1"
 

@@ -22,17 +22,30 @@ async def get_wallet_balances(wallet_address: str):
 
         tokens = {}
         try:
+            # Increase offset to cover more token transfers and compute net balances.
             token_resp = await client.get(
-                f"https://cronos.org/explorer/api?module=account&action=tokentx&address={wallet_address}&page=1&offset=200&sort=desc"
+                f"https://cronos.org/explorer/api?module=account&action=tokentx&address={wallet_address}&page=1&offset=500&sort=desc"
             )
             if token_resp.status_code == 200:
                 txs = token_resp.json().get("result", []) or []
+                w_lower = wallet_address.lower()
                 for tx in txs:
                     symbol = tx.get("tokenSymbol", "???")
-                    decimals = int(tx.get("tokenDecimal", 18))
-                    value = int(tx.get("value", 0) or 0) / (10 ** decimals)
-                    if value > 0:
+                    try:
+                        decimals = int(tx.get("tokenDecimal", 18) or 18)
+                    except Exception:
+                        decimals = 18
+                    try:
+                        raw = int(tx.get("value") or 0)
+                    except Exception:
+                        raw = 0
+                    value = raw / (10 ** decimals)
+                    if value == 0:
+                        continue
+                    if (tx.get("to") or "").lower() == w_lower:
                         tokens[symbol] = tokens.get(symbol, 0) + value
+                    else:
+                        tokens[symbol] = tokens.get(symbol, 0) - value
         except Exception:
             pass
 
