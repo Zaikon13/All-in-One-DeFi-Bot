@@ -7,8 +7,8 @@ from typing import List, Dict
 
 import httpx
 
-# Reuse Grok client (core/ preferred over duplication in app/main.py)
-from core.grok_client import call_grok, load_prompt
+# Reuse Grok client (SOT for calls, prompts, quality gates - consolidated 2026-06-04)
+from core.grok_client import call_grok, load_prompt, is_valid_grok_response
 
 # Require API keys from environment; do NOT fall back to hardcoded defaults.
 COVALENT_API_KEY = os.getenv("COVALENT_API_KEY")
@@ -564,10 +564,8 @@ async def get_daily_pnl_report() -> str:
         # (shorter than default to keep webhook responsive; failures always fallback)
         insight = await call_grok(prompt, timeout=25.0)
 
-        # Quality gate: must be non-error, substantial content
-        if (insight and
-            not insight.startswith(("Grok API error", "Error calling Grok", "[ERROR]", "GROK_API_KEY")) and
-            len(insight.strip()) > 15):
+        # Quality gate: must be non-error, substantial content (now via SOT helper in core/grok_client.py)
+        if is_valid_grok_response(insight):
             # Use the improved formatter for the production webhook path only.
             # Old format_pnl_report() remains untouched for telegram/handlers.py compatibility.
             # (Review Agent clarification #3 - legacy sync path protection; Option A)

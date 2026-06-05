@@ -10,16 +10,15 @@ from datetime import datetime
 import asyncio
 import json
 
-# Reuse Grok client + wallet helpers from core/ (preferred over duplication in app/main.py)
+# Reuse Grok client + wallet helpers from core/ (SOT for calls, prompts, quality gates - consolidated 2026-06-04)
 # (Review Agent 2026-06-04: switch for timeout/quality support; balances/tx for live grok-analyze)
-from core.grok_client import call_grok, load_prompt
+from core.grok_client import call_grok, load_prompt, is_valid_grok_response
 from core.wallet import get_wallet_balances, get_recent_transactions
 
 # Config
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
-GROK_API_KEY = os.getenv('GROK_API_KEY')
 WEBHOOK_BASE_URL = os.getenv('WEBHOOK_URL') or os.getenv('APP_URL') or "https://web-gpl6-production.up.railway.app"
 RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
 
@@ -118,9 +117,7 @@ async def process_grok_analyze(chat_id: str):
         # Hard timeout (25s) + quality gate + safe fallback (exact pattern from pnl_calculator.py:558-578)
         # (Review Agent 2026-06-04)
         insight = await call_grok(prompt, timeout=25.0)
-        if (insight and
-            not insight.startswith(("Grok API error", "Error calling Grok", "[ERROR]", "GROK_API_KEY")) and
-            len(insight.strip()) > 15):
+        if is_valid_grok_response(insight):
             await send_telegram_message(insight.strip(), chat_id)
         else:
             logging.info("Grok live analyze low-quality or failed; using fallback")
@@ -159,9 +156,7 @@ async def grok_analyze(req: Request):
             recent_txs_summary=ctx["txs"],
         )
         insight = await call_grok(prompt, timeout=25.0)
-        if (insight and
-            not insight.startswith(("Grok API error", "Error calling Grok", "[ERROR]", "GROK_API_KEY")) and
-            len(insight.strip()) > 15):
+        if is_valid_grok_response(insight):
             return {"ok": True, "analysis": insight.strip(), "live_context_used": True}
         else:
             # safe fallback: return raw context + note (never worse than before)
