@@ -20,6 +20,7 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 | **Dependency Check** | ✅ Active | Weekly security + outdated package audit (creates issues) |
 | **Worker Loop** | Partially Functional | Real new pair alerts (Dexscreener) + wallet monitoring + heartbeat active |
 | **Grok Usage Map** | New Primary SOT | Complete canonical inventory of all Grok integrations (see GROK_USAGE.md) |
+| **Sub-Agent System + Mandatory Review Gate** | Formalized | 5 agents (Review mandatory before edits) + detailed protocol in project-awareness.md + personas in agents/personas/ |
 
 **Key Improvements Made**
 - All workflows updated to `actions/checkout@v5` (Node.js 24 support)
@@ -30,12 +31,14 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 - Added `.github/dependabot.yml` for automated dependency updates (pip, GitHub Actions, Docker)
 - `core/grok_client.py` established as SOT for all runtime Grok calls + centralized quality gate (`is_valid_grok_response`)
 - New Primary SOT `GROK_USAGE.md` created as complete map of Grok integrations (runtime, CI, prompts, gates, pending)
+- Grok Native Sub-Agents Architecture formalized with **Mandatory Review Gate** (project-awareness.md Section 4 + improved personas + reviews/ archive convention)
 
 **Next Steps**
 - Test `Grok Code Review` with a small Pull Request (optional)
-- Continue Worker Loop improvements (persistence for known pairs, full change detection, EOD PnL reports)
+- Continue Worker Loop improvements (persistence for known pairs, full change detection, EOD PnL reports) — all edits must go through the Review Gate
+- Adopt the full Sub-Agent + Review Gate protocol for all non-trivial work (see project-awareness.md)
 - Continue with Railway improvements and bot features
 
 **Core Rule**: Small PRs → Green CI → Update docs
 
-**Last Updated**: 2026-06 (coordinated docs update for Grok SOT structure) by Grok AI Coordinator
+**Last Updated**: 2026-06 (Sub-Agent system + Mandatory Review Gate formalized) by Grok AI Coordinator

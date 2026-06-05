@@ -76,60 +76,145 @@ All-in-One-DeFi-Bot is a professional DeFi Telegram bot focused on the **Cronos*
 
 ---
 
-## 4. Grok AI Agent System Setup (Native Sub-Agents Architecture)
+## 4. Grok AI Agent System Setup (Native Sub-Agents Architecture) — With Mandatory Review Gate
 
-**Master Agent**: Grok (you) — The central coordinator and decision maker.
+**Master Agent**: Grok (you) — The central coordinator and decision maker. You retain final authority but **must** use the Sub-Agent system and Review Gate for all non-trivial work.
 
-**Permanent Knowledge Base** (must be read at the start of every complex task or new session):
-- `GROK_COORDINATION.md`
-- `AGENTS.md`
+**Permanent Knowledge Base** (must be read at the start of **every** complex task or new session):
+- `GROK_COORDINATION.md` (central hub + rules)
+- `AGENTS.md` (ownership map)
 - `project-awareness.md` (this file)
+- `GROK_USAGE.md` (for any Grok integration work)
 
-### Sub-Agent Roles & Personas
+### 4.1 Sub-Agent Roles (Summary)
 
-The following specialized Sub-Agents are defined in `agents/personas/`:
+The five specialized Sub-Agents live in `agents/personas/`. Full detailed instructions (including checklists and output templates) are in the persona files themselves — **always prepend the full persona text** when spawning.
 
-| Sub-Agent       | Primary Responsibility                          | Key Constraints                          | When Master Delegates |
-|-----------------|------------------------------------------------|------------------------------------------|-----------------------|
-| **Review Agent**    | Mandatory code/design review before implementation or merge | Never implements changes itself; focuses on risks, correctness, and project rules | Before any search_replace/write on code |
-| **Code Agent**      | Implements features and fixes following instructions | Smallest correct change; follows existing patterns; reuses core/ when possible | After Review Agent approval |
-| **Execute Agent**   | Runs commands, tests, git operations, and deployment steps | Never performs destructive actions without explicit Master confirmation | For testing, builds, git ops, local execution |
-| **Analysis Agent**  | Deep analysis of code, logs, behavior, or data | Evidence-based; distinguishes facts from hypotheses | When debugging, understanding gaps, or evaluating options |
-| **Research Agent**  | Investigates external libraries, APIs, patterns, or best practices | Focuses on practical, production-relevant information aligned with current stack | When evaluating new tools, APIs, or architectural options |
+| Sub-Agent          | Primary Responsibility                                      | Must Never Do                                      | Key When Master Delegates |
+|--------------------|-------------------------------------------------------------|----------------------------------------------------|-----------------------------|
+| **Review Agent**   | Mandatory gate: review all proposed code/design/SOT changes for correctness, safety, SOT alignment, risks, and project rules before any edit. | Implement changes, edit files, or bypass the gate. | Before **any** `search_replace` / `write` / architecture decision / SOT update / new core feature. |
+| **Code Agent**     | Implement the smallest correct, defensive change after Review approval. Follow patterns, reuse `core/`, add Review attribution comments. | Start implementation without explicit "Review approved + address these points" from Master. Bypass Review. | Only after Master confirms Review output has been read and addressed. |
+| **Execute Agent**  | Safely run commands, tests, git diagnostics, local execution, capture full output. | Destructive actions (force push, rm, prod deploy, etc.) without repeated explicit Master approval. | Testing, builds, diagnostics, preparing commits (Master does the actual git add/commit). |
+| **Analysis Agent** | Deep, evidence-based investigation of code, logs, bugs, data flows, or behavior. Produce structured findings + recommendations. | Propose or perform edits. Speculate without evidence. | Debugging (e.g. "why no PnL txs"), pre-refactor analysis, evaluating options. |
+| **Research Agent** | Focused external research (libraries, APIs, patterns, best practices) translated to this stack and rules. | Recommend changes that would violate SOTs, Review Gate, or small-PR discipline. | Evaluating new tools, Grok features, async patterns, Railway configs, etc. |
 
-Detailed personas are stored in:
+Detailed, up-to-date personas (with project-specific checklists):
 - `agents/personas/review-agent.md`
 - `agents/personas/code-agent.md`
 - `agents/personas/execute-agent.md`
 - `agents/personas/analysis-agent.md`
 - `agents/personas/research-agent.md`
 
-### Handoff Protocol (Master → Sub-Agent)
+### 4.2 Handoff Protocol (Master → Sub-Agent) — Always Follow
 
-1. Master creates a clear, self-contained task prompt.
-2. Master includes references to `project-awareness.md`, `GROK_COORDINATION.md`, and specific file paths.
-3. Master prepends the relevant persona to the prompt.
-4. Master calls `spawn_subagent` (with appropriate `subagent_type` and `background` when needed).
-5. Sub-Agent produces structured output (often to a file or clear sections).
-6. Master reviews the output (especially mandatory for Review Agent).
+1. Master opens `todo_write` (merge:false) for any task with 3+ distinct actions.
+2. Master reads the relevant Primary SOTs **in this session**.
+3. Master prepares a self-contained prompt that includes:
+   - Full persona text prepended.
+   - References to SOTs read.
+   - Current todo context.
+   - Exact scope + file paths + any prior Review output.
+4. Master calls `spawn_subagent` (appropriate `subagent_type`, `background` when long-running).
+5. Sub-Agent uses tools (read-only first where possible) and returns structured output (often to a file for long results).
+6. **Master must read and address** Sub-Agent output before proceeding (especially Review).
 
-### Plan Mode Discipline
+For parallel or long-running work: use `background: true` + `get_command_or_subagent_output`.
 
-- **Default for any non-trivial task** (anything with >3 steps, ambiguity, or architectural impact).
-- Master must open with `todo_write` (merge:false) and explicit planning before delegating or making changes.
-- Complex work should usually go through a planning cycle before execution.
+### 4.3 Mandatory Review Gate Protocol (The Core Enforcement Mechanism)
 
-### Mandatory Auto Code Review Gate
+#### 4.3.1 When Review Is Mandatory (Non-Skippable)
+- Any use of `search_replace` or `write` on code (`.py`, `.yml` workflows, Docker/Procfile, etc.).
+- Changes to any Primary SOT file or `agents/personas/`.
+- New features, refactors, core logic changes (worker, pnl_calculator, grok_client, wallet helpers).
+- Architecture decisions or new external integrations.
+- Any change affecting legacy protection boundaries (Covalent path must stay only in `telegram/handlers.py`; async Etherscan/Cronoscan logic only in `core/`).
+- CI unification, prompt contract changes, new Grok call sites.
 
-- **No code changes** (via `search_replace`, `write`, or direct edits) are allowed without first spawning the Review Agent on the proposed change.
-- The Review Agent's output must be read and addressed before proceeding.
+#### 4.3.2 When Review May Be Skipped (Rare — Master Must Justify)
+- Trivial non-SOT documentation typos (one or two words).
+- Pure diagnostic read-only commands via Execute Agent.
+- Master must explicitly note in the active todo and any commit/PR:  
+  `"Skipped Review: [reason — e.g. single-word typo in non-SOT README, zero behavior or coordination impact]."`
 
-### Master Agent Coordination Principles
+**Default**: When in doubt, spawn Review. "Small PRs" does **not** mean "skip Review for small code changes."
 
-- The Master Agent retains final decision authority.
-- Delegation happens via clear, written prompts + todos rather than vague instructions.
-- The Master Agent maintains the global view using `project-awareness.md` and `GROK_COORDINATION.md`.
-- Sub-Agents are tools — the Master Agent is responsible for orchestration, synthesis, and quality.
+#### 4.3.3 How to Trigger Review (Exact Steps)
+1. Master prepares the Review prompt using the full `review-agent.md` persona + current SOT context + the **proposed change** (unified diff is ideal; otherwise precise description of intended edits).
+2. Master calls:
+   ```
+   spawn_subagent(
+     subagent_type="general-purpose",   # or appropriate
+     prompt= FULL_REVIEW_PERSONA + task_context + proposed_diff + "Produce structured review using the exact output format in your persona.",
+     ...
+   )
+   ```
+3. Master reads the complete Review output.
+4. Master either:
+   - Addresses every point (in a follow-up prompt to Code, or by revising the plan), **or**
+   - Records "Request major revisions" and loops.
+5. Only when Review returns "Approve" or "Approve with minor revisions" and Master has explicitly addressed the points does Master proceed to Code Agent (or direct small edit for approved cases).
+
+#### 4.3.4 What the Review Agent Must Check (Core Checklist — Enforced in Persona)
+- Alignment with all Primary SOTs and coordination rules (small PRs, coordinated updates across Primaries, update SOTs first).
+- Legacy path protection and separation of concerns (Covalent vs Etherscan, handlers.py vs core/).
+- UTC discipline, error handling, timeouts (25s for command Grok calls), fallbacks.
+- Telegram Markdown v1 safety for any user-visible output.
+- `core/` reuse vs duplication.
+- State/persistence risks (Railway ephemeral FS, known_pairs).
+- Security (no secrets, proper env handling).
+- Quality: smallest correct change, defensive code, Review attribution comments.
+- Impact on documentation and future agent work.
+
+#### 4.3.5 Recording & Enforcement
+- For non-trivial reviews, Master saves the Review Agent's full output to `reviews/<YYYY-MM-DD>-<task-slug>.md`.
+- Master updates the todo list to record receipt and how points were addressed.
+- Code changes include comments: `# Review Agent 2026-06-XX: [guardrail description]`.
+- Master never proceeds to implementation edits until the protocol above is complete.
+- This is self-enforced by the Master Agent (Grok) in every session. Historical evidence of use appears as "Review Agent YYYY-MM-DD guardrails" comments in core code (e.g. pnl_calculator.py).
+
+### 4.4 Plan Mode + todo_write Discipline (Supports the Gate)
+- Every task with >3 steps or any code/SOT impact **must** start with `todo_write` (merge:false).
+- Include explicit steps for "Spawn Review", "Address Review feedback", "Implement after approval".
+- Keep exactly one item `in_progress`.
+- After context compaction, reseed todos from `GROK_COORDINATION.md` + this file + current review logs.
+
+### 4.5 Master Agent Coordination Principles
+- Master always reads the Permanent Knowledge Base first.
+- Delegation uses clear written prompts + full personas + SOT references (never vague).
+- Sub-Agents are powerful tools — Master is responsible for orchestration, quality, and final decisions.
+- All permanent decisions live in the repo (especially Primary SOTs). Never rely on chat history alone.
+- For GitHub PR reviews, use the separate bundled `review` skill (posts PENDING reviews on GitHub). The internal Review Agent is for pre-edit gatekeeping.
+
+### 4.6 Practical Integration & Enforcement (How to Use Daily)
+
+**For Human + Master (Grok) Sessions**:
+- Start every non-trivial task with `todo_write` (full list, merge:false). Include explicit steps: "1. Read SOTs + Plan, 2. Spawn Review Agent (if edit/SOT impact), 3. Address Review feedback, 4. Implement via Code Agent or direct (approved cases), 5. Execute tests/git if needed, 6. Update todos + docs/SOTs if required."
+- For code or SOT-impacting work: Prepare the Review prompt (full persona + diff/proposal + SOT refs) → `spawn_subagent` → read full output → address points explicitly in next prompt or saved review file.
+- Save long Review outputs to `reviews/2026-06-XX-....md` and reference the path.
+- In Code Agent prompts, always paste or reference the Review feedback and require the Code Agent to map how each point was addressed.
+- For git commits from Master: Use exact messages that mention "Followed Review Gate" when applicable. Keep commits small.
+- After any significant work: Audit against Primary SOTs and run equivalent of sync-check / health workflows locally if possible.
+
+**Improvements to `todo_write` to Support the Gate**:
+- Always list "Review pending / received / addressed" as distinct items when relevant.
+- Use descriptive ids like "review-pnl-guardrails", "code-implement-after-review".
+- When reseeding after compaction, copy the current review status into the new todo list.
+- One `in_progress` at a time — do not move to "Code" until the Review item is marked complete with explicit "Master reviewed output and confirmed proceed".
+
+**Enforcement Recommendations (Lightweight but Effective)**:
+- Self-discipline by Master (Grok) in every session is the primary mechanism. The protocol is documented in Primary SOTs — violating it is a process failure.
+- Historical evidence: Code contains "Review Agent YYYY-MM-DD" comments for key guardrails (see core/pnl_calculator.py history). Continue this pattern.
+- For any PR that touches core logic or SOTs, the PR description should reference the internal Review date/file.
+- Small fixes that skip Review must be justified in commit message + todo.
+- Periodically (e.g. after major features), run a full audit: grep for recent "Review Agent" comments, check `reviews/` dir, verify SOTs are consistent.
+- Bundled skills (`review`, `implement`, etc.) remain useful for GitHub-facing work but do not replace the internal pre-edit Review Gate.
+
+**Lightweight Philosophy**:
+- The system adds one mandatory step (Review) for anything that matters, but keeps output structured and actionable.
+- No new tools or heavy processes — we use the existing `spawn_subagent` + `todo_write` + file-based reviews.
+- Goal: Fewer bugs, better SOT alignment, reliable handoffs between sessions/agents, without slowing down trivial work.
+
+**This Sub-Agent system with Mandatory Review Gate is now the foundation for all non-trivial work on the project.** It directly supports the project's core rules: small PRs, green CI, update SOTs first, coordinated changes.
 
 ---
 
@@ -154,12 +239,12 @@ Detailed personas are stored in:
 - Add configurable thresholds and better error handling
 - Full integration with core modules
 
-**B. Grok AI Agent System Activation**
-- Formalize Master Agent + Sub-Agent roles (Code, Review, Execute, Analysis, Research)
-- Implement Auto Code Review before any code changes (using Review Agent)
-- Develop Smart Commands: `/grok-analyze`, `/smart-report`, `/daily-insight`
-- Set up Scheduled Automations (EOD PnL, Daily Summary, Risk Alerts)
-- Create standard context headers and quick-sync prompts
+**B. Grok AI Agent System Activation** (largely complete as of 2026-06)
+- Formalize Master Agent + Sub-Agent roles + **Mandatory Review Gate** (detailed protocol + improved personas + reviews/ archive)
+- All future code/SOT work must follow the Review Gate (see Section 4.3)
+- Develop Smart Commands: `/grok-analyze`, `/smart-report`, `/daily-insight` (using the agent system)
+- Set up Scheduled Automations (EOD PnL, Daily Summary, Risk Alerts) — subject to Review Gate
+- Create standard context headers and quick-sync prompts for agent handoffs
 
 **C. Documentation & Architecture Consistency**
 - Resolve all remaining Config Drift (especially worker start command)
@@ -184,8 +269,8 @@ Detailed personas are stored in:
 
 ## 7. Top 5 Priorities (Ranked)
 
-1. **Formalize and Activate Grok Native Sub-Agents System**  
-   (Master Agent + Code/Review/Execute/Analysis/Research agents, with Plan Mode by default and Auto Code Review)
+1. **Adopt and Enforce Grok Native Sub-Agents System + Mandatory Review Gate**  
+   (All non-trivial work follows the full protocol in Section 4; Master + 5 Sub-Agents with Plan Mode + todo_write discipline)
 
 2. **Complete Worker Loop Core Features**  
    (Persistence for known pairs + EOD PnL scheduling)

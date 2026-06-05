@@ -114,18 +114,20 @@ From `SYNC.md` (core rule): **SPOT υπερισχύει** — these files define
 | **help**          | .grok/skills/help               | Grok TUI / CLI / MCP / skills documentation | When user asks about features or setup |
 
 **Sub-Agent & Parallel Execution**:
-- The project now operates under the formal **Grok Native Sub-Agents Architecture** (see `project-awareness.md` Section 4 and `agents/personas/`).
-- Master Agent (Grok) coordinates specialized Sub-Agents: Review (mandatory before code changes), Code, Execute, Analysis, and Research.
-- Use `spawn_subagent` with the appropriate persona prepended. Plan Mode + `todo_write` is the default for non-trivial work.
+- The project now operates under the formal **Grok Native Sub-Agents Architecture with Mandatory Review Gate** (see `project-awareness.md` Section 4 for the complete protocol).
+- Master Agent (Grok) coordinates specialized Sub-Agents: Review (mandatory gate before any code/SOT edit), Code/Implementer, Execute, Analysis, and Research.
+- **Always** prepend the full persona text from `agents/personas/<name>-agent.md` + references to Primary SOTs when calling `spawn_subagent`.
+- Plan Mode + `todo_write` (merge:false) is the default for non-trivial work. Include explicit "Spawn Review" and "Address Review feedback" steps in todos.
 - `background: true` + `get_command_or_subagent_output` for long-running tasks.
-- Personas live in `agents/personas/` (in addition to bundled skills personas).
+- Personas live in `agents/personas/` (in addition to bundled skills personas). The bundled `review` skill is for GitHub PR reviews only; the internal Review Agent is the pre-edit gate.
 - MCP Server: `grok_com_github` — all GitHub operations. Use `search_tool` first for schema.
 
 **Protocol for Using Them**:
-- Always open complex tasks (3+ steps) with `todo_write` (merge:false for new lists).
+- Always open complex tasks (3+ steps or any edit/SOT impact) with `todo_write` (merge:false for new lists).
 - One `in_progress` item at a time.
+- For any code change, architecture decision, or Primary SOT update: the Review Agent gate is **mandatory** (detailed checklist, output format, and recording rules are in `project-awareness.md` Section 4.3 and `agents/personas/review-agent.md`).
 - For PR babysitting or long monitoring: use scheduler + state files in `~/.grok/plugin-data/`.
-- Reseed todos after context compaction.
+- Reseed todos after context compaction. Reference the latest review logs when resuming.
 
 ---
 

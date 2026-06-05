@@ -25,3 +25,5 @@
 - Workflow stability
 
 **Next Priority**: Complete remaining Worker Loop features (persistence, EOD PnL, better filtering) + PnL refactoring. See GROK_COORDINATION.md + GROK_USAGE.md for coordination.
+
+All non-trivial implementation work (including the above) must follow the **Mandatory Review Gate** defined in `project-awareness.md` Section 4.3 and `agents/personas/review-agent.md`.

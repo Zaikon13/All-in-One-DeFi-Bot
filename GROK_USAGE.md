@@ -109,10 +109,11 @@ See also the implementation in `.github/scripts/call_grok.py` and the two update
 
 ## 5. Agent & Sub-Agent Usage of Grok
 
-- **System**: Master Agent (Grok) + Sub-Agents (Review mandatory gate before edits, Code, Execute, Analysis, Research).
-- **Handoff**: Prompts include references to GROK_COORDINATION.md + project-awareness.md + file paths. `spawn_subagent`.
-- **Personas** (`agents/personas/`): Reference Grok context/docs (e.g. research for "xAI/Grok usage").
-- **Skills**: review, pr-babysit, implement, etc. (bundled + .grok/skills).
+- **System**: Master Agent (Grok) + Sub-Agents (Review is the **mandatory gate** before any code/SOT edit; Code, Execute, Analysis, Research).
+- **Handoff**: Always prepend full persona text from `agents/personas/`. Include Primary SOT references + current todo context. Use `spawn_subagent`.
+- **Review Gate**: Detailed protocol (when mandatory, output format, recording to `reviews/`, "addressed before proceed") lives in `project-awareness.md` Section 4.3.
+- **Personas** (`agents/personas/`): The single source of truth for each agent's detailed rules and output templates. Master must read + include the full persona.
+- **Skills**: Bundled `review` is for GitHub PR reviews. Internal Sub-Agent Review is the pre-edit gate. Other skills (pr-babysit, implement, etc.) for specific automation.
 - **MCP**: grok_com_github for GitHub ops.
 
 ---
@@ -127,8 +128,8 @@ See also the implementation in `.github/scripts/call_grok.py` and the two update
 - **CI/Unification**:
   - (Completed) Grok CI workflows now reuse `core/grok_client.py` via `.github/scripts/call_grok.py` + dedicated prompts.
 - **Docs/Agent**:
-  - Full standardization of sub-agents + scheduled automations.
-  - Update all references (some docs still say "Covalent" for PnL async or list features as "planned").
+  - (Largely complete) Sub-Agent system + Mandatory Review Gate formalized in Primary SOTs + personas. All future work must follow the protocol.
+  - Continue using the system for Worker Loop, smart commands, etc. Update `reviews/` and code comments with Review Agent attributions.
 - **Other**:
   - Smart alert filtering using Grok.
   - Better error handling/retry in Grok paths.
