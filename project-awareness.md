@@ -47,7 +47,7 @@ All-in-One-DeFi-Bot is a professional DeFi Telegram bot focused on the **Cronos*
 - Dependabot: Active for pip, GitHub Actions, and Docker
 - Stale PR cleanup: 8 old PRs closed via pr-babysit skill
 - Documentation: Significantly improved (GROK_COORDINATION.md as central hub)
-- `/daily_pnl`: Unified (2026-06-06, Review Agent) to production async Etherscan V2 path via `core.pnl_calculator.get_daily_pnl_report()` (Grok-enhanced + Top Movers + reliable fallback, 25s timeout + quality gate). Both webhook and Telegram command now use the same richer report. Legacy sync Covalent calc functions in handlers path deprecated (format_pnl_report retained for internal fallback). Basic net-delta only.
+- `/daily_pnl`: Production implementation is in `app/main.py` (FastAPI webhook handler at /telegram/webhook, process_daily_pnl() calls core.pnl_calculator.get_daily_pnl_report() for Etherscan V2 async path with Grok-enhanced report + Top Movers + reliable fallback, 25s timeout + quality gate). telegram/handlers.py is legacy polling code and NOT used in production (per Railway deployment analysis June 2026). Previous unification view (bd487f5) was based on incomplete architecture. Legacy sync Covalent calc functions deprecated (format_pnl_report retained for internal fallback in production path). Basic net-delta only.
 
 ### Known Issues / Gaps
 - **Worker Loop**:
@@ -130,7 +130,7 @@ This protocol uses a **risk-based, smart & balanced** approach. The goal is stro
 - Any modification to files under `core/` (grok_client.py, pnl_calculator.py, wallet.py, dexscreener.py and related helpers).
 - `worker.py` (WorkerLoop class, polling, wallet monitoring, persistence/known_pairs logic, heartbeat).
 - `app/main.py` (webhook handling, command dispatch, process_* functions, Grok call sites and live context).
-- `telegram/handlers.py` (especially anything touching the legacy Covalent sync path or command routing).
+- `telegram/handlers.py` (legacy polling code, not used in production; see Railway analysis June 2026 - especially anything touching the legacy Covalent sync path or command routing).
 - All Primary SOT files: GROK_COORDINATION.md, project-awareness.md, docs/project-status.md, GROK_USAGE.md, AGENTS.md.
 - `agents/personas/` (particularly review-agent.md and code-agent.md).
 - `.github/workflows/` (any workflow, especially those involving Grok, health, deploy, CI).
@@ -160,7 +160,7 @@ Master has discretion to classify borderline items and must record the classific
 - Changes to any Primary SOT file or `agents/personas/`.
 - New features, refactors, core logic changes (worker, pnl_calculator, grok_client, wallet helpers).
 - Architecture decisions or new external integrations.
-- Any change affecting legacy protection boundaries (Covalent path must stay only in `telegram/handlers.py`; async Etherscan/Cronoscan logic only in `core/`).
+- Any change affecting legacy protection boundaries (Covalent path must stay only in legacy `telegram/handlers.py` which is not the production runtime; async Etherscan/Cronoscan logic only in `core/`). Production Telegram bot uses `app/main.py` webhook. (Reference: Railway deployment analysis June 2026).
 - CI unification, prompt contract changes, new Grok call sites in production paths.
 
 #### 4.3.2 When Review May Be Skipped (Low-Risk Only — With Justification for Traceability)
@@ -196,7 +196,7 @@ Skipped Review (high-risk exceptional override): [detailed rationale explaining 
 
 #### 4.3.4 What the Review Agent Must Check (Core Checklist — Enforced in Persona)
 - Alignment with all Primary SOTs and coordination rules (small PRs, coordinated updates across Primaries, update SOTs first).
-- Legacy path protection and separation of concerns (Covalent vs Etherscan, handlers.py vs core/).
+- Legacy path protection and separation of concerns (Covalent vs Etherscan, legacy handlers.py vs core/). Note: telegram/handlers.py is legacy polling and not active in production (app/main.py is the primary FastAPI webhook service per June 2026 Railway analysis). Previous view in bd487f5 was incomplete.
 - UTC discipline, error handling, timeouts (25s for command Grok calls), fallbacks.
 - Telegram Markdown v1 safety for any user-visible output.
 - `core/` reuse vs duplication.

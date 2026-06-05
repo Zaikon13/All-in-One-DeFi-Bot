@@ -54,7 +54,9 @@
   - `load_prompt("grok_daily_pnl.txt", date=..., wallet_preview=..., total_trades=..., ...)` (from prompts/grok_daily_pnl.txt with strict "GROK OUTPUT CONTRACT" for 3-6 sentence qualitative paragraph only).
   - `call_grok(..., timeout=25.0)`.
   - Quality: `if is_valid_grok_response(insight):` (via SOT helper) then append as "🤖 **Grok Daily Insight:**" else fallback to base report.
-  - Command path unified (Review Agent 2026-06-06) to production async `get_daily_pnl_report()`.
+  - Production /daily_pnl is handled inside `app/main.py` (FastAPI webhook service, process_daily_pnl() -> get_daily_pnl_report()).
+    telegram/handlers.py is legacy polling code and NOT used in production (per Railway deployment analysis June 2026).
+    Previous unification commit (bd487f5) was based on incomplete architecture view.
     Legacy sync calc functions (`calculate_daily_pnl`, `get_today_transactions`) deprecated but `format_pnl_report()` retained as internal fallback.
 - **Imports**: Always `from core.grok_client import call_grok, load_prompt, is_valid_grok_response`.
 
