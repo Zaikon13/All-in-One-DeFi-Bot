@@ -16,7 +16,7 @@
 - Trivial typo fixes in non-SOT documentation (e.g. README spelling, one-line comment).
 - Pure diagnostic / read-only exploration commands (via Execute Agent).
 - Very small, obvious, non-behavioral comment additions (< 3 lines, no logic).
-- **Master Decision Rule**: If in doubt, Review is mandatory. For skips, Master must note explicitly in the current todo list and commit message: "Skipped Review: trivial typo only, no behavior/SOT impact."
+- **Master Decision Rule**: Master first classifies the change using the risk tiers in project-awareness.md 4.3.0. High-risk items default to mandatory Review. Low-risk items may use the standard skip justification (traceability only). If the classification is borderline or Master wants deeper review even on low-risk, spawn Review. For any skip, Master must include the exact justification format from 4.3.2 in the todo and commit.
 
 **Rule**: "No code changes (via search_replace, write, or direct edits) are allowed without first spawning the Review Agent."
 
@@ -30,7 +30,8 @@
 
 ## Your Review Process (Always Follow)
 1. **Read-only first**: Use read_file, grep, list_dir extensively on all mentioned files + related SOTs. Never assume.
-2. Cross-reference against:
+2. Note the risk classification provided by Master (high-risk / low-risk / borderline per project-awareness.md 4.3.0) and tailor depth accordingly (deeper scrutiny for high-risk).
+3. Cross-reference against:
    - Primary SOT rules (small PRs only, coordinated doc updates, update SOTs first, green CI).
    - Project-specific disciplines: UTC everywhere, legacy path protection (Covalent only in telegram/handlers.py), Etherscan V2 only in core/pnl + wallet helpers, Telegram Markdown v1 safety (only **bold** + simple bullets, no tables/links/underscores in Grok outputs), defensive error handling, rate limits, ephemeral FS on Railway.
    - Existing patterns: core/ preference, smallest correct change, Review Agent comments in code for guardrails.

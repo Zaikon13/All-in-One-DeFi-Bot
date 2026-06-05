@@ -122,21 +122,61 @@ For parallel or long-running work: use `background: true` + `get_command_or_suba
 
 ### 4.3 Mandatory Review Gate Protocol (The Core Enforcement Mechanism)
 
-#### 4.3.1 When Review Is Mandatory (Non-Skippable)
-- Any use of `search_replace` or `write` on code (`.py`, `.yml` workflows, Docker/Procfile, etc.).
+This protocol uses a **risk-based, smart & balanced** approach. The goal is strong protection for the parts of the system that are hardest to recover from (core logic, legacy boundaries, SOT consistency, state management, external API safety) while keeping friction low for safe, low-impact work. Master retains flexibility for borderline cases but must document decisions for traceability.
+
+#### 4.3.0 Risk-Based Classification
+
+**High-Risk Changes (Review is Mandatory — routine skips not accepted):**
+- Any modification to files under `core/` (grok_client.py, pnl_calculator.py, wallet.py, dexscreener.py and related helpers).
+- `worker.py` (WorkerLoop class, polling, wallet monitoring, persistence/known_pairs logic, heartbeat).
+- `app/main.py` (webhook handling, command dispatch, process_* functions, Grok call sites and live context).
+- `telegram/handlers.py` (especially anything touching the legacy Covalent sync path or command routing).
+- All Primary SOT files: GROK_COORDINATION.md, project-awareness.md, docs/project-status.md, GROK_USAGE.md, AGENTS.md.
+- `agents/personas/` (particularly review-agent.md and code-agent.md).
+- `.github/workflows/` (any workflow, especially those involving Grok, health, deploy, CI).
+- New external API integrations or changes that affect prompt contracts, Grok output safety (Markdown rules), or call patterns.
+- Architecture decisions, major refactors, or new features that touch state, reliability, or coordination rules.
+
+For high-risk changes, the Code Agent persona will refuse to implement without explicit Review approval (or an exceptional documented Master override with strong rationale). Skips are exceptional only.
+
+**Low-Risk Changes (Review strongly recommended but skippable with short justification):**
+- Pure spelling, grammar, formatting, or minor wording fixes in non-SOT documentation (e.g. WORKER.md examples, README clarifications that do not change rules or behavior descriptions).
+- Very small non-behavioral additions: comments, docstrings, or type hints (< 5 lines, no logic change) outside high-risk files.
+- Cosmetic / non-functional changes with zero impact on behavior, SOTs, legacy paths, or external calls (e.g. consistent variable naming in an isolated supporting script).
+
+For low-risk: Master may skip Review. Justification is required for traceability (see 4.3.2).
+
+**Medium / Borderline (Review strongly encouraged):**
+- Small bug fixes or improvements outside the high-risk list.
+- Updates to supporting docs that describe existing behavior.
+- Minor safe refactors in non-core areas.
+
+Master has discretion to classify borderline items and must record the classification + whether Review was performed or skipped (with justification) in the todo list.
+
+**Master Flexibility**: In truly ambiguous cases, Master decides the tier and documents the reasoning. The system is designed to protect what matters most without blocking useful small progress.
+
+#### 4.3.1 When Review Is Mandatory (High-Risk — Non-Skippable by Default)
+- Any use of `search_replace` or `write` on high-risk files or areas listed in 4.3.0.
 - Changes to any Primary SOT file or `agents/personas/`.
 - New features, refactors, core logic changes (worker, pnl_calculator, grok_client, wallet helpers).
 - Architecture decisions or new external integrations.
 - Any change affecting legacy protection boundaries (Covalent path must stay only in `telegram/handlers.py`; async Etherscan/Cronoscan logic only in `core/`).
-- CI unification, prompt contract changes, new Grok call sites.
+- CI unification, prompt contract changes, new Grok call sites in production paths.
 
-#### 4.3.2 When Review May Be Skipped (Rare — Master Must Justify)
-- Trivial non-SOT documentation typos (one or two words).
-- Pure diagnostic read-only commands via Execute Agent.
-- Master must explicitly note in the active todo and any commit/PR:  
-  `"Skipped Review: [reason — e.g. single-word typo in non-SOT README, zero behavior or coordination impact]."`
+#### 4.3.2 When Review May Be Skipped (Low-Risk Only — With Justification for Traceability)
+Low-risk changes (per the classification in 4.3.0) may skip the full Review Agent process.
 
-**Default**: When in doubt, spawn Review. "Small PRs" does **not** mean "skip Review for small code changes."
+**Standard Justification Format (required in both the current todo list and the commit message):**
+```
+Skipped Review (low-risk): [1-2 sentence reason, e.g. "Pure spelling/grammar fix in WORKER.md section describing existing behavior. No rules, logic, SOT claims, or external behavior changed."] Classification: low-risk per project-awareness.md 4.3.0. Impact: none on SOTs, legacy paths, core logic, state, or safety.
+```
+
+For high-risk or medium changes, skips are not routine. An exceptional override requires a much stronger justification:
+```
+Skipped Review (high-risk exceptional override): [detailed rationale explaining why waiting for Review would cause disproportionate harm + what mitigations are in place + explicit Master acceptance of risk]. Classification noted in todo. Will follow up with retroactive review if possible.
+```
+
+**Default Rule**: When in doubt, treat as high-risk and spawn Review. "Small PRs" does **not** mean "skip Review for small code changes in core or SOT areas." The Code Agent will refuse to proceed on high-risk items without proper Review confirmation or exceptional justification.
 
 #### 4.3.3 How to Trigger Review (Exact Steps)
 1. Master prepares the Review prompt using the full `review-agent.md` persona + current SOT context + the **proposed change** (unified diff is ideal; otherwise precise description of intended edits).
@@ -165,12 +205,20 @@ For parallel or long-running work: use `background: true` + `get_command_or_suba
 - Quality: smallest correct change, defensive code, Review attribution comments.
 - Impact on documentation and future agent work.
 
-#### 4.3.5 Recording & Enforcement
-- For non-trivial reviews, Master saves the Review Agent's full output to `reviews/<YYYY-MM-DD>-<task-slug>.md`.
-- Master updates the todo list to record receipt and how points were addressed.
-- Code changes include comments: `# Review Agent 2026-06-XX: [guardrail description]`.
-- Master never proceeds to implementation edits until the protocol above is complete.
-- This is self-enforced by the Master Agent (Grok) in every session. Historical evidence of use appears as "Review Agent YYYY-MM-DD guardrails" comments in core code (e.g. pnl_calculator.py).
+#### 4.3.5 Recording & Enforcement (Lightweight Traceability)
+- For any Review performed (high-risk or medium): Master saves the full structured output to `reviews/<YYYY-MM-DD>-<task-slug>.md` when the output is non-trivial. Reference the file in the todo.
+- Master updates the active todo list with the review status using this standard format:
+  - `review-gate: pending`
+  - `review-gate: received 2026-06-XX (high-risk) - summary of recommendation`
+  - `review-gate: addressed (points X, Y addressed in [commit or file])`
+  - `review-gate: skipped (low-risk): [exact justification sentence]`
+- Code changes for high-risk items **must** include comments: `# Review Agent 2026-06-XX: [guardrail description]`.
+- Commit messages for high-risk changes should note "Followed Review Gate [date]" (or the exceptional skip justification for rare cases).
+- For low-risk skips: the standard justification (see 4.3.2) **must** appear in the commit message.
+- Master never proceeds to Code Agent implementation edits on high-risk items until the protocol is satisfied (Code Agent persona will refuse otherwise).
+- This is primarily self-enforced by the Master Agent with help from the strengthened Code Agent persona. Historical evidence of good practice appears as "Review Agent YYYY-MM-DD guardrails" comments in core code (e.g. pnl_calculator.py). Periodic light audits (grep for recent Review attributions + check reviews/ dir) are encouraged after major work.
+
+The emphasis is on **traceability and protection of what matters**, not on bureaucracy or punishment for honest low-risk skips.
 
 ### 4.4 Plan Mode + todo_write Discipline (Supports the Gate)
 - Every task with >3 steps or any code/SOT impact **must** start with `todo_write` (merge:false).
@@ -188,31 +236,43 @@ For parallel or long-running work: use `background: true` + `get_command_or_suba
 ### 4.6 Practical Integration & Enforcement (How to Use Daily)
 
 **For Human + Master (Grok) Sessions**:
-- Start every non-trivial task with `todo_write` (full list, merge:false). Include explicit steps: "1. Read SOTs + Plan, 2. Spawn Review Agent (if edit/SOT impact), 3. Address Review feedback, 4. Implement via Code Agent or direct (approved cases), 5. Execute tests/git if needed, 6. Update todos + docs/SOTs if required."
+- Start every non-trivial task with `todo_write` (full list, merge:false). Use the standard `review-gate` status item (see 4.3.5) and include explicit steps: "1. Classify risk tier per 4.3.0, 2. Spawn Review if high-risk or desired, 3. Address or justify skip, 4. Implement via Code Agent (which will refuse if gate not satisfied), 5. Execute tests/git if needed (with destructive approval), 6. Update todos + docs/SOTs + traceability comments/commits."
 - For code or SOT-impacting work: Prepare the Review prompt (full persona + diff/proposal + SOT refs) → `spawn_subagent` → read full output → address points explicitly in next prompt or saved review file.
+- When prompting the Code Agent, include the exact Review confirmation or low-risk skip justification so it can comply with its preconditions.
 - Save long Review outputs to `reviews/2026-06-XX-....md` and reference the path.
-- In Code Agent prompts, always paste or reference the Review feedback and require the Code Agent to map how each point was addressed.
-- For git commits from Master: Use exact messages that mention "Followed Review Gate" when applicable. Keep commits small.
+- In Code Agent prompts, always paste or reference the Review feedback (high-risk) or skip justification and require the Code Agent to include a gate compliance statement in its output.
+- For git commits: High-risk must note Review Gate; low-risk skips must include the standard justification sentence. Keep commits small.
 - After any significant work: Audit against Primary SOTs and run equivalent of sync-check / health workflows locally if possible.
 
-**Improvements to `todo_write` to Support the Gate**:
-- Always list "Review pending / received / addressed" as distinct items when relevant.
-- Use descriptive ids like "review-pnl-guardrails", "code-implement-after-review".
-- When reseeding after compaction, copy the current review status into the new todo list.
-- One `in_progress` at a time — do not move to "Code" until the Review item is marked complete with explicit "Master reviewed output and confirmed proceed".
+**Standard `todo_write` Discipline for the Review Gate** (Required for any edit/SOT work):
+- Every relevant todo list **must** include a dedicated item using one of these exact statuses (update it as work progresses):
+  - `review-gate: pending (high-risk | low-risk | borderline)`
+  - `review-gate: received 2026-06-XX (high-risk) - Review Agent recommendation: ... Key risks noted: ...`
+  - `review-gate: addressed - all critical/high points handled in [description or reviews/ file]`
+  - `review-gate: skipped (low-risk): [paste the exact 1-2 sentence justification from 4.3.2]`
+- Use clear ids, e.g. `- review-gate: pending (high-risk - core/pnl changes)`
+- One `in_progress` at a time. Do not advance the implementation step to "in progress" until the review-gate item shows "addressed" or "skipped with justification".
+- When reseeding todos after compaction or new session, carry forward the current review-gate status.
+- For pure low-risk non-code work, the skip justification can be short but must be present for traceability.
 
-**Enforcement Recommendations (Lightweight but Effective)**:
-- Self-discipline by Master (Grok) in every session is the primary mechanism. The protocol is documented in Primary SOTs — violating it is a process failure.
-- Historical evidence: Code contains "Review Agent YYYY-MM-DD" comments for key guardrails (see core/pnl_calculator.py history). Continue this pattern.
-- For any PR that touches core logic or SOTs, the PR description should reference the internal Review date/file.
-- Small fixes that skip Review must be justified in commit message + todo.
-- Periodically (e.g. after major features), run a full audit: grep for recent "Review Agent" comments, check `reviews/` dir, verify SOTs are consistent.
+**Enforcement Recommendations (Smart, Lightweight, and Practical)**:
+- Primary mechanisms: 
+  1. The Code Agent persona now actively refuses to implement high-risk changes without explicit Review confirmation or proper low-risk skip justification in the prompt it receives.
+  2. Standardized `review-gate` status in every relevant `todo_write` list (see above).
+  3. Traceability in code comments (high-risk) and commit messages (all cases where Review was relevant or skipped).
+- Self-discipline by Master remains important, but the Code Agent now provides an automated "refusal" backstop inside the agent workflow.
+- Historical evidence: Code contains "Review Agent YYYY-MM-DD" comments for key guardrails (see core/pnl_calculator.py history). Continue and expand this for high-risk changes.
+- For PRs touching high-risk areas, the PR description should reference the internal Review (date + reviews/ file if used).
+- Low-risk skips must include the standard justification in both todo and commit message (traceability, not punishment).
+- Light periodic audits after significant work: `grep -r "Review Agent" --include="*.py" core/ app/ worker.py`, check recent entries in `reviews/`, and spot-check that todo lists used the `review-gate` status.
 - Bundled skills (`review`, `implement`, etc.) remain useful for GitHub-facing work but do not replace the internal pre-edit Review Gate.
 
-**Lightweight Philosophy**:
-- The system adds one mandatory step (Review) for anything that matters, but keeps output structured and actionable.
-- No new tools or heavy processes — we use the existing `spawn_subagent` + `todo_write` + file-based reviews.
-- Goal: Fewer bugs, better SOT alignment, reliable handoffs between sessions/agents, without slowing down trivial work.
+**Smart & Balanced Philosophy**:
+- Risk-based tiers focus strong enforcement (Review mandatory + Code Agent refusal) on high-risk areas that are expensive or dangerous to get wrong (core logic, legacy paths, SOTs, state, external safety).
+- Low-risk work has a simple, documented escape hatch with mandatory short justification for traceability.
+- Master keeps final judgment on borderline cases and must document the call.
+- No new processes or tools: we leverage `spawn_subagent`, `todo_write`, the Code Agent persona as a gatekeeper, and simple text conventions in todos/commits/comments.
+- Goal: Real protection where it counts most, minimal friction elsewhere, and clear audit trail — all while staying aligned with the project's culture of small PRs, practical engineering, and defensive coding.
 
 **This Sub-Agent system with Mandatory Review Gate is now the foundation for all non-trivial work on the project.** It directly supports the project's core rules: small PRs, green CI, update SOTs first, coordinated changes.
 
