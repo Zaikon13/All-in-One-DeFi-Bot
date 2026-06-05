@@ -30,7 +30,7 @@
   - All external calls (RPCs, APIs, Telegram) must have proper error handling and timeouts.
   - Respect Railway ephemeral filesystem (no reliance on local files persisting across deploys without Volume TODO).
   - UTC discipline: `datetime.now(timezone.utc)`, never naive `now()`.
-  - Legacy protection: Never touch the Covalent sync path in `telegram/handlers.py` unless explicitly tasked and reviewed. Async Etherscan/Cronoscan lives only in core/.
+  - Legacy protection: The Covalent sync path in `telegram/handlers.py` was unified (2026-06-06, Review Agent approval) to the production async Etherscan path. Async Etherscan/Cronoscan logic lives only in core/. Legacy calc functions deprecated post-unification.
   - Telegram Markdown v1 safety for any user-facing Grok or bot messages: only **bold** and simple - / • bullets. No tables, links, code fences, or underscores that break parsing.
 - Follow existing style exactly (async/await patterns in worker, FastAPI in app/main.py, structured reports in Analysis outputs).
 - For Grok-related changes: always use the SOT in `core/grok_client.py` (load_prompt + call_grok + is_valid_grok_response). Never duplicate the client logic.

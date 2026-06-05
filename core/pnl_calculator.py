@@ -17,7 +17,11 @@ if not COVALENT_API_KEY:
 
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 
-# Etherscan V2 (for async production /daily_pnl path only). Legacy sync path remains on Covalent.
+# Etherscan V2 (for async production /daily_pnl path only).
+# Review Agent 2026-06-06: Telegram command path (telegram/handlers.py) unified
+# to this production async path. Legacy Covalent sync calc functions deprecated
+# (no longer called from production command path; format_pnl_report retained
+# as internal fallback only).
 ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY")
 if not ETHERSCAN_API_KEY:
     raise ValueError("ETHERSCAN_API_KEY is missing from environment variables")
@@ -26,7 +30,11 @@ COVALENT_BASE = "https://api.covalenthq.com/v1"
 
 
 def get_today_transactions() -> List[Dict]:
-    """Fetch today's transactions (simple & reliable)"""
+    """Fetch today's transactions (simple & reliable)
+    DEPRECATED (Review Agent 2026-06-06): Legacy sync Covalent path.
+    Telegram /daily_pnl command unified to production async get_daily_pnl_report().
+    This function is no longer called from production code (kept for reference only).
+    """
     if not WALLET_ADDRESS:
         print("[ERROR] Missing WALLET_ADDRESS")
         return []
@@ -50,7 +58,12 @@ def get_today_transactions() -> List[Dict]:
 
 
 def calculate_daily_pnl() -> Dict:
-    """Calculate simple but correct daily PnL"""
+    """Calculate simple but correct daily PnL
+    DEPRECATED (Review Agent 2026-06-06): Legacy sync Covalent path.
+    Telegram /daily_pnl command unified to production async get_daily_pnl_report().
+    This function is no longer called from production code (kept for reference only).
+    format_pnl_report() is still actively used as fallback inside the production path.
+    """
     transactions = get_today_transactions()
     if not transactions:
         return {"error": "No transactions found today or API error."}
@@ -124,7 +137,9 @@ def format_daily_pnl_report(data: Dict, grok_insight: str | None = None) -> str:
     """Clean, modern daily PnL report for the production async path only.
 
     Production async formatter (used only by get_daily_pnl_report).
-    Legacy sync path (telegram/handlers.py) continues to use the original format_pnl_report() unchanged.
+    # Review Agent 2026-06-06: Command path unified - legacy sync path no longer
+    # used for /daily_pnl in production. format_pnl_report() retained here as
+    # reliable fallback base (see get_daily_pnl_report).
 
     Post-Review Agent clarifications incorporated:
     - Grok Output Contract: Grok returns ONLY 3-6 sentence qualitative paragraph (no data/numbers/headers).
@@ -177,7 +192,10 @@ def format_daily_pnl_report(data: Dict, grok_insight: str | None = None) -> str:
 def _aggregate_pnl(transactions: List[Dict]) -> Dict:
     """Pure function: aggregates Covalent tx list into daily net-delta PnL structure.
     Used by production async path only (via calculate_daily_pnl_async / get_daily_pnl_report).
-    Legacy sync calculate_daily_pnl() + get_today_transactions() remain UNCHANGED (exact duplicate logic preserved for telegram/handlers.py compatibility).
+    # Review Agent 2026-06-06: Legacy sync calculate_daily_pnl() + get_today_transactions()
+    # deprecated after unification of telegram/handlers.py to production async path.
+    # Kept for reference only (no longer called in production). Duplicate logic
+    # was preserved historically for compatibility.
     Improvements (flow from async fetcher + here):
       - transfers[] processed first for every tx
       - conservative log_events ERC20 "Transfer" parsing with strict dedup
@@ -343,11 +361,13 @@ def _aggregate_pnl(transactions: List[Dict]) -> Dict:
 # -------------------------------------------------------------------
 # Async-safe Etherscan V2 layer for production /daily_pnl (chainid=25).
 # Fetches txlist (native CRO) + tokentx (ERC-20), normalizes to Covalent-like shape.
-# Original sync get_today_transactions / calculate_daily_pnl kept UNCHANGED (byte-for-byte)
-# for compatibility with telegram/handlers.py (out of scope / legacy protection).
+# Review Agent 2026-06-06: Telegram /daily_pnl command unified to this path
+# (see telegram/handlers.py). Original sync get_today_transactions / calculate_daily_pnl
+# deprecated (no longer used by production command; kept for reference).
+# Legacy protection comments updated post-unification.
 # All normalization here only; _aggregate_pnl and get_daily_pnl_report untouched.
 # Pagination/early-exit/partial/error handling replicated exactly from prior Covalent async.
-# (Review Agent 2026-06-03 guardrails)
+# (Review Agent 2026-06-03 guardrails + 2026-06-06 unification)
 # -------------------------------------------------------------------
 
 def _normalize_etherscan_item(item: Dict, action: str) -> Dict | None:
@@ -430,8 +450,10 @@ async def get_today_transactions_async() -> List[Dict]:
     Per-page error or non-OK: log + break returning partial results collected (never fails whole report).
     Normalization to Covalent tx shape happens ONLY inside this fetcher + tiny _normalize helper.
     Exact defensive pagination/early-exit/partial-results/logging pattern replicated from prior async Covalent impl.
-    Sync legacy path (Covalent) untouched. Output: List[Dict] synthetics for _aggregate_pnl.
-    (Review Agent 2026-06-03 guardrails + UTC date per 2026-05-28)
+    # Review Agent 2026-06-06: Command path now uses this (unified). Sync legacy path
+    # (Covalent) no longer called from telegram/handlers.py.
+    Output: List[Dict] synthetics for _aggregate_pnl.
+    (Review Agent 2026-06-03 guardrails + UTC date per 2026-05-28 + 2026-06-06 unification)
     """
     if not WALLET_ADDRESS:
         logging.error("[ERROR] Missing WALLET_ADDRESS")
@@ -507,7 +529,7 @@ async def get_daily_pnl_report() -> str:
     """Generate daily PnL report with optional Grok AI enhancement + reliable fallback.
 
     Flow:
-    - Fetch via async Covalent layer (preferred data source per GROK_COORDINATION).
+    - Fetch via async Etherscan V2 (production path; command path unified 2026-06-06).
     - If no meaningful txs: clean message.
     - Attempt Grok via core.grok_client.call_grok with HARD TIMEOUT (addresses prior High review feedback on timeout control).
     - Use compact prompt from prompts/grok_daily_pnl.txt + summarized data.
@@ -519,7 +541,7 @@ async def get_daily_pnl_report() -> str:
     LIMITATIONS (honest, per task scope and GROK_COORDINATION.md PnL priority):
     - This is NET DELTA ONLY (buys - sells per token for the day). NOT true realized USD PnL.
     - No cost basis, no entry/exit price tracking, no USD valuation of the deltas.
-    - Covalent used here (consistency with Explorer used in balances/wallet paths is future refactor).
+    - Data source: Etherscan V2 / CronoScan (unified across webhook and Telegram command post-2026-06-06).
     - Full EOD scheduling / persistence / advanced cost basis out of scope for this small increment.
     """
     # Initial fetch (async safe)
@@ -566,9 +588,9 @@ async def get_daily_pnl_report() -> str:
 
         # Quality gate: must be non-error, substantial content (now via SOT helper in core/grok_client.py)
         if is_valid_grok_response(insight):
-            # Use the improved formatter for the production webhook path only.
-            # Old format_pnl_report() remains untouched for telegram/handlers.py compatibility.
-            # (Review Agent clarification #3 - legacy sync path protection; Option A)
+            # Use the improved formatter for the production path (now includes unified command).
+            # format_pnl_report() retained as fallback (see base_report above).
+            # Review Agent 2026-06-06: telegram/handlers.py now calls this function directly.
             return format_daily_pnl_report(data, insight.strip())
         else:
             # Low quality or empty -> silent fallback (user sees base report)

@@ -47,7 +47,7 @@ All-in-One-DeFi-Bot is a professional DeFi Telegram bot focused on the **Cronos*
 - Dependabot: Active for pip, GitHub Actions, and Docker
 - Stale PR cleanup: 8 old PRs closed via pr-babysit skill
 - Documentation: Significantly improved (GROK_COORDINATION.md as central hub)
-- `/daily_pnl` (webhook path): Now functional with Grok-enhanced report + reliable fallback via new async `core.pnl_calculator.get_daily_pnl_report()` (Etherscan V2 / Cronoscan + core/grok_client with 25s timeout + quality gate). Basic net-delta only. Legacy sync path (telegram/handlers.py) remains Covalent-protected.
+- `/daily_pnl`: Unified (2026-06-06, Review Agent) to production async Etherscan V2 path via `core.pnl_calculator.get_daily_pnl_report()` (Grok-enhanced + Top Movers + reliable fallback, 25s timeout + quality gate). Both webhook and Telegram command now use the same richer report. Legacy sync Covalent calc functions in handlers path deprecated (format_pnl_report retained for internal fallback). Basic net-delta only.
 
 ### Known Issues / Gaps
 - **Worker Loop**:

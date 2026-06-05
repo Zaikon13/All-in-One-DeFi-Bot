@@ -54,7 +54,8 @@
   - `load_prompt("grok_daily_pnl.txt", date=..., wallet_preview=..., total_trades=..., ...)` (from prompts/grok_daily_pnl.txt with strict "GROK OUTPUT CONTRACT" for 3-6 sentence qualitative paragraph only).
   - `call_grok(..., timeout=25.0)`.
   - Quality: `if is_valid_grok_response(insight):` (via SOT helper) then append as "🤖 **Grok Daily Insight:**" else fallback to base report.
-  - Legacy sync path (`telegram/handlers.py` -> old `calculate_daily_pnl`) is **untouched** (protected per Review gates).
+  - Command path unified (Review Agent 2026-06-06) to production async `get_daily_pnl_report()`.
+    Legacy sync calc functions (`calculate_daily_pnl`, `get_today_transactions`) deprecated but `format_pnl_report()` retained as internal fallback.
 - **Imports**: Always `from core.grok_client import call_grok, load_prompt, is_valid_grok_response`.
 
 ### 2.3 Prompts (loaded exclusively via client.load_prompt)
