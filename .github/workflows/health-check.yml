@@ -16,14 +16,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
       - name: Railway Health
         id: health
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://bot-production-3d9c.up.railway.app/health || echo "000")
           echo "status=$STATUS" >> $GITHUB_OUTPUT
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install python-dotenv
 
       - name: Grok Analysis (Awareness)
         id: grok
@@ -32,11 +40,7 @@ jobs:
         env:
           GROK_API_KEY: ${{ secrets.GROK_API_KEY }}
         run: |
-          RESPONSE=$(curl -s -X POST https://api.x.ai/v1/chat/completions \
-            -H "Authorization: Bearer $GROK_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"model\":\"grok-4.3\",\"messages\":[{\"role\":\"system\",\"content\":\"DeFi bot DevOps. Analyze Railway failure and suggest fixes.\"},{\"role\":\"user\",\"content\":\"HTTP status: ${{ steps.health.outputs.status }} - provide root cause and action items.\"}],\"max_tokens\":400}" || echo '{"choices":[{"message":{"content":"Grok call failed"}}]}')
-          ANALYSIS=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "Grok unavailable"' | head -c 1200)
+          ANALYSIS=$(PYTHONPATH=. python .github/scripts/call_grok.py grok_health_check.txt --var "status=${{ steps.health.outputs.status }}" --timeout 30 2>&1 | head -c 1200 || echo "Grok call failed")
           echo "analysis<<EOF" >> $GITHUB_OUTPUT
           echo "$ANALYSIS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT

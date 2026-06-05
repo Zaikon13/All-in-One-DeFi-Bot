@@ -63,26 +63,38 @@
 
 ---
 
-## 3. CI / GitHub Actions Integrations (currently direct, not unified to client)
+## 3. CI / GitHub Actions Integrations (unified to core/grok_client.py)
+
+Both Grok-calling workflows now reuse the centralized Python client (no more inline curl + duplicated prompts).
+
+- **.github/scripts/call_grok.py**: New CLI helper (added 2026-06).
+  - Reuses `core.grok_client.load_prompt()` + `call_grok()` + error handling/quality strings.
+  - Supports `prompts/<name>.txt` + `--var key=value` for dynamic context (repeatable).
+  - `PYTHONPATH=. python .github/scripts/call_grok.py grok_xxx.txt --var "foo=bar" --timeout 60`
+  - Outputs result to stdout (workflows capture into $GITHUB_OUTPUT); falls back gracefully on error.
+  - Setup in workflows: `actions/setup-python@v5` (3.12) + `pip install -r requirements.txt python-dotenv`.
 
 - **.github/workflows/grok-code-review.yml**:
   - Trigger: PR opened/synchronize/reopened.
-  - Gets diff, truncates, builds JSON with hardcoded system prompt ("senior software engineer reviewing a DeFi Telegram bot...").
-  - Direct `curl -X POST https://api.x.ai/v1/chat/completions` with `GROK_API_KEY` secret.
+  - Gets diff (truncated), calls via script + `prompts/grok_code_review.txt` (loaded with {diff}).
   - Posts review as PR comment via github-script.
   - `continue-on-error: true`.
 
 - **.github/workflows/health-check.yml**:
   - Trigger: schedule + workflow_dispatch.
   - Checks Railway /health.
-  - On failure: Direct curl with hardcoded prompt ("DeFi bot DevOps. Analyze Railway failure...").
+  - On failure: calls via script + `prompts/grok_health_check.txt` (loaded with {status}).
   - Creates GitHub Issue with analysis (via github-script).
   - Optional Telegram notify.
-  - `continue-on-error: true`.
+  - `continue-on-error: true` (on Grok step + Issue creation).
 
-**Note**: These duplicate prompt construction and call logic (inline JSON). Future: Unify via Python script in .github/scripts/ that reuses `core/grok_client.py` (would require docker/python step in workflows).
+**Prompts for CI** (in `prompts/` alongside runtime ones, loaded via SOT):
+- `grok_code_review.txt`
+- `grok_health_check.txt`
 
-Other workflows (ci.yml, sync-check.yml, etc.) have no direct Grok (some reference in names/history).
+Other workflows (ci.yml, sync-check.yml, etc.) have no direct Grok.
+
+See also the implementation in `.github/scripts/call_grok.py` and the two updated workflows.
 
 ---
 
@@ -113,7 +125,7 @@ Other workflows (ci.yml, sync-check.yml, etc.) have no direct Grok (some referen
   - Scheduled automations (EOD PnL, Daily Summary, Risk Alerts).
   - Worker integration for Grok (currently indirect via PnL reports).
 - **CI/Unification**:
-  - Reuse Python client + file-based prompts in workflows (create .github/scripts/call_grok.py).
+  - (Completed) Grok CI workflows now reuse `core/grok_client.py` via `.github/scripts/call_grok.py` + dedicated prompts.
 - **Docs/Agent**:
   - Full standardization of sub-agents + scheduled automations.
   - Update all references (some docs still say "Covalent" for PnL async or list features as "planned").

@@ -42,14 +42,16 @@ This is the **central coordination and Single Source of Truth** document for all
 - **Runtime (Python)**: Centralized in `core/grok_client.py` (SOT for load_prompt, call_grok with timeout, is_valid_grok_response quality gate). Used in:
   - `app/main.py`: `/grok-analyze` (Telegram + HTTP) with live wallet balances + recent txs via core/wallet, using `prompts/grok_wallet_analysis.txt`.
   - `core/pnl_calculator.py`: `/daily_pnl` Grok insight enhancement using `prompts/grok_daily_pnl.txt` (with pre-computed summaries, 25s timeout, quality gate, safe fallbacks).
-- **CI / GitHub Actions** (direct curl + inline prompts):
-  - `.github/workflows/grok-code-review.yml`: Automated PR diff reviews.
-  - `.github/workflows/health-check.yml`: Railway failure root-cause analysis + auto Issue.
-- **Prompts** (in `prompts/` with strict output contracts + Telegram Markdown safety):
-  - `grok_daily_pnl.txt`
-  - `grok_wallet_analysis.txt`
-- **Dependencies**: `GROK_API_KEY` (env), referenced in coordination docs, agent personas, .env.example, DEPLOYMENT_SOP.md.
-- Safe patterns: `continue-on-error`, fallbacks, centralized quality gates in client.
+- **CI / GitHub Actions** (now unified to reuse `core/grok_client.py`):
+  - `.github/scripts/call_grok.py`: Reusable CLI (setup-python + pip -r + PYTHONPATH) that loads from `prompts/` and calls via the SOT client.
+  - `.github/workflows/grok-code-review.yml`: PR diff reviews (via `prompts/grok_code_review.txt` + {diff} var).
+  - `.github/workflows/health-check.yml`: Railway failure analysis + Issue (via `prompts/grok_health_check.txt` + {status} var).
+  - Both keep `continue-on-error: true` and github-script posting.
+- **Prompts** (in `prompts/` , now shared by runtime + CI, loaded exclusively via client):
+  - `grok_daily_pnl.txt`, `grok_wallet_analysis.txt`
+  - `grok_code_review.txt`, `grok_health_check.txt`
+- **Dependencies**: `GROK_API_KEY` (env / GitHub secret), referenced in coordination docs, agent personas, .env.example, DEPLOYMENT_SOP.md.
+- Safe patterns: `continue-on-error`, fallbacks, centralized quality gates + error prefixes in client.
 - See **Primary SOT `GROK_USAGE.md`** for the full living map of call sites, quality gates, and pending items.
 
 **Current State Notes**:

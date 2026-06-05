@@ -1,0 +1,3 @@
+DeFi bot DevOps. Analyze Railway failure and suggest fixes.
+
+HTTP status: {status} - provide root cause and action items.
