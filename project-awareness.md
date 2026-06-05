@@ -1,8 +1,10 @@
 # project-awareness.md
 
+**Primary Source of Truth (SOT)** — See the SOT table in [GROK_COORDINATION.md](GROK_COORDINATION.md). All Grok-related changes must be coordinated across Primaries (no fragmented updates). See also [GROK_USAGE.md](GROK_USAGE.md) for the complete canonical map of Grok integrations.
+
 **Project**: All-in-One-DeFi-Bot  
 **Repository**: Zaikon13/All-in-One-DeFi-Bot  
-**Last Updated**: 2026-05-28 (by Grok AI Agent System)  
+**Last Updated**: 2026-06 (coordinated docs update for Grok SOT structure)  
 **Purpose**: Single Source of Truth for the Grok AI Agent System operating on this project.
 
 ---
@@ -33,11 +35,11 @@ All-in-One-DeFi-Bot is a professional DeFi Telegram bot focused on the **Cronos*
 | Worker             | `worker.py`                        | Partially Functional    | Real alerts active, missing persistence & EOD PnL |
 | Deployment         | `railway.toml`, `Dockerfile`, `DEPLOYMENT_SOP.md` | Needs Cleanup     | Some drift remains |
 | CI/CD + Automation | `.github/` + Dependabot            | Strong                  | Good coverage |
-| Documentation      | Root `.md` files + `docs/`         | Good but Inconsistent   | Major updates done in May 2026 |
+| Documentation      | Root `.md` files + `docs/` + Primary SOTs (GROK_COORDINATION.md, project-awareness.md, docs/project-status.md, GROK_USAGE.md, AGENTS.md) | Good but Inconsistent   | Major updates May-Jun 2026; coordinated SOT hygiene complete (USAGE as new Primary) |
 
 ---
 
-## 3. Current Status (as of 2026-05-28)
+## 3. Current Status (as of 2026-06)
 
 ### What is Working Well
 - Worker Loop: Real new pair alerts + basic JSON persistence for known pairs + basic wallet monitoring + heartbeat
@@ -45,7 +47,7 @@ All-in-One-DeFi-Bot is a professional DeFi Telegram bot focused on the **Cronos*
 - Dependabot: Active for pip, GitHub Actions, and Docker
 - Stale PR cleanup: 8 old PRs closed via pr-babysit skill
 - Documentation: Significantly improved (GROK_COORDINATION.md as central hub)
-- `/daily_pnl` (webhook path): Now functional with Grok-enhanced report + reliable fallback via new async `core.pnl_calculator.get_daily_pnl_report()` (Covalent + core/grok_client with timeout). Basic net-delta only.
+- `/daily_pnl` (webhook path): Now functional with Grok-enhanced report + reliable fallback via new async `core.pnl_calculator.get_daily_pnl_report()` (Etherscan V2 / Cronoscan + core/grok_client with 25s timeout + quality gate). Basic net-delta only. Legacy sync path (telegram/handlers.py) remains Covalent-protected.
 
 ### Known Issues / Gaps
 - **Worker Loop**:
@@ -65,10 +67,12 @@ All-in-One-DeFi-Bot is a professional DeFi Telegram bot focused on the **Cronos*
   - Some outdated documentation (README_SYNC.md, MANIFEST.md, SUMMARY.md)
 
 - **Grok AI Integration**:
-  - Sub-agent usage is improving but not yet standardized
-  - No formal "Grok Native Sub-Agents" framework defined yet
-  - Limited scheduled automations
-  - Basic Grok-enhanced `/daily_pnl` added (small increment + follow-up quality pass): uses `core/` with async safety + 25s timeout + fallback. Output quality improved (structured Top Movers + strict Grok commentary-only contract from Review Agent). Honest limitations: net delta only (no cost basis / true USD PnL); Covalent preferred here (Explorer consistency is future work per GROK_COORDINATION). See code comments in core/pnl_calculator.py.
+  - Sub-agent usage formalized (see Section 4).
+  - `core/grok_client.py` is SOT for runtime (call_grok + load_prompt + is_valid_grok_response quality gate).
+  - Live features: `/grok-analyze` (with real wallet data + recent txs + quality gate + safe fallback), Grok-enhanced `/daily_pnl`.
+  - CI: grok-code-review + health-check (direct curl + inline prompts; see GROK_USAGE.md).
+  - Prompts: `prompts/grok_*.txt` with strict contracts (see GROK_USAGE.md for full map).
+  - Pending: More smart commands, scheduled automations, EOD PnL, CI unification to client. See Primary SOT `GROK_USAGE.md` for complete inventory.
 
 ---
 

@@ -1,10 +1,12 @@
 # GROK_COORDINATION.md
 
+**Primary Source of Truth (SOT)** — This file defines the authoritative SOT table for the project. All Grok-related changes must be coordinated across the Primary SOTs listed below (no fragmented updates). See also [GROK_USAGE.md](GROK_USAGE.md) for the complete canonical map of Grok integrations.
+
 **Project**: All-in-One-DeFi-Bot  
 **Repository**: Zaikon13/All-in-One-DeFi-Bot  
 **Primary Coordinator**: Grok (xAI Grok-4.3)  
 **Created**: 2026-05 (post Full Repo Sync)  
-**Last Updated**: By Grok Coordinator (this file)
+**Last Updated**: 2026-06 (coordinated docs update for Grok SOT structure)
 
 This is the **central coordination and Single Source of Truth** document for all Grok-led work on the repository. All agents, sub-agents, and manual sessions must reference and keep this file updated.
 
@@ -28,7 +30,7 @@ This is the **central coordination and Single Source of Truth** document for all
 | **Background Worker** | `worker.py` (WorkerLoop class) | Full Worker Loop: real Dexscreener new pair alerts, wallet balance monitoring + change alerts, heartbeat. All loops active. |
 | **Deployment**     | `railway.toml`, `Dockerfile`, `Procfile`, `DEPLOYMENT_SOP.md` | 3 Railway services |
 | **CI/CD**          | `.github/` (workflows + dependabot.yml) | sync-check, health-check, grok-code-review, dependency-check, ci + **Dependabot** (pip + GitHub Actions + Docker) |
-| **Docs & Coordination** | Root `.md` files + `docs/project-status.md` + this file | See SOT section |
+| **Docs & Coordination** | Root `.md` files + `docs/project-status.md` + `GROK_USAGE.md` + this file | See SOT section (Primary: GROK_COORDINATION.md, project-awareness.md, docs/project-status.md, GROK_USAGE.md, AGENTS.md) |
 
 **Railway Services (Current)**:
 - **bot** (web, primary): Handles live Telegram webhook `https://bot-production-3d9c.up.railway.app/telegram/webhook`. Healthy.
@@ -37,8 +39,18 @@ This is the **central coordination and Single Source of Truth** document for all
 
 **Grok Integration**:
 - Model: `grok-4.3`
-- Used in: Health Check (root cause + auto GitHub Issue), Grok Code Review (PR diffs), future bot commands (`/grok-analyze`).
-- Safe patterns: `continue-on-error`, fallbacks, jq parsing.
+- **Runtime (Python)**: Centralized in `core/grok_client.py` (SOT for load_prompt, call_grok with timeout, is_valid_grok_response quality gate). Used in:
+  - `app/main.py`: `/grok-analyze` (Telegram + HTTP) with live wallet balances + recent txs via core/wallet, using `prompts/grok_wallet_analysis.txt`.
+  - `core/pnl_calculator.py`: `/daily_pnl` Grok insight enhancement using `prompts/grok_daily_pnl.txt` (with pre-computed summaries, 25s timeout, quality gate, safe fallbacks).
+- **CI / GitHub Actions** (direct curl + inline prompts):
+  - `.github/workflows/grok-code-review.yml`: Automated PR diff reviews.
+  - `.github/workflows/health-check.yml`: Railway failure root-cause analysis + auto Issue.
+- **Prompts** (in `prompts/` with strict output contracts + Telegram Markdown safety):
+  - `grok_daily_pnl.txt`
+  - `grok_wallet_analysis.txt`
+- **Dependencies**: `GROK_API_KEY` (env), referenced in coordination docs, agent personas, .env.example, DEPLOYMENT_SOP.md.
+- Safe patterns: `continue-on-error`, fallbacks, centralized quality gates in client.
+- See **Primary SOT `GROK_USAGE.md`** for the full living map of call sites, quality gates, and pending items.
 
 **Current State Notes**:
 - Git: Fully synced with `origin/main` (post-rebase).
@@ -52,10 +64,11 @@ This is the **central coordination and Single Source of Truth** document for all
 From `SYNC.md` (core rule): **SPOT υπερισχύει** — these files define truth. All other docs are derived or supplementary.
 
 **Primary (Authoritative)**:
-- `docs/project-status.md` — Overall project health, workflows status, next steps (explicitly claimed as SOT in multiple places).
+- `GROK_COORDINATION.md` (this file) — **Central coordination hub** for agents, skills, protocol, priorities, Grok integration rules.
+- `project-awareness.md` — Grok AI Agent System definition, handoff protocols, review gate, priorities, architecture awareness.
+- `docs/project-status.md` — Overall project health, workflows status, next steps.
+- `GROK_USAGE.md` — **Complete canonical map of all Grok integrations** (runtime call sites, CI workflows, prompts, quality gates, dependencies, pending items).
 - `AGENTS.md` — Module ownership map, current focus, responsibilities.
-- `SYNC.md` — Sync rules, checks, repo-first discipline.
-- `GROK_COORDINATION.md` (this file) — **New central coordination hub** for agents, skills, protocol, priorities.
 
 **Strong Supporting SOT**:
 - `DEPLOYMENT_SOP.md` — Railway architecture, services, env vars, redeploy process.
@@ -71,9 +84,12 @@ From `SYNC.md` (core rule): **SPOT υπερισχύει** — these files define
 - `SUMMARY.md` — High-level overview (keep but make it point to project-status.md).
 
 **Rule Going Forward**:
-- Before editing any doc, update the relevant SOT first.
+- Before editing any doc, update the relevant SOT first (especially the Primary list below and cross-references).
+- **GROK_USAGE.md** is now a required Primary SOT for any Grok-related work (runtime, CI, prompts, gates).
+- All Primary SOTs must be updated in a **coordinated single PR** for any Grok touch or docs change (see task history for "coordinated documentation update plan").
 - Small PRs only. Green CI required.
 - After any sync or major change, run full audit against this section.
+- All Primary SOTs carry this header (or equivalent): "See GROK_COORDINATION.md SOT table and GROK_USAGE.md for Grok integrations." (This file is the source of the table.)
 
 ---
 
@@ -96,10 +112,12 @@ From `SYNC.md` (core rule): **SPOT υπερισχύει** — these files define
 | **help**          | .grok/skills/help               | Grok TUI / CLI / MCP / skills documentation | When user asks about features or setup |
 
 **Sub-Agent & Parallel Execution**:
-- Use `spawn_subagent` (with `isolation: "worktree"` for safety on git-impacting work).
-- `background: true` + `get_command_or_subagent_output` for long-running (e.g. pr-babysit groups, parallel reviews).
-- Personas (shared/personas/): reviewer.md, implementer.md, design-doc-writer.md, etc. Always inject via prompt prefix for review/implement.
-- MCP Server: `grok_com_github` — all GitHub operations (issues, PRs, reviews, commits). Use `search_tool` first for schema.
+- The project now operates under the formal **Grok Native Sub-Agents Architecture** (see `project-awareness.md` Section 4 and `agents/personas/`).
+- Master Agent (Grok) coordinates specialized Sub-Agents: Review (mandatory before code changes), Code, Execute, Analysis, and Research.
+- Use `spawn_subagent` with the appropriate persona prepended. Plan Mode + `todo_write` is the default for non-trivial work.
+- `background: true` + `get_command_or_subagent_output` for long-running tasks.
+- Personas live in `agents/personas/` (in addition to bundled skills personas).
+- MCP Server: `grok_com_github` — all GitHub operations. Use `search_tool` first for schema.
 
 **Protocol for Using Them**:
 - Always open complex tasks (3+ steps) with `todo_write` (merge:false for new lists).
@@ -152,14 +170,14 @@ This project uses multiple Grok sessions / chats (TUI, different terminals, sche
 ## 5. Current Problems & Priorities
 
 **Identified Problems (Post Full Sync Audit)**:
-- **Stale PRs**: 10+ open PRs, many from May 2026 or earlier (Railway bot PRs #7-9 created `RAILWAY_CONFIG.md` which no longer exists; old ChatGPT sync PRs from 2025). PR #13 is a small recent test for grok-code-review.
+- **Stale PR Cleanup**: Successfully closed 8 stale PRs (#1, #2, #3, #5, #6, #7, #8, #9) using pr-babysit skill. All PRs were clearly superseded by current railway.toml, DEPLOYMENT_SOP.md, and GROK_COORDINATION.md. PR #13 remains intentionally open (small valid test for grok-code-review). Remaining potentially stale items: #12 and #15 (left open for now as they appear more recent/relevant).
 - **Config Drift** (high priority):
   - Worker start command: `railway.toml` + `DEPLOYMENT_SOP.md` say `python -u main.py`; `WORKER.md` says `python -u worker.py`.
   - Multiple references to missing `RAILWAY_CONFIG.md`.
 - **Documentation Inconsistency**:
   - Conflicting SOT claims (`docs/project-status.md` vs `SYNC.md` SPOT list).
   - Legacy files (README_SYNC.md, MANIFEST.md) reference dead ChatGPT/Codex/OPENAI setup.
-- **Worker Loop**: Major improvements delivered (real new pair alerts + wallet monitoring now active). Remaining: persistence for known pairs, EOD PnL reports, better error handling.
+- **Worker Loop**: Partially Functional - Real alerts active (new pair detection + wallet monitoring + heartbeat), improvements ongoing. Missing: persistence for known_pairs, full change detection, EOD PnL reports.
 - **Minor Technical**:
   - `grok-code-review.yml` has stray leading `##last ` line.
   - Local workspace was 15 commits behind (now resolved).
@@ -167,12 +185,14 @@ This project uses multiple Grok sessions / chats (TUI, different terminals, sche
 - **Redundant Service**: web-gpl6 still active and healthy but unnecessary.
 
 **Priorities (Ranked)**:
-1. **Complete Worker Loop** (AGENTS.md #1) + fix start command drift.
+1. **Advance Worker Loop** (Partially Functional) - Add persistence, better filtering, EOD PnL reports.
 2. **PnL module refactoring** (accurate reports, Covalent vs Explorer consistency).
-3. **Stale PR cleanup**: Close or merge Railway bot docs PRs; validate grok-code-review on #13 using the review skill.
-4. **Documentation hygiene**: Consolidate SOT claims, update or archive legacy files, make this GROK_COORDINATION.md the hub.
-5. **Railway alignment**: Disable web-gpl6 if confirmed unused; ensure `railway.toml` + SOP + actual UI match.
-6. **Ongoing**: Use `pr-babysit` on open PRs; enforce small-PR + green-CI + doc-update rule.
+3. **Documentation hygiene**: Consolidate SOT claims, update or archive legacy files, make this GROK_COORDINATION.md the hub.
+4. **Railway alignment**: Disable web-gpl6 if confirmed unused; ensure `railway.toml` + SOP + actual UI match.
+5. **Ongoing**: Use `pr-babysit` on remaining open PRs (#12, #15); enforce small-PR + green-CI + doc-update rule.
+
+**Completed**:
+- Stale PR cleanup (8 PRs closed via pr-babysit skill).
 
 **Success Metric**: Zero behind on main, all docs point to this file + project-status.md, Worker Loop feature-complete, 0 stale high-impact PRs.
 
