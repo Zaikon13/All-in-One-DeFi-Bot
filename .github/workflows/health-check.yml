@@ -69,15 +69,12 @@ jobs:
       - name: Report
         id: report
         run: |
-          R="## Health Check
-**Status:** ${{ steps.health.outputs.status == '200' && '✅ Healthy' || '❌ Unhealthy' }}"
+          # Review Agent 2026-06: Fixed YAML syntax error on line 73 (multi-line string continuations inside the block scalar had 0 indentation, which is invalid for the scalar's indent level). Switched to \n escapes so string literals stay on single lines in YAML source while producing the same multi-line report text.
+          R="## Health Check\n**Status:** ${{ steps.health.outputs.status == '200' && '✅ Healthy' || '❌ Unhealthy' }}"
           if [ -n "${{ steps.grok.outputs.analysis || '' }}" ]; then
             # Grok analysis (when present) is included here so Telegram receives useful content.
             # The contract in grok_health_check.txt enforces Telegram Markdown v1 safety (**bold** + simple bullets only).
-            R="$R
-
-**Grok Analysis:**
-${{ steps.grok.outputs.analysis }}"
+            R="$R\n\n**Grok Analysis:**\n${{ steps.grok.outputs.analysis }}"
           fi
           echo "report<<EOF" >> $GITHUB_OUTPUT
           echo -e "$R" >> $GITHUB_OUTPUT
