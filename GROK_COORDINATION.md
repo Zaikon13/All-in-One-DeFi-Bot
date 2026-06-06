@@ -45,7 +45,7 @@ This is the **central coordination and Single Source of Truth** document for all
 - **CI / GitHub Actions** (now unified to reuse `core/grok_client.py`):
   - `.github/scripts/call_grok.py`: Reusable CLI (setup-python + pip -r + PYTHONPATH) that loads from `prompts/` and calls via the SOT client.
   - `.github/workflows/grok-code-review.yml`: PR diff reviews (via `prompts/grok_code_review.txt` + {diff} var). Now uses strict GROK CODE REVIEW CONTRACT (2026-06, Review Agent Approved with Conditions) requiring SOT alignment, mandatory doc impact, high-risk scrutiny, Review Gate comments, core/ reuse, UTC/Railway/legacy rules. Advisory (`continue-on-error: true`).
-  - `.github/workflows/health-check.yml`: Railway failure analysis + Issue (via `prompts/grok_health_check.txt` + {status} var).
+  - `.github/workflows/health-check.yml`: Railway failure analysis + Issue + enriched Telegram (via strict GROK HEALTH CHECK CONTRACT in `prompts/grok_health_check.txt`, redesigned 2026-06 per Review Agent "Approved with Conditions"). Non-blocking. Bot liveness only (worker visibility gap explicitly noted). Minimal workflow_call support.
   - Both keep `continue-on-error: true` and github-script posting.
 - **Prompts** (in `prompts/` , now shared by runtime + CI, loaded exclusively via client):
   - `grok_daily_pnl.txt`, `grok_wallet_analysis.txt`

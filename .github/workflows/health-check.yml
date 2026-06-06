@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: '0 8 * * *'
   workflow_dispatch:
+  workflow_call:
+    # Minimal support for post-deploy health validation (e.g. called after push/deploy workflows).
+    # Remains advisory / non-blocking. Status is still determined by live /health curl.
 
 permissions:
   contents: read
@@ -12,6 +15,9 @@ permissions:
 jobs:
   health-check:
     runs-on: ubuntu-latest
+    # Review Agent 2026-06: Strict GROK HEALTH CHECK CONTRACT + improved Telegram output (includes Grok analysis with safe Markdown).
+    # All Grok/Issue/notify steps remain non-blocking. Explicitly notes bot liveness-only limitation (worker not covered - see prompt).
+    # High-risk change followed Mandatory Review Gate (Approved with Conditions).
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -19,6 +25,7 @@ jobs:
       - name: Railway Health
         id: health
         run: |
+          # Note: Only checks bot web service minimal liveness (/health in app/health.py). Worker service not covered.
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://bot-production-3d9c.up.railway.app/health || echo "000")
           echo "status=$STATUS" >> $GITHUB_OUTPUT
 
@@ -62,7 +69,16 @@ jobs:
       - name: Report
         id: report
         run: |
-          R="## Health Check\n**Status:** ${{ steps.health.outputs.status == '200' && '✅ Healthy' || '❌ Unhealthy' }}"
+          R="## Health Check
+**Status:** ${{ steps.health.outputs.status == '200' && '✅ Healthy' || '❌ Unhealthy' }}"
+          if [ -n "${{ steps.grok.outputs.analysis || '' }}" ]; then
+            # Grok analysis (when present) is included here so Telegram receives useful content.
+            # The contract in grok_health_check.txt enforces Telegram Markdown v1 safety (**bold** + simple bullets only).
+            R="$R
+
+**Grok Analysis:**
+${{ steps.grok.outputs.analysis }}"
+          fi
           echo "report<<EOF" >> $GITHUB_OUTPUT
           echo -e "$R" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -71,6 +87,8 @@ jobs:
         run: echo "${{ steps.report.outputs.report }}"
 
       - name: Telegram (optional)
+        # Review Agent 2026-06: Now sends the enriched report (includes Grok analysis when failure). Safe Markdown enforced by contract.
+        # Bot /health liveness only - worker service (Dexscreener, monitoring, heartbeat) not covered by this check.
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

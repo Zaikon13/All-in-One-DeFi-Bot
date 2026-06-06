@@ -21,9 +21,10 @@
 **Grok** is leading:
 - Advance Worker Loop (Partially Functional - real new pair alerts + wallet monitoring active)
 - Grok Code Review workflow (now with strict GROK CODE REVIEW CONTRACT enforcing Review Gate, SOTs, core/ reuse, Railway/legacy/UTC rules per Review Agent 2026-06)
+- Health Check + Telegram automation (strict GROK HEALTH CHECK CONTRACT, improved Telegram value with safe Markdown, worker limitation noted per Review Agent 2026-06)
 - Documentation cleanup
 - Workflow stability
 
 **Next Priority**: Complete remaining Worker Loop features (persistence, EOD PnL, better filtering) + PnL refactoring. See GROK_COORDINATION.md + GROK_USAGE.md for coordination.
 
-All non-trivial implementation work (including the above) must follow the **Mandatory Review Gate** defined in `project-awareness.md` Section 4.3 and `agents/personas/review-agent.md`. The improved Grok Code Review CI (strict contract) is advisory support for this gate.
+All non-trivial implementation work (including the above) must follow the **Mandatory Review Gate** defined in `project-awareness.md` Section 4.3 and `agents/personas/review-agent.md`. The improved Grok Code Review and Health Check CI (strict contracts) are advisory support for this gate.

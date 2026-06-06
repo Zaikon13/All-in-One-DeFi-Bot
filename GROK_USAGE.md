@@ -86,12 +86,13 @@ Both Grok-calling workflows now reuse the centralized Python client (no more inl
   - # Review Agent 2026-06: Contract enforces full alignment with Primary SOTs, personas, and coordination rules. This CI review supports (does not replace) the Review Gate.
 
 - **.github/workflows/health-check.yml**:
-  - Trigger: schedule + workflow_dispatch.
-  - Checks Railway /health.
-  - On failure: calls via script + `prompts/grok_health_check.txt` (loaded with {status}).
-  - Creates GitHub Issue with analysis (via github-script).
-  - Optional Telegram notify.
-  - `continue-on-error: true` (on Grok step + Issue creation).
+  - Trigger: schedule + workflow_dispatch + workflow_call (minimal post-deploy support).
+  - Checks Railway /health (bot web service liveness only; worker service not covered - explicit limitation noted).
+  - On failure: calls via script + strict **GROK HEALTH CHECK CONTRACT** in `prompts/grok_health_check.txt` (redesigned 2026-06 per Review Agent "Approved with Conditions" - High Risk): requires Health Summary, Root Cause (Railway), Bot vs Worker Impact, prioritized Action Items, SOT Alignment.
+  - Creates GitHub Issue with analysis.
+  - Telegram now receives useful Grok-derived content (enriched report) using safe Markdown v1 only.
+  - `continue-on-error: true` (advisory; true mandatory gate is internal Review Agent).
+  - # Review Agent 2026-06: Contract + Telegram improvements enforce SOT alignment, Markdown safety, non-blocking behavior, and note worker visibility gap.
 
 **Prompts for CI** (in `prompts/` alongside runtime ones, loaded via SOT):
 - `grok_code_review.txt`

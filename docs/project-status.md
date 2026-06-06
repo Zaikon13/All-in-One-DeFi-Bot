@@ -14,7 +14,7 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 | Automation | Status | Key Features |
 |------------|--------|--------------|
 | **Sync Check** | ✅ Green | Full commit + uncommitted changes check, clean YAML |
-| **Health Check Report** | ✅ Green | Railway monitoring + Grok-4.3 analysis + auto Issue + Telegram |
+| **Health Check Report** | ✅ Improved | Strict GROK HEALTH CHECK CONTRACT (redesigned 2026-06) with structured sections (Health Summary, Railway Root Cause, Bot vs Worker Impact, Action Items, SOT Alignment). Telegram now includes useful Grok analysis (safe Markdown v1 enforced). Non-blocking. Explicitly notes bot liveness-only limitation (worker not monitored). Supports workflow_call for post-deploy. |
 | **Grok Code Review** | ✅ Strict | Strict GROK CODE REVIEW CONTRACT (redesigned 2026-06) with required SOT alignment, doc impact, high-risk file scrutiny, Review Gate enforcement, and project rules (core/ reuse, legacy protection, UTC, Railway, smallest change). Advisory only (`continue-on-error: true`). |
 | **Dependabot** | ✅ Active | Weekly automated PRs for pip, GitHub Actions, and Docker (new) |
 | **Dependency Check** | ✅ Active | Weekly security + outdated package audit (creates issues) |
@@ -33,6 +33,7 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 - New Primary SOT `GROK_USAGE.md` created as complete map of Grok integrations (runtime, CI, prompts, gates, pending)
 - Grok Native Sub-Agents Architecture formalized with **Mandatory Review Gate** (project-awareness.md Section 4 + improved personas + reviews/ archive convention)
 - Grok Code Review automation upgraded to strict structured CONTRACT (prompts/grok_code_review.txt) enforcing Primary SOTs, doc impact checks, high-risk awareness, and all project disciplines (Review Agent 2026-06 Approved with Conditions)
+- Health Check + Telegram upgraded with strict GROK HEALTH CHECK CONTRACT, enriched actionable Telegram output (safe Markdown), and explicit worker visibility limitation note (Review Agent 2026-06 Approved with Conditions)
 
 **Next Steps**
 - Test `Grok Code Review` with a small Pull Request (optional)
@@ -42,4 +43,4 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 
 **Core Rule**: Small PRs → Green CI → Update docs
 
-**Last Updated**: 2026-06 (Grok Code Review strict CONTRACT + coordinated SOT updates per Review Agent Approved with Conditions) by Grok AI Coordinator
+**Last Updated**: 2026-06 (Health Check strict CONTRACT + Telegram improvements + coordinated SOT updates per Review Agent Approved with Conditions) by Grok AI Coordinator
