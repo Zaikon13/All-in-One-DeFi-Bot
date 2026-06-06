@@ -2,7 +2,22 @@ name: Grok Code Review
 
 on:
   pull_request:
+    branches: [ main ]
     types: [opened, synchronize, reopened]
+    paths:
+      - '**.py'
+      - '.github/workflows/**'
+      - 'prompts/**'
+      - 'core/**'
+      - 'app/**'
+      - 'worker.py'
+      - 'requirements*.txt'
+      - 'railway.toml'
+      - 'docs/**'
+    # Review Agent 2026-06: Approved with Conditions (High Risk) - added explicit branches: [main] + paths filter per Review decision.
+    # This makes Grok Code Review run automatically on relevant PRs to main while reducing noise/cost on irrelevant changes.
+    # Remains advisory only (continue-on-error: true). Does not replace the internal Review Agent mandatory gate.
+    # No push: triggers added; kept PR-focused as required.
 
 permissions:
   contents: read

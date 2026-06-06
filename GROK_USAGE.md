@@ -78,12 +78,12 @@ Both Grok-calling workflows now reuse the centralized Python client (no more inl
   - Setup in workflows: `actions/setup-python@v5` (3.12) + `pip install -r requirements.txt python-dotenv`.
 
 - **.github/workflows/grok-code-review.yml**:
-  - Trigger: PR opened/synchronize/reopened.
+  - Trigger: pull_request to branches: [main], types [opened, synchronize, reopened], with paths filter for relevant changes (**.py, .github/workflows/**, prompts/**, core/**, app/**, worker.py, requirements*.txt, railway.toml, docs/**). (Updated 2026-06 per Review Agent "Approved with Conditions" - High Risk).
   - Gets diff (truncated), calls via script + `prompts/grok_code_review.txt` (loaded with {diff}).
   - Uses strict **GROK CODE REVIEW CONTRACT** (redesigned 2026-06 per Review Agent "Approved with Conditions" - High Risk): requires Critical/High/Medium with file:line, SOT & Coordination Alignment, mandatory Documentation & Primary SOT Impact section, High-Risk Files Touched, Project Rule Violations (Review Gate comments, core/ reuse, UTC, Railway ephemeral FS, legacy protection, smallest correct change, etc.), Actionable Recommendations.
   - Posts review as PR comment via github-script.
   - `continue-on-error: true` (advisory/supplementary only; the true mandatory gate is the internal Review Agent pre-edit per project-awareness.md 4.3).
-  - # Review Agent 2026-06: Contract enforces full alignment with Primary SOTs, personas, and coordination rules. This CI review supports (does not replace) the Review Gate.
+  - # Review Agent 2026-06: Expanded triggers + paths filter per Review decision to run automatically on relevant PRs to main. Remains advisory. Contract enforces full alignment with Primary SOTs, personas, and coordination rules. This CI review supports (does not replace) the Review Gate.
 
 - **.github/workflows/health-check.yml**:
   - Trigger: schedule + workflow_dispatch + workflow_call (minimal post-deploy support).
