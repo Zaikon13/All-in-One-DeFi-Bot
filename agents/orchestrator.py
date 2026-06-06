@@ -30,15 +30,27 @@ This is a **tool that assists the Master**, not a replacement. Grok (Master) ret
 - propose_improvements passes last ~8 outcomes + meta_summary so Grok can detect patterns and produce specific, citable, actionable proposals.
 - Still proposals-only, Review Gate enforcement identical, memory changes minimal/high-risk documented. See new review file and updated 4.7.
 
+**Agent Drift Detection (first increment, per Review Agent 2026-06 "Approved with Conditions", High risk)**:
+- Master-driven only via new `--detect-drift` flag (condition 5: extend existing orchestrator.py, no new module).
+- Uses Grok **exclusively via core/grok_client.py** to analyze drift between documented agent artifacts (SOT sections, prompt contracts, memory schema, project_context) and current implementation.
+- Generates structured proposals **only** for the four high-value areas. Every proposal contains the full non-bypassable Review Gate enforcement language (condition 2).
+- Strictly detection + proposals only. No application logic, no production impact (conditions 1,7).
+- Minimal memory append (tiny record in plan_outcomes, high-risk documented per condition 6).
+- Master authority explicit. The detector/prompt are themselves subject to future Improvement Proposer / drift runs (condition 10).
+- All new code carries # Review Agent 2026-06 comments. See reviews/2026-06-XX-agent-drift-detection.md and coordinated SOT updates.
+
 **Usage (Phase 1)**:
   python agents/orchestrator.py --task "Describe the high-level task, e.g. 'Add EOD PnL to worker and update docs'"
 
 **Usage (Phase 2 - Master-driven only)**:
   python agents/orchestrator.py --propose-improvements
 
+**Usage (Drift Detection - Master-driven only)**:
+  python agents/orchestrator.py --detect-drift
+
 Master then uses any plan or proposals to drive todo_write + spawn_subagent (with full persona prepended). For proposals: Review Gate is mandatory before any follow-on edit.
 
-# Review Agent 2026-06: Phase 1 foundation + Phase 2 first scoped "Improvement Proposer" increment per "Approved with Conditions". Orchestrator assists Master (does not replace authority or bypass Review Gate). Uses existing spawn_subagent protocol and core/grok_client.py only. Memory files committed; project_context.md updates high-risk SOT-like. Proposals strictly limited to prompts + memory schema; every proposal text requires Review Agent before implementation. No autonomous action. See Primary SOTs (project-awareness.md 4.6/4.7, GROK_COORDINATION.md Section 3), agents/README.md, and reviews/2026-06-XX-phase2-feedback-loop.md.
+# Review Agent 2026-06: Phase 1 foundation + Phase 2 first scoped "Improvement Proposer" increment per "Approved with Conditions". Orchestrator assists Master (does not replace authority or bypass Review Gate). Uses existing spawn_subagent protocol and core/grok_client.py only. Memory files committed; project_context.md updates high-risk SOT-like. Proposals strictly limited to prompts + memory schema; every proposal text requires Review Agent before implementation. No autonomous action. Agent Drift Detection first inc added per Approved with Conditions (High risk): --detect-drift mode + grok_drift_detector.txt, proposals-only with full gate enforcement, minimal plan_outcomes record, coordinated SOTs. See Primary SOTs (project-awareness.md 4.6/4.7/4.8, GROK_COORDINATION.md Section 3), agents/README.md, reviews/2026-06-XX-agent-drift-detection.md, and the 10 mandatory conditions.
 
 See:
 - agents/README.md (Master-Orchestrator relationship)
@@ -171,6 +183,93 @@ async def propose_improvements(context: str, memory: dict) -> str:
     return f"[Grok improvement proposal generation unavailable or low quality per is_valid_grok_response. Raw: {result[:200]}]"
 
 
+# Review Agent 2026-06: New async detect_drift (Agent Drift Detection first inc).
+# - Master-driven only (--detect-drift flag).
+# - Builds drift_context by reading key documented artifacts (SOT agent sections, prompt contracts, memory handling, project_context) vs current code.
+# - Calls Grok **exclusively** via core/grok_client.py (load_prompt + call_grok + is_valid).
+# - Generates structured proposals for the four high-value areas ONLY.
+# - Every proposal contains the full "REQUIRES REVIEW AGENT STEP" enforcement (condition 2).
+# - NO apply logic, NO production paths, NO autonomy (conditions 1,7).
+# - Minimal append to plan_outcomes (tiny record only; high-risk per condition 6; full details in printed output + reviews/).
+# - Aligns with existing handoff: any real synchronization requires Master todo_write + spawn_subagent (full persona + SOTs).
+# - The new prompt and this logic are subject to future Improvement Proposer / drift runs (condition 10).
+async def detect_drift(context: str, memory: dict) -> str:
+    """Generate gated drift detection proposals using Grok via SOT only. Master reviews output."""
+    from pathlib import Path as _Path  # local alias to avoid shadowing
+
+    # Build focused drift_context for the four high-value areas (ruthlessly minimal reads + truncation).
+    # # Review Agent 2026-06: Snapshot documented expectations vs implementation. Full files are large; we pass targeted excerpts.
+    pa_path = _Path("project-awareness.md")
+    pa_text = pa_path.read_text(encoding="utf-8") if pa_path.exists() else ""
+    # Focus on 4.6/4.7 agent sections
+    pa_excerpt = ""
+    if "4.6 Phase 1" in pa_text or "4.7 Phase 2" in pa_text:
+        start = pa_text.find("### 4.6 Phase 1")
+        if start == -1:
+            start = pa_text.find("### 4.7 Phase 2")
+        if start != -1:
+            pa_excerpt = pa_text[start:start+2200]
+
+    coord_path = _Path("GROK_COORDINATION.md")
+    coord_text = coord_path.read_text(encoding="utf-8") if coord_path.exists() else ""
+    coord_excerpt = ""
+    if "Phase 2 first scoped" in coord_text:
+        idx = coord_text.find("**Phase 2 first scoped increment")
+        if idx != -1:
+            coord_excerpt = coord_text[idx:idx+900]
+
+    agents_path = _Path("AGENTS.md")
+    agents_text = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
+    agents_excerpt = ""
+    if "Phase 2 first scoped" in agents_text:
+        idx = agents_text.find("Phase 2 first scoped increment")
+        if idx != -1:
+            agents_excerpt = agents_text[idx:idx+600]
+
+    # Prompt contracts (documented expectations)
+    plan_prompt = _Path("prompts/grok_orchestrator_plan.txt").read_text(encoding="utf-8")[:1200] if _Path("prompts/grok_orchestrator_plan.txt").exists() else ""
+    impr_prompt = _Path("prompts/grok_improvement_proposer.txt").read_text(encoding="utf-8")[:1200] if _Path("prompts/grok_improvement_proposer.txt").exists() else ""
+
+    # Current implementation (orchestrator memory + propose logic)
+    orch_text = _Path("agents/orchestrator.py").read_text(encoding="utf-8") if _Path("agents/orchestrator.py").exists() else ""
+    orch_excerpt = ""
+    if "plan_outcomes" in orch_text and "meta_summary" in orch_text:
+        # Grab the relevant functions/append logic
+        idx = orch_text.find("plan_outcomes")
+        if idx != -1:
+            orch_excerpt = orch_text[max(0,idx-300):idx+1800]
+
+    proj_ctx = _Path("agents/memory/project_context.md").read_text(encoding="utf-8")[:900] if _Path("agents/memory/project_context.md").exists() else ""
+
+    drift_ctx = (
+        "=== DOCUMENTED (SOTs / prompts / project_context expectations) ===\n"
+        f"project-awareness 4.6/4.7 (agent system + Phase 2):\n{pa_excerpt}\n\n"
+        f"GROK_COORDINATION Sec 3 (Phase 2):\n{coord_excerpt}\n\n"
+        f"AGENTS.md Current Focus (Phase 2):\n{agents_excerpt}\n\n"
+        f"grok_orchestrator_plan.txt contract (excerpt):\n{plan_prompt}\n\n"
+        f"grok_improvement_proposer.txt contract (excerpt):\n{impr_prompt}\n\n"
+        f"project_context.md (priorities):\n{proj_ctx}\n\n"
+        "=== CURRENT IMPLEMENTATION (orchestrator.py memory/propose logic) ===\n"
+        f"{orch_excerpt}\n\n"
+        "=== MEMORY SCHEMA (from agent_memory.json notes) ===\n"
+        f"{memory.get('notes','')[:600]}\n"
+    )
+
+    # Dedicated drift detector prompt (new for this inc). load_prompt via core/grok_client SOT.
+    # # Review Agent 2026-06: Contract-enforced for Review Gate in every proposal, detection-only scope, Master-driven.
+    drift_prompt = load_prompt(
+        "grok_drift_detector.txt",
+        context=context[:1200],
+        current_memory=json.dumps(memory, indent=2)[:700],
+        drift_context=drift_ctx
+    )
+
+    result = await call_grok(drift_prompt, timeout=45.0)
+    if is_valid_grok_response(result):
+        return result.strip()
+    return f"[Grok drift detection unavailable or low quality per is_valid_grok_response. Raw: {result[:200]}]"
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(
         description="Phase 1 Orchestrator (+ Phase 2 gated Improvement Proposer) - assists Master Agent. "
@@ -181,13 +280,17 @@ async def main() -> None:
     # Phase 2 flag (condition 10 + richer context inc: extend existing orchestrator; Master-driven only)
     parser.add_argument("--propose-improvements", action="store_true",
                         help="Phase 2: read past Meta Notes + outcomes (incl. tiny meta_summary excerpts) from memory and generate gated proposals for prompts (grok_orchestrator_plan.txt) and memory schema only. Richer history for more specific/actionable proposals. Proposals-only (no apply). Review Gate language embedded. Master-driven only.")
+    # Drift Detection flag (first inc per Review 2026-06 Approved with Conditions, High risk; condition 5: extend existing)
+    parser.add_argument("--detect-drift", action="store_true",
+                        help="Agent Drift Detection (first inc): detect drift between SOT agent sections / prompt contracts / memory schema / project_context vs current orchestrator + prompts + memory code. Generates gated proposals only (full Review Gate enforcement in output). Master-driven only. No auto-apply.")
     args = parser.parse_args()
 
-    if args.propose_improvements and args.task:
-        print("Error: Use either --task (Phase 1 planning) or --propose-improvements (Phase 2 proposals), not both.")
+    active_modes = sum([bool(args.propose_improvements), bool(args.detect_drift), bool(args.task)])
+    if active_modes > 1:
+        print("Error: Use only one of --task, --propose-improvements, or --detect-drift (mutually exclusive).")
         sys.exit(2)
-    if not args.propose_improvements and not args.task:
-        print("Error: Provide --task for Phase 1 or --propose-improvements for Phase 2 first inc (see --help).")
+    if active_modes == 0:
+        print("Error: Provide --task (Phase 1), --propose-improvements (Phase 2), or --detect-drift (see --help).")
         sys.exit(2)
 
     print("=== Orchestrator - Assisting Master Agent ===")
@@ -227,6 +330,40 @@ async def main() -> None:
             memory["plan_outcomes"] = memory["plan_outcomes"][-10:]
         save_agent_memory(memory)
         print("\nMinimal proposal run record appended to plan_outcomes (review before commit). Run complete.")
+        return
+
+    if args.detect_drift:
+        # Review Agent 2026-06: Drift Detection first inc path (High risk). Strictly detection + proposals.
+        # Builds context from actual files vs documented. Output contains full Review Gate (condition 2).
+        # Master must still open todo_write and follow handoff for any actual edits (condition 2).
+        # No production logic touched. Memory append is tiny record only (condition 6).
+        print("\n=== Agent Drift Detection (first inc, Gated, Master-driven only) ===")
+        print("Building drift_context from SOTs/prompts/memory docs vs current implementation; using Grok via core/grok_client.py SOT...")
+        proposals = await detect_drift(context, memory)
+
+        print("\n=== Generated Drift Proposals (Master reviews; NO auto-apply) ===")
+        print(proposals)
+
+        print("\n=== Master Next Steps (MANDATORY - conditions 2,4,8) ===")
+        print("1. Proposals above are for your review ONLY. Every proposal text requires Review Agent before implementation.")
+        print("2. To pursue: Open todo_write (merge:false) with review-gate item, spawn Review Agent (full persona + Primary SOTs + proposal text + this run + reviews/2026-06-XX-agent-drift-detection.md), address output.")
+        print("3. Only after Review + Master address: use Code Agent for coordinated SOT updates (condition 9).")
+        print("4. Never apply proposals directly. This mode stores only a minimal run record in plan_outcomes (full text in printed output + reviews/).")
+        print("5. Commit referencing Review Agent 2026-06 decision. The detector itself is subject to the system (condition 10).")
+
+        # Minimal memory append (condition 6: tiny record only; prefer printed output + reviews/ for full details)
+        # # Review Agent 2026-06: drift run record only. High-risk schema evolution documented in notes.
+        from datetime import datetime, timezone
+        memory.setdefault("plan_outcomes", []).append({
+            "type": "drift_detection",
+            "time": datetime.now(timezone.utc).isoformat(),
+            "focus": "SOT agent sections / prompt contracts / memory schema / project_context vs implementation",
+            "note": "See printed proposals above. Requires Review Agent + Master todo_write + handoff before any edit. # Review Agent 2026-06"
+        })
+        if len(memory["plan_outcomes"]) > 12:
+            memory["plan_outcomes"] = memory["plan_outcomes"][-12:]
+        save_agent_memory(memory)
+        print("\nMinimal drift run record appended to plan_outcomes (review before commit). Run complete.")
         return
 
     # Existing Phase 1 path (unchanged behavior except updated prints + memory append for outcomes)
@@ -275,3 +412,4 @@ if __name__ == "__main__":
 # - Script only (manual/scheduled); foundation scope, no autonomy.
 # - All new code has traceability. See agents/README.md and Primary SOTs for full requirements.
 # - Master must still open todos, spawn Review for high-risk, read/address outputs.
+# Agent Drift Detection first inc (High risk): added --detect-drift + grok_drift_detector.txt per Approved with Conditions. Proposals-only with full gate enforcement in output, minimal plan_outcomes record, extend-existing (no new module), core client only. Detector subject to system (condition 10). Coordinated SOTs + new reviews/ file.

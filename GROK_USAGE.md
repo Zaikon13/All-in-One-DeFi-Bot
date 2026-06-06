@@ -144,6 +144,9 @@ See also the implementation in `.github/scripts/call_grok.py` and the two update
 **Richer-context increment (higher-quality/specific proposals)**: plan_outcomes "plan" entries may include tiny `meta_summary` (excerpt). propose_improvements passes last ~8 outcomes + meta_summary; prompt now requires pattern detection across history, explicit citations of timestamps/entries, and precise copy-paste-ready suggestions (sections + before/after). Scope and all 9 mandatory conditions preserved (proposals-only, Review Gate paragraph intact and now references new review file, high-risk minimal memory, core client only). See project-awareness.md 4.7 + reviews/2026-06-XX-improve-proposer-quality.md.
 # Review Agent 2026-06: Targeted context + prompt improvements for better proposals while keeping every original guardrail.
 
+**Agent Drift Detection (first inc, 2026-06 per Review Agent "Approved with Conditions", High risk)**: New --detect-drift mode + grok_drift_detector.txt. Detects drift vs SOT agent sections, prompt contracts, memory schema, project_context and emits proposals with full Review Gate text. Detection + proposals only. Tiny drift records in plan_outcomes (high-risk). Reuses core/grok_client.py. Detector subject to the system (condition 10). See project-awareness.md extension + reviews/2026-06-XX-agent-drift-detection.md + the 10 conditions.
+# Review Agent 2026-06: Proposals-only with non-bypassable gate; Master-driven; minimal high-risk memory; coordinated SOTs.
+
 ---
 
 ## 6. Pending / Incomplete Grok Integrations

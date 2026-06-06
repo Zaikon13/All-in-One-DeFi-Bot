@@ -44,4 +44,4 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 
 **Core Rule**: Small PRs → Green CI → Update docs
 
-**Last Updated**: 2026-06 (Phase 2 richer-context inc: plan_outcomes gains tiny meta_summary on plan runs; proposer uses last ~8 + excerpts for pattern detection + specific citations + precise suggestions; still proposals-only + Review Gate + high-risk minimal memory + core client only. Coordinated SOTs + new reviews/2026-06-XX-improve-proposer-quality.md per Review Agent 2026-06 Approved with Conditions. Builds on first inc + 2026-06-XX-phase2-feedback-loop.md) by Grok AI Coordinator
+**Last Updated**: 2026-06 (Agent Drift Detection first inc per Review Agent 2026-06 Approved with Conditions, High risk: --detect-drift + grok_drift_detector.txt; detects drift in SOT agent sections/prompt contracts/memory schema/project_context vs impl; proposals with full Review Gate; detection+proposals only; tiny plan_outcomes records (high-risk); Master-driven, core client only; detector subject to system (cond 10). Coordinated SOTs + new reviews/2026-06-XX-agent-drift-detection.md. Builds on Phase 2 + prior reviews.) by Grok AI Coordinator

@@ -144,6 +144,9 @@ From `SYNC.md` (core rule): **SPOT υπερισχύει** — these files define
 **Richer-context increment (higher-quality proposals, 2026-06 per Review Agent Approved with Conditions)**: plan_outcomes now supports tiny `meta_summary` (bounded Meta Notes excerpt) on "plan" entries. propose_improvements supplies richer history (last ~8) + meta_summary so proposals can detect patterns and cite specific runs/timestamps with precise before/after suggestions. Still proposals-only, Review Gate enforcement unchanged (now also refs new reviews/2026-06-XX-improve-proposer-quality.md), memory changes minimal + high-risk documented, core/grok_client.py only. See project-awareness.md 4.7 extension + new review file.
 # Review Agent 2026-06: Richer context for specificity while preserving every guardrail from the first Phase 2 inc.
 
+**Agent Drift Detection (first inc, 2026-06 per Review Agent "Approved with Conditions", High risk)**: Master-driven --detect-drift in orchestrator.py + new grok_drift_detector.txt (strict contract). Detects drift in four high-value areas only and produces proposals containing full Review Gate enforcement. Strictly detection + proposals only. Minimal tiny "drift_detection" records in plan_outcomes (high-risk). Reuses core/grok_client + existing handoff. Detector itself subject to future runs (condition 10). See project-awareness.md (new language after 4.7), reviews/2026-06-XX-agent-drift-detection.md, and the 10 conditions.
+# Review Agent 2026-06: Detection-only, Master-driven, proposals with non-bypassable gate, minimal high-risk memory, extend-existing, coordinated SOTs.
+
 **Protocol for Using Them**:
 - Always open complex tasks (3+ steps or any edit/SOT impact) with `todo_write` (merge:false for new lists).
 - One `in_progress` item at a time.
