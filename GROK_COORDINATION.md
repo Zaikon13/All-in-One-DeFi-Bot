@@ -147,6 +147,9 @@ From `SYNC.md` (core rule): **SPOT υπερισχύει** — these files define
 **Agent Drift Detection (first inc, 2026-06 per Review Agent "Approved with Conditions", High risk)**: Master-driven --detect-drift in orchestrator.py + new grok_drift_detector.txt (strict contract). Detects drift in four high-value areas only and produces proposals containing full Review Gate enforcement. Strictly detection + proposals only. Minimal tiny "drift_detection" records in plan_outcomes (high-risk). Reuses core/grok_client + existing handoff. Detector itself subject to future runs (condition 10). See project-awareness.md (new language after 4.7), reviews/2026-06-XX-agent-drift-detection.md, and the 10 conditions.
 # Review Agent 2026-06: Detection-only, Master-driven, proposals with non-bypassable gate, minimal high-risk memory, extend-existing, coordinated SOTs.
 
+**Drift Detection v2 (2026-06 per Review Agent "Approved with Conditions", Medium-High risk)**: Modest evolution (extend existing; 1-2 additional high-value areas e.g. arg parsing/modes + SOT cross-refs). Smarter bounded context (targeted + recent plan_outcomes/drift history summaries for patterns). Evolved prompt for stronger citations/precision (history quality-only per condition 12). Still proposals-only, full gate (refs v2 review), tiny memory (high-risk), core client only, detector auditable (condition 10). See project-awareness.md v2 subsection + reviews/2026-06-XX-drift-detection-v2.md + 12 conditions.
+# Review Agent 2026-06: Bounded v2 per conditions; proposals-only with non-bypassable gate; Master-driven; minimal high-risk memory; coordinated SOTs.
+
 **Protocol for Using Them**:
 - Always open complex tasks (3+ steps or any edit/SOT impact) with `todo_write` (merge:false for new lists).
 - One `in_progress` item at a time.

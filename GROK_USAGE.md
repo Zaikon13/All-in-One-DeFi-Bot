@@ -147,6 +147,9 @@ See also the implementation in `.github/scripts/call_grok.py` and the two update
 **Agent Drift Detection (first inc, 2026-06 per Review Agent "Approved with Conditions", High risk)**: New --detect-drift mode + grok_drift_detector.txt. Detects drift vs SOT agent sections, prompt contracts, memory schema, project_context and emits proposals with full Review Gate text. Detection + proposals only. Tiny drift records in plan_outcomes (high-risk). Reuses core/grok_client.py. Detector subject to the system (condition 10). See project-awareness.md extension + reviews/2026-06-XX-agent-drift-detection.md + the 10 conditions.
 # Review Agent 2026-06: Proposals-only with non-bypassable gate; Master-driven; minimal high-risk memory; coordinated SOTs.
 
+**Drift Detection v2 (2026-06 per Review Agent "Approved with Conditions", Medium-High risk)**: Modest evolution (extend existing; 1-2 addl high-value areas e.g. arg parsing + SOT cross-refs). Smarter bounded context (targeted extraction + recent plan_outcomes/drift summaries for patterns). Evolved prompt requires citations of prior runs + stronger evidence/precise fixes (history for quality only, condition 12). Still proposals-only, full gate (refs v2 review), tiny memory (high-risk), core client only, detector auditable (condition 10). See project-awareness.md + reviews/2026-06-XX-drift-detection-v2.md + 12 conditions.
+# Review Agent 2026-06: Bounded v2 per conditions; proposals-only with non-bypassable gate; Master-driven; minimal high-risk memory; coordinated SOTs.
+
 ---
 
 ## 6. Pending / Incomplete Grok Integrations
