@@ -125,7 +125,7 @@ From `SYNC.md` (core rule): **SPOT υπερισχύει** — these files define
 **Phase 1 Orchestrator (agents/orchestrator.py + agents/memory/)** (added 2026-06 per Review Agent "Approved with Conditions", High Risk):
 - Tool that **assists the Master Agent** (Grok retains final authority; does not replace Master or bypass Review Gate).
 - Loads committed shared `memory/project_context.md` (SOT-like human summary; meaningful updates are high-risk SOT changes requiring Review + coordinated Primary SOT update) and `agent_memory.json` (simple state, committed for auditability, subject to Railway ephemeral FS limitations).
-- Uses **core/grok_client.py exclusively** for any Grok planning calls.
+- Uses **core/grok_client.py exclusively** for any Grok planning calls. Now uses dedicated `prompts/grok_orchestrator_plan.txt` (strict contract + required output structure with Meta Notes for future self-improvement readiness).
 - Suggests plans that reference the existing handoff protocol (todo_write, full personas prepended, SOT refs, spawn_subagent).
 - For high-risk work: explicitly recommends spawning Review Agent first.
 - Start simple: script (manual or scheduled via existing skills); foundation only (no autonomy, loops, or self-improvement in Phase 1).

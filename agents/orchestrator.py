@@ -64,36 +64,15 @@ async def get_grok_plan(task_description: str, context: str, memory: dict) -> st
     Use Grok (via core/grok_client.py SOT only) to suggest a Sub-Agent plan.
     Plan must respect: Review Gate first for high-risk, existing spawn_subagent + full personas, todo_write, Master authority.
     """
-    # Build a focused planning prompt. In future phases this could use a dedicated prompt file.
+    # Review Agent 2026-06: Switched to dedicated prompts/grok_orchestrator_plan.txt (per Approved with Conditions).
+    # Minimal change only: use load_prompt with the new contract-style prompt. No logic changes.
+    # Planning prompt now enforces Phase 1 rules and includes Meta Notes for future self-improvement readiness (without consuming them here).
     planning_prompt = load_prompt(
-        "grok_code_review.txt",  # reuse style for now; in real use a planning prompt would be added
-        diff=f"Task description for planning: {task_description}\n\nCurrent project context (truncated):\n{context[:1500]}\n\nCurrent memory state:\n{json.dumps(memory, indent=2)[:800]}"
+        "grok_orchestrator_plan.txt",
+        task=task_description,
+        context=context[:2000],
+        memory=json.dumps(memory, indent=2)[:800]
     )
-    # Override for planning (simple for Phase 1 foundation)
-    planning_prompt = f"""You are assisting the Master Agent (Grok) for the All-in-One-DeFi-Bot project.
-
-You must follow the existing Grok Native Sub-Agents Architecture (project-awareness.md Section 4):
-- Master retains final authority.
-- For any high-risk work (see 4.3.0: core/, worker.py, SOTs, architecture, new agent integrations, etc.), explicitly recommend spawning the Review Agent persona first (full text from agents/personas/review-agent.md prepended to prompt + SOT refs + todo context).
-- Use the handoff: Master opens todo_write (merge:false), prepends full persona, includes Primary SOTs (GROK_COORDINATION.md etc.) + current todo, calls spawn_subagent.
-- After Sub-Agent output, Master must read and address before proceeding.
-- Keep Phase 1 scope: foundation only. No autonomy, no feedback loops.
-
-Current project context (from committed project_context.md):
-{context[:2000]}
-
-Current agent memory state:
-{json.dumps(memory, indent=2)}
-
-Task: {task_description}
-
-Output a short, actionable plan:
-1. Is this high-risk? (Yes/No + why per 4.3.0). If yes, first step must be Review Agent.
-2. Recommended Sub-Agent sequence (Review/Code/Execute/Analysis/Research) with 1-sentence reason for each.
-3. Exact next action for Master (e.g. "Open todo_write with these steps, spawn Review with this prepared prompt: [short excerpt]").
-
-Be concise. Reference the protocol. Do not suggest bypassing gates or Master authority.
-"""
 
     result = await call_grok(planning_prompt, timeout=45.0)
     if is_valid_grok_response(result):

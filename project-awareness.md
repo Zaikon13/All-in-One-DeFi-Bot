@@ -246,6 +246,7 @@ The emphasis is on **traceability and protection of what matters**, not on burea
 - Traceability: # Review Agent 2026-06 comments in new code. Save reviews to reviews/ (e.g. 2026-06-XX-orchestrator-phase1.md).
 - See agents/README.md (Master-Orchestrator relationship) and GROK_COORDINATION.md Section 3.
 - All 10 conditions from the Review Agent 2026-06 decision must be followed for implementation.
+- Uses dedicated `prompts/grok_orchestrator_plan.txt` (strict contract) for planning (added 2026-06 per Review Agent Approved with Conditions).
 
 ### 4.6 Practical Integration & Enforcement (How to Use Daily)
 

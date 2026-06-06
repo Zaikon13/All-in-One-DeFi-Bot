@@ -125,7 +125,7 @@ See also the implementation in `.github/scripts/call_grok.py` and the two update
 **Phase 1 Orchestrator (2026-06, Review Agent "Approved with Conditions", High Risk)**:
 - `agents/orchestrator.py` + `agents/memory/` assists Master (Grok retains final authority; does not replace or bypass Review Gate).
 - Loads committed `project_context.md` (SOT-like; meaningful updates high-risk requiring Review + coordinated SOT update) and `agent_memory.json`.
-- Uses `core/grok_client.py` (SOT) exclusively for Grok planning.
+- Uses `core/grok_client.py` (SOT) exclusively for Grok planning. Now uses dedicated `prompts/grok_orchestrator_plan.txt` (strict contract + required output structure including Meta Notes for future self-improvement readiness, without consuming them in Phase 1).
 - Plans reference existing handoff (todo_write + full personas + SOTs + spawn_subagent).
 - High-risk: must recommend Review Agent first.
 - Start simple/script (manual/scheduled). Foundation only.
