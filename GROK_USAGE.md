@@ -158,7 +158,7 @@ See also the implementation in `.github/scripts/call_grok.py` and the two update
   - Full EOD PnL scheduling + reports (worker + Grok).
   - More smart commands: `/smart-report`, `/daily-insight`.
   - Scheduled automations (EOD PnL, Daily Summary, Risk Alerts).
-  - Worker integration for Grok (currently indirect via PnL reports).
+  - Worker integration for Grok (currently indirect via PnL reports + 1 low-risk optional analysis-only path): new-pair alerts in poll_dexscreener may append qualitative Grok insight (env-gated via MARKET_ANALYSIS_ENABLED=false default; thin core/market_analysis.py over grok_client SOT exclusively; 25s + is_valid gate + fallback; pre-compute in Python; analysis/summarization/insights ONLY per strict CONTRACT in prompts/grok_market_analysis.txt; no decision/execution use; logged; continue-on-error). Full Review Gate (high-risk) + # Review Agent 2026-06 + dedicated reviews/2026-06-XX-grok-market-analysis.md + coordinated 5-SOT updates (see project-awareness.md 4.7). Still pending broader EOD/smart-command worker Grok work.
 - **CI/Unification**:
   - (Completed) Grok CI workflows now reuse `core/grok_client.py` via `.github/scripts/call_grok.py` + dedicated prompts.
 - **Docs/Agent**:

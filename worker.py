@@ -104,6 +104,27 @@ async def poll_dexscreener():
                                 f"**Liquidity:** ${pair.get('liquidity', {}).get('usd', 0):,.0f}\n"
                                 f"[View on DexScreener]({pair.get('url', '#')})"
                             )
+
+                            # Review Agent 2026-06: Optional market/token analysis enhancement for new-pair alerts (first inc, analysis-only).
+                            # Pre-compute pair summary here; call thin core helper (reuses grok_client exclusively).
+                            # Env-gated (MARKET_ANALYSIS_ENABLED, default false), 25s timeout, is_valid gate + fallback, logged, continue-on-error.
+                            # Output: qualitative insight only (no trading/execution language per contract).
+                            # Lazy import protects startup (like EOD PnL pattern).
+                            market_enabled = os.getenv("MARKET_ANALYSIS_ENABLED", "false").lower() == "true"
+                            if market_enabled:
+                                try:
+                                    from core.market_analysis import get_market_insight_with_fallback
+                                    pair_sum = f"{base.get('symbol', '???')} / {quote.get('symbol', '???')} (pair {pair_address})"
+                                    mkt_sum = f"Liquidity ${pair.get('liquidity', {}).get('usd', 0):,.0f}, price ${pair.get('priceUsd', 'N/A')}"
+                                    insight = await get_market_insight_with_fallback(
+                                        pair_sum, mkt_sum, raw_fallback="", timeout=25.0
+                                    )
+                                    if insight:
+                                        msg = f"{msg}\n\n{insight.strip()}"
+                                except Exception as e:
+                                    logger.error(f"Market analysis error (new pair): {e}")
+                                    # continue - no insight appended
+
                             await send_telegram(msg)
                             logger.info(f"New pair alert sent: {base.get('symbol')}")
         except Exception as e:
@@ -173,6 +194,12 @@ async def main():
     eod_enabled = os.getenv("EOD_PNL_ENABLED", "false").lower() == "true"
     eod_hour = int(os.getenv("EOD_PNL_HOUR", "0"))
     logger.info(f"EOD PnL scheduled for {eod_hour:02d}:00 Europe/Athens (enabled={eod_enabled})")
+
+    # Review Agent 2026-06: Market analysis env (first inc, worker-side Grok for token/market insights, analysis-only).
+    # Env-gated (default false). Calls only from existing tasks (e.g. new-pair in poll_dexscreener).
+    # Uses core/market_analysis (thin over grok_client SOT).
+    market_enabled = os.getenv("MARKET_ANALYSIS_ENABLED", "false").lower() == "true"
+    logger.info(f"Market analysis enabled={market_enabled} (for token/pair context in alerts)")
 
     await asyncio.gather(
         heartbeat(),
