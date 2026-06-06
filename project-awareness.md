@@ -248,6 +248,20 @@ The emphasis is on **traceability and protection of what matters**, not on burea
 - All 10 conditions from the Review Agent 2026-06 decision must be followed for implementation.
 - Uses dedicated `prompts/grok_orchestrator_plan.txt` (strict contract) for planning (added 2026-06 per Review Agent Approved with Conditions).
 
+### 4.7 Phase 2: Gated Self-Improvement Readiness (first scoped increment, Review Agent 2026-06 "Approved with Conditions")
+**Scoped MVP (ruthlessly minimal per condition 10)**: Extend the existing `agents/orchestrator.py` with a `--propose-improvements` mode + one new focused prompt (`prompts/grok_improvement_proposer.txt`). The mode reads past Meta Notes + simple outcome data from memory (plan_outcomes, run_history, notes, last_task), calls Grok exclusively via `core/grok_client.py`, and generates structured proposals **only** for improving prompts (starting with `grok_orchestrator_plan.txt`) and memory schema.
+
+- **Proposals only, no auto-apply (conditions 1,8)**: No code may automatically edit prompts, memory files, or any other artifact based on Meta Notes. Full proposal text lives in the printed orchestrator output + reviews/ files. Memory receives only tiny append-only records in `plan_outcomes`.
+- **Review Gate enforcement in every proposal (conditions 2,9)**: The prompt contract forces Grok to embed (in every proposal section) the non-bypassable language: "THIS PROPOSAL REQUIRES A REVIEW AGENT STEP BEFORE ANY IMPLEMENTATION. Master must open todo_write (merge:false), read Primary SOTs, prepend full agents/personas/review-agent.md + todo + this reviews/ file, then call spawn_subagent. Only after Review output is read and addressed may Code edits occur. Master authority is final. No script may apply this proposal."
+- **Master-driven only (conditions 4,8)**: Invocation via `python agents/orchestrator.py --propose-improvements` (manual or scheduled Execute Agent by Master). Master reviews output and controls all follow-on work.
+- **Use existing mechanisms (condition 3)**: core/grok_client.py SOT only. Any real implementation follows the existing spawn_subagent + full persona + SOT handoff (no bypass, no new layers).
+- **Memory schema (condition 7)**: Minimal evolution (`plan_outcomes` append-only array of tiny records). Documented high-risk in json notes, prompt, code comments, and this 4.7. Prefer simple appends + printed output over storing full proposals in memory for the first increment.
+- **No production impact (condition 1)**: Zero changes to worker.py, core/, app/, workflows, or any runtime logic. Pattern for future "Improvement Curator" components is documented but not implemented.
+- **Traceability (condition 5)**: All new code has `# Review Agent 2026-06` comments. This inc is covered by the prior Review decision (this review serves as the gate). Save long outputs to reviews/ (e.g. 2026-06-XX-phase2-feedback-loop.md). Coordinated updates to all 5 Primary SOTs. Future proposal-driven edits require fresh Review + todo + handoff.
+- See: agents/orchestrator.py (new mode + comments), prompts/grok_improvement_proposer.txt (full contract), reviews/2026-06-XX-phase2-feedback-loop.md (10-condition compliance checklist), GROK_COORDINATION.md Section 3, GROK_USAGE.md, AGENTS.md, docs/project-status.md.
+
+This first increment deliberately stops at proposal generation. Any expansion (actual application, broader schema, Curator component, worker integration, etc.) requires its own Review Agent cycle and will be high-risk.
+
 ### 4.6 Practical Integration & Enforcement (How to Use Daily)
 
 **For Human + Master (Grok) Sessions**:

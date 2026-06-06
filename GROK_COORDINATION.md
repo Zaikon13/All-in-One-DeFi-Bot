@@ -133,6 +133,14 @@ From `SYNC.md` (core rule): **SPOT υπερισχύει** — these files define
 - Traceability: # Review Agent 2026-06 comments in new code. reviews/ for outputs.
 - See agents/README.md for Master-Orchestrator relationship and full conditions.
 
+**Phase 2 first scoped increment (Gated Feedback Loop + Self-Improvement Readiness)** (agents/orchestrator.py --propose-improvements + prompts/grok_improvement_proposer.txt, 2026-06 per Review Agent "Approved with Conditions"):
+- Master-driven only. Reads past Meta Notes + simple outcome data from memory; generates structured proposals **only** for prompts (starting with grok_orchestrator_plan.txt) and memory schema.
+- **Proposals only, no auto-apply**. Every proposal text contains explicit non-bypassable Review Gate enforcement ("requires Review Agent + Master todo_write + full persona handoff before any implementation").
+- Uses core/grok_client.py exclusively. Aligns with (does not bypass) existing spawn_subagent + SOT protocol.
+- Minimal memory evolution: plan_outcomes append-only array (high-risk, documented). Full proposals live in printed output + reviews/ (not auto-written to memory).
+- Master authority explicit. No production changes (no worker/core/app/workflow edits). See project-awareness.md 4.7, the new prompt contract, reviews/2026-06-XX-phase2-feedback-loop.md (full 10-condition compliance), and orchestrator.py for the ruthlessly minimal implementation.
+- # Review Agent 2026-06: First increment of Phase 2. "proposals only" + Review Gate language in output + coordinated SOT updates. This review decision serves as the gate for the inc.
+
 **Protocol for Using Them**:
 - Always open complex tasks (3+ steps or any edit/SOT impact) with `todo_write` (merge:false for new lists).
 - One `in_progress` item at a time.

@@ -20,7 +20,7 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 | **Dependency Check** | ✅ Active | Weekly security + outdated package audit (creates issues) |
 | **Worker Loop** | Partially Functional | Real new pair alerts (Dexscreener) + wallet monitoring + heartbeat active |
 | **Grok Usage Map** | New Primary SOT | Complete canonical inventory of all Grok integrations (see GROK_USAGE.md) |
-| **Sub-Agent System + Mandatory Review Gate** | Formalized | 5 agents (Review mandatory before edits) + detailed protocol in project-awareness.md + personas in agents/personas/. Phase 1 Orchestrator + Shared Memory (agents/orchestrator.py + agents/memory/) added 2026-06 per Review Agent Approved with Conditions (High Risk): assists Master (Grok retains authority), committed context/memory, uses core/grok_client.py, references existing spawn_subagent + Review Gate. Foundation/script only. Coordinated SOT updates (no new Primary SOT). |
+| **Sub-Agent System + Mandatory Review Gate** | Formalized | 5 agents (Review mandatory before edits) + detailed protocol in project-awareness.md + personas in agents/personas/. Phase 1 Orchestrator + Shared Memory (agents/orchestrator.py + agents/memory/) added 2026-06 per Review Agent Approved with Conditions (High Risk): assists Master (Grok retains authority), committed context/memory, uses core/grok_client.py, references existing spawn_subagent + Review Gate. Foundation/script only. Coordinated SOT updates (no new Primary SOT). Phase 2 first scoped increment (Gated Feedback Loop + Self-Improvement Readiness, 2026-06 per Review Agent "Approved with Conditions"): minimal Improvement Proposer (`orchestrator.py --propose-improvements` + `prompts/grok_improvement_proposer.txt`). Reads Meta Notes + outcomes; proposals **only** for prompts (grok_orchestrator_plan.txt first) + memory schema. Proposals contain explicit Review Gate enforcement. Proposals-only (no auto-apply, no production changes). Master-driven. plan_outcomes minimal schema (high-risk). Coordinated 5-SOT updates + reviews/2026-06-XX-phase2-feedback-loop.md. See project-awareness.md 4.7. |
 
 **Key Improvements Made**
 - All workflows updated to `actions/checkout@v5` (Node.js 24 support)
@@ -44,4 +44,4 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 
 **Core Rule**: Small PRs → Green CI → Update docs
 
-**Last Updated**: 2026-06 (Grok Code Review triggers expanded with branches/paths per Review Agent 2026-06 Approved with Conditions + prior Health Check CONTRACT) by Grok AI Coordinator
+**Last Updated**: 2026-06 (Phase 2 first scoped inc: gated Improvement Proposer via orchestrator --propose-improvements + new prompt contract; "proposals only" + Review Gate enforcement in output + minimal plan_outcomes schema + coordinated SOTs + reviews/2026-06-XX-phase2-feedback-loop.md per Review Agent 2026-06 "Approved with Conditions") by Grok AI Coordinator

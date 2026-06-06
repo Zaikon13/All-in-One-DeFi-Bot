@@ -132,6 +132,15 @@ See also the implementation in `.github/scripts/call_grok.py` and the two update
 - See agents/README.md, GROK_COORDINATION.md Section 3, project-awareness.md Section 4.6.
 - # Review Agent 2026-06: Per Approved with Conditions. Master authority preserved. Use existing protocol. Memory committed. Coordinated SOT updates (no new Primary SOT).
 
+**Phase 2 first scoped increment — Improvement Proposer (2026-06, Review Agent "Approved with Conditions")**:
+- Master-driven only via `agents/orchestrator.py --propose-improvements` (extends the existing orchestrator per condition 10; no new component).
+- Reads past Meta Notes + simple outcome data from memory; uses `core/grok_client.py` (SOT) + new focused `prompts/grok_improvement_proposer.txt` (strict "GROK IMPROVEMENT PROPOSER CONTRACT") to generate proposals **only** for prompts (grok_orchestrator_plan.txt first) and memory schema.
+- **Proposals only, no auto-apply**. Every proposal section in the Grok output is required (by contract) to contain the full Review Gate enforcement language: requires Review Agent + Master todo_write (merge:false) + full persona prepend + SOT refs + spawn_subagent before any edit. Master authority explicit.
+- Minimal memory schema: plan_outcomes append-only (high-risk; documented in 4.7 + notes; full proposals stay in printed output + reviews/ file).
+- Scope ruthlessly limited: no worker/core/app/workflow/production changes. Aligns with existing handoff protocol for any follow-on work.
+- See project-awareness.md 4.7, GROK_COORDINATION.md Section 3, reviews/2026-06-XX-phase2-feedback-loop.md, and the prompt file for the 10 mandatory conditions and compliance.
+- # Review Agent 2026-06: First gated self-improvement readiness increment. "proposals only" + non-bypassable Review language in generated output + coordinated Primary SOT updates. This review decision is the gate for the inc.
+
 ---
 
 ## 6. Pending / Incomplete Grok Integrations

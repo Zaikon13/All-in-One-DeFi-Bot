@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-agents/orchestrator.py - Phase 1 Orchestrator (assists Master Agent)
+agents/orchestrator.py - Phase 1 Orchestrator (assists Master Agent) + Phase 2 first scoped increment (Improvement Proposer)
 
 Core Mission: Help the Master (Grok) load shared context/memory and use Grok (via SOT) to suggest Sub-Agent plans for tasks.
 This is a **tool that assists the Master**, not a replacement. Grok (Master) retains final decision authority.
@@ -15,16 +15,29 @@ This is a **tool that assists the Master**, not a replacement. Grok (Master) ret
 - Does **not** invent new spawning; uses existing spawn_subagent mechanism.
 - Updates simple memory state after run (Master reviews/approves changes).
 
-**Usage**:
+**Phase 2 First Scoped Increment (Gated Feedback Loop + Self-Improvement Readiness - per Review Agent 2026-06 "Approved with Conditions")**:
+- Master-driven only via new `--propose-improvements` mode (condition 10: extend existing orchestrator.py rather than new component).
+- Reads past Meta Notes + simple outcome data from memory (run_history, notes, last_task, plan_outcomes).
+- Uses Grok **exclusively via core/grok_client.py** to generate structured proposals **only** for prompts (starting with grok_orchestrator_plan.txt) and memory schema.
+- **Every generated proposal contains explicit Review Gate enforcement language** (impossible to act on without Review Agent + Master todo_write + full handoff).
+- Proposals only. No execution, no auto-apply, no changes to worker.py/core/app/workflows/production logic (conditions 1,8).
+- Minimal memory schema evolution allowed (plan_outcomes array) — documented as high-risk (condition 7); full proposals live in printed output + reviews/ file.
+- Master authority explicit in comments, prompt contract, and SOT updates.
+- All new code carries # Review Agent 2026-06 comments. See reviews/2026-06-XX-phase2-feedback-loop.md.
+
+**Usage (Phase 1)**:
   python agents/orchestrator.py --task "Describe the high-level task, e.g. 'Add EOD PnL to worker and update docs'"
 
-Master then uses the plan to drive todo_write + spawn_subagent (with full persona prepended).
+**Usage (Phase 2 first inc - Master-driven only)**:
+  python agents/orchestrator.py --propose-improvements
 
-# Review Agent 2026-06: Phase 1 foundation implementation per "Approved with Conditions (High Risk)". Orchestrator assists Master (does not replace authority or bypass Review Gate). Uses existing spawn_subagent protocol and core/grok_client.py only. Memory files committed; project_context.md updates are high-risk SOT-like. Start simple/script. No new SOT file. Focused on foundation. All new code has traceability. See agents/README.md, Primary SOTs (especially project-awareness.md Section 4 and GROK_COORDINATION.md Section 3), and reviews/2026-06-XX-orchestrator-phase1.md.
+Master then uses any plan or proposals to drive todo_write + spawn_subagent (with full persona prepended). For proposals: Review Gate is mandatory before any follow-on edit.
+
+# Review Agent 2026-06: Phase 1 foundation + Phase 2 first scoped "Improvement Proposer" increment per "Approved with Conditions". Orchestrator assists Master (does not replace authority or bypass Review Gate). Uses existing spawn_subagent protocol and core/grok_client.py only. Memory files committed; project_context.md updates high-risk SOT-like. Proposals strictly limited to prompts + memory schema; every proposal text requires Review Agent before implementation. No autonomous action. See Primary SOTs (project-awareness.md 4.6/4.7, GROK_COORDINATION.md Section 3), agents/README.md, and reviews/2026-06-XX-phase2-feedback-loop.md.
 
 See:
 - agents/README.md (Master-Orchestrator relationship)
-- project-awareness.md (full Sub-Agent + Review Gate protocol)
+- project-awareness.md (full Sub-Agent + Review Gate protocol + 4.7)
 - GROK_COORDINATION.md (agent section)
 - AGENTS.md
 """
@@ -91,20 +104,104 @@ def update_memory_after_run(memory: dict, task: str) -> None:
     if len(memory["run_history"]) > 20:
         memory["run_history"] = memory["run_history"][-20:]
 
+
+# Review Agent 2026-06: New async propose_improvements (Phase 2 first scoped inc - "Improvement Proposer").
+# - Master-driven only (--propose-improvements flag).
+# - Reads Meta Notes + simple outcomes from memory (run_history, notes, last_task, plan_outcomes).
+# - Calls Grok **exclusively** via core/grok_client.py (load_prompt + call_grok + is_valid).
+# - Generates structured proposals for prompts (grok_orchestrator_plan.txt first) + minimal memory schema ONLY.
+# - The prompt contract forces explicit "REQUIRES REVIEW AGENT STEP" language into every proposal (condition 2).
+# - NO apply logic, NO changes to production paths (worker/core/app), NO autonomy (conditions 1,8).
+# - Minimal append to plan_outcomes in memory (full proposal text lives in printed output + reviews/ file).
+# - Aligns with existing handoff: any real follow-on work requires Master todo_write + spawn_subagent (full persona + SOTs).
+async def propose_improvements(context: str, memory: dict) -> str:
+    """Generate gated improvement proposals (prompts + memory schema) using Grok via SOT only. Master reviews output."""
+    from datetime import datetime, timezone
+    # Build simple "past Meta Notes + outcome data" context from committed memory (no external files, no parsing of prior plan text).
+    recent_history = memory.get("run_history", [])[-5:]
+    plan_outcomes = memory.get("plan_outcomes", [])[-3:]
+    meta_context = (
+        f"Last orchestrator task: {memory.get('last_task', 'N/A')}\n"
+        f"Recent run history (task + time): {json.dumps(recent_history, indent=2)}\n"
+        f"Recent plan_outcomes / proposal runs: {json.dumps(plan_outcomes, indent=2)}\n"
+        f"Memory notes: {memory.get('notes', '')[:500]}\n"
+        "Note: Full prior 'Meta Notes for Future Improvement' sections live in historical orchestrator --task stdout (Master may supply additional excerpts when invoking). "
+        "This first increment uses the structured memory fields above as the primary simple outcome data + any Meta Notes reflected in notes/run_history."
+    )
+
+    # Use dedicated focused prompt (new for Phase 2 inc). load_prompt via core/grok_client SOT.
+    # # Review Agent 2026-06: The prompt (grok_improvement_proposer.txt) is contract-enforced to embed Review Gate language in proposals and limit scope ruthlessly.
+    improvement_prompt = load_prompt(
+        "grok_improvement_proposer.txt",
+        context=context[:1800],
+        current_memory=json.dumps(memory, indent=2)[:900],
+        meta_notes_context=meta_context
+    )
+
+    result = await call_grok(improvement_prompt, timeout=45.0)
+    if is_valid_grok_response(result):
+        return result.strip()
+    return f"[Grok improvement proposal generation unavailable or low quality per is_valid_grok_response. Raw: {result[:200]}]"
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Phase 1 Orchestrator - assists Master Agent with context loading and Grok-assisted Sub-Agent planning. "
-                    "Master retains authority and must enforce Review Gate. Uses existing spawn_subagent protocol."
+        description="Phase 1 Orchestrator (+ Phase 2 gated Improvement Proposer) - assists Master Agent. "
+                    "Master retains authority and must enforce Review Gate. Uses existing spawn_subagent protocol + core/grok_client.py only."
     )
-    parser.add_argument("--task", required=True, help="High-level description of the task to plan Sub-Agents for.")
+    # Phase 1 flag (existing)
+    parser.add_argument("--task", help="High-level description of the task to plan Sub-Agents for (Phase 1).")
+    # Phase 2 first inc flag (condition 10: extend existing orchestrator; Master-driven only)
+    parser.add_argument("--propose-improvements", action="store_true",
+                        help="Phase 2 first scoped increment: read past Meta Notes + outcomes from memory and generate gated proposals for prompts (grok_orchestrator_plan.txt) and memory schema only. Proposals-only (no apply). Review Gate language is embedded in output. Master-driven only.")
     args = parser.parse_args()
 
-    print("=== Orchestrator (Phase 1) - Assisting Master Agent ===")
+    if args.propose_improvements and args.task:
+        print("Error: Use either --task (Phase 1 planning) or --propose-improvements (Phase 2 proposals), not both.")
+        sys.exit(2)
+    if not args.propose_improvements and not args.task:
+        print("Error: Provide --task for Phase 1 or --propose-improvements for Phase 2 first inc (see --help).")
+        sys.exit(2)
+
+    print("=== Orchestrator - Assisting Master Agent ===")
     print("Loading committed shared memory (project_context.md is SOT-like; updates require Review Gate)...")
     context, memory = load_shared_memory()
     print(f"  Context length: {len(context)} chars")
     print(f"  Memory version: {memory.get('version')}, last run: {memory.get('last_orchestrator_run')}")
 
+    if args.propose_improvements:
+        # Review Agent 2026-06: Phase 2 first inc path. Strictly proposals for prompts + memory schema.
+        # No production logic touched. Output will contain explicit Review Gate enforcement (per prompt contract).
+        # Master must still open todo_write and follow handoff for any actual edits (condition 2).
+        print("\n=== Phase 2 First Increment: Improvement Proposer (Gated, Master-driven only) ===")
+        print("Reading past Meta Notes + simple outcome data from memory; using Grok via core/grok_client.py SOT...")
+        proposals = await propose_improvements(context, memory)
+
+        print("\n=== Generated Improvement Proposals (Master reviews; NO auto-apply) ===")
+        print(proposals)
+
+        print("\n=== Master Next Steps (MANDATORY - conditions 2,4,8) ===")
+        print("1. Proposals above are for your review ONLY. Every proposal text requires Review Agent before implementation.")
+        print("2. To pursue: Open todo_write (merge:false) with review-gate item, spawn Review Agent (full persona + Primary SOTs + proposal text + this run), address output.")
+        print("3. Only after Review + Master address: use Code Agent for coordinated SOT updates. Reference reviews/2026-06-XX-phase2-feedback-loop.md.")
+        print("4. Never apply proposals directly. This mode stores only a minimal run record in plan_outcomes (full text in printed output + reviews/).")
+        print("5. Commit referencing Review Agent 2026-06 decision.")
+
+        # Minimal memory append (condition 7: prefer plan output + simple appends; do not store full proposals here)
+        from datetime import datetime, timezone
+        memory.setdefault("plan_outcomes", []).append({
+            "type": "improvement_proposal",
+            "time": datetime.now(timezone.utc).isoformat(),
+            "focus": "prompts (grok_orchestrator_plan.txt) + memory_schema",
+            "note": "See printed proposals above. Requires Review Agent + Master todo_write + handoff before any edit. # Review Agent 2026-06"
+        })
+        if len(memory["plan_outcomes"]) > 10:
+            memory["plan_outcomes"] = memory["plan_outcomes"][-10:]
+        save_agent_memory(memory)
+        print("\nMinimal proposal run record appended to plan_outcomes (review before commit). Run complete.")
+        return
+
+    # Existing Phase 1 path (unchanged behavior except updated prints + memory append for outcomes)
     print("\nUsing Grok (exclusively via core/grok_client.py SOT) to generate plan...")
     plan = await get_grok_plan(args.task, context, memory)
 
@@ -120,6 +217,16 @@ async def main() -> None:
     print("6. Commit with reference to this run and Review Agent 2026-06.")
 
     update_memory_after_run(memory, args.task)
+    # Review Agent 2026-06 (Phase 2 prep): also append a lightweight plan outcome record so future --propose-improvements runs have simple history.
+    from datetime import datetime, timezone
+    memory.setdefault("plan_outcomes", []).append({
+        "type": "plan",
+        "time": datetime.now(timezone.utc).isoformat(),
+        "task": args.task,
+        "note": "Phase 1 plan run. Meta Notes for this plan (if any) were in the printed Grok output under '## Meta Notes for Future Improvement'."
+    })
+    if len(memory["plan_outcomes"]) > 10:
+        memory["plan_outcomes"] = memory["plan_outcomes"][-10:]
     save_agent_memory(memory)
     print("\nMemory state lightly updated (review before commit). Run complete.")
 
