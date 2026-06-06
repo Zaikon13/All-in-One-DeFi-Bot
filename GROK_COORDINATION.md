@@ -141,6 +141,9 @@ From `SYNC.md` (core rule): **SPOT υπερισχύει** — these files define
 - Master authority explicit. No production changes (no worker/core/app/workflow edits). See project-awareness.md 4.7, the new prompt contract, reviews/2026-06-XX-phase2-feedback-loop.md (full 10-condition compliance), and orchestrator.py for the ruthlessly minimal implementation.
 - # Review Agent 2026-06: First increment of Phase 2. "proposals only" + Review Gate language in output + coordinated SOT updates. This review decision serves as the gate for the inc.
 
+**Richer-context increment (higher-quality proposals, 2026-06 per Review Agent Approved with Conditions)**: plan_outcomes now supports tiny `meta_summary` (bounded Meta Notes excerpt) on "plan" entries. propose_improvements supplies richer history (last ~8) + meta_summary so proposals can detect patterns and cite specific runs/timestamps with precise before/after suggestions. Still proposals-only, Review Gate enforcement unchanged (now also refs new reviews/2026-06-XX-improve-proposer-quality.md), memory changes minimal + high-risk documented, core/grok_client.py only. See project-awareness.md 4.7 extension + new review file.
+# Review Agent 2026-06: Richer context for specificity while preserving every guardrail from the first Phase 2 inc.
+
 **Protocol for Using Them**:
 - Always open complex tasks (3+ steps or any edit/SOT impact) with `todo_write` (merge:false for new lists).
 - One `in_progress` item at a time.

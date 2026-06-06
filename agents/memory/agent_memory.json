@@ -23,9 +23,16 @@
       "last_used": null
     }
   },
-  "notes": "This file is committed for auditability. It assists the Master Agent with state between sessions. Updates to project_context.md (SOT-like) or significant memory changes are high-risk and require the Mandatory Review Gate + coordinated Primary SOT updates. Railway ephemeral FS limitations apply (see RAILWAY.md and worker persistence). Phase 1 foundation only - no autonomous loops. Phase 2 first inc (Review Agent 2026-06 Approved with Conditions): added plan_outcomes (minimal append-only log for proposals + plan runs). Full proposal text lives in orchestrator printed output + reviews/ files. Any schema evolution is high-risk.",
-  "review_agent_2026_06": "Created as part of Phase 1 per Review Agent Approved with Conditions (High Risk). Master retains authority. Phase 2 first inc extension: plan_outcomes array added (high-risk, documented).",
-  "plan_outcomes": [],
+  "notes": "This file is committed for auditability. It assists the Master Agent with state between sessions. Updates to project_context.md (SOT-like) or significant memory changes are high-risk and require the Mandatory Review Gate + coordinated Primary SOT updates. Railway ephemeral FS limitations apply (see RAILWAY.md and worker persistence). Phase 1 foundation only - no autonomous loops. Phase 2 first inc (Review Agent 2026-06 Approved with Conditions): added plan_outcomes (minimal append-only log for proposals + plan runs). Full proposal text lives in orchestrator printed output + reviews/ files. Any schema evolution is high-risk. Richer-context inc: 'plan' entries may include tiny 'meta_summary' (bounded excerpt of '## Meta Notes for Future Improvement' only). High-risk; documented; full text stays outside this file.",
+  "review_agent_2026_06": "Created as part of Phase 1 per Review Agent Approved with Conditions (High Risk). Master retains authority. Phase 2 first inc extension: plan_outcomes array added (high-risk, documented). Richer context inc: added meta_summary (tiny) to plan entries (high-risk, condition 6).",
+  "plan_outcomes": [
+    {
+      "type": "improvement_proposal",
+      "time": "2026-06-06T05:47:45.757309+00:00",
+      "focus": "prompts (grok_orchestrator_plan.txt) + memory_schema",
+      "note": "See printed proposals above. Requires Review Agent + Master todo_write + handoff before any edit. # Review Agent 2026-06"
+    }
+  ],
   "last_task": "Add EOD PnL calculation to the worker with memory persistence",
   "run_history": [
     {

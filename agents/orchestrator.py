@@ -25,10 +25,15 @@ This is a **tool that assists the Master**, not a replacement. Grok (Master) ret
 - Master authority explicit in comments, prompt contract, and SOT updates.
 - All new code carries # Review Agent 2026-06 comments. See reviews/2026-06-XX-phase2-feedback-loop.md.
 
+**Phase 2 richer-context increment (higher-quality proposals)**: 
+- plan_outcomes now carries tiny `meta_summary` (bounded excerpt of '## Meta Notes for Future Improvement') for "plan" entries.
+- propose_improvements passes last ~8 outcomes + meta_summary so Grok can detect patterns and produce specific, citable, actionable proposals.
+- Still proposals-only, Review Gate enforcement identical, memory changes minimal/high-risk documented. See new review file and updated 4.7.
+
 **Usage (Phase 1)**:
   python agents/orchestrator.py --task "Describe the high-level task, e.g. 'Add EOD PnL to worker and update docs'"
 
-**Usage (Phase 2 first inc - Master-driven only)**:
+**Usage (Phase 2 - Master-driven only)**:
   python agents/orchestrator.py --propose-improvements
 
 Master then uses any plan or proposals to drive todo_write + spawn_subagent (with full persona prepended). For proposals: Review Gate is mandatory before any follow-on edit.
@@ -114,19 +119,41 @@ def update_memory_after_run(memory: dict, task: str) -> None:
 # - NO apply logic, NO changes to production paths (worker/core/app), NO autonomy (conditions 1,8).
 # - Minimal append to plan_outcomes in memory (full proposal text lives in printed output + reviews/ file).
 # - Aligns with existing handoff: any real follow-on work requires Master todo_write + spawn_subagent (full persona + SOTs).
+
+# Review Agent 2026-06 (next inc): Helper for bounded meta notes excerpt (high-risk memory evolution per condition 6).
+# Only tiny excerpts (~450 chars) of the "## Meta Notes for Future Improvement" section are stored in plan_outcomes.
+# Full content remains in printed output + reviews/. Never used for auto-apply.
+def _extract_meta_notes_excerpt(plan_text: str, max_chars: int = 450) -> str:
+    if not plan_text or not isinstance(plan_text, str):
+        return ""
+    marker = "## Meta Notes for Future Improvement"
+    idx = plan_text.find(marker)
+    if idx == -1:
+        return ""
+    excerpt = plan_text[idx:idx + max_chars].strip()
+    # Keep clean: cut at last complete line if possible
+    last_nl = excerpt.rfind("\n")
+    if last_nl > 100:
+        excerpt = excerpt[:last_nl].strip()
+    return excerpt or ""
+
+
 async def propose_improvements(context: str, memory: dict) -> str:
     """Generate gated improvement proposals (prompts + memory schema) using Grok via SOT only. Master reviews output."""
     from datetime import datetime, timezone
-    # Build simple "past Meta Notes + outcome data" context from committed memory (no external files, no parsing of prior plan text).
+    # Build richer "past Meta Notes + outcome data" context (this inc: last 5-8 plan_outcomes + any meta_summary).
+    # # Review Agent 2026-06: Richer but still bounded history for higher-quality, specific, pattern-aware proposals.
+    # Full prior Meta Notes live in stdout/reviews/; we only pass tiny excerpts via meta_summary in plan_outcomes.
     recent_history = memory.get("run_history", [])[-5:]
-    plan_outcomes = memory.get("plan_outcomes", [])[-3:]
+    plan_outcomes = memory.get("plan_outcomes", [])[-8:]  # modestly richer per scoped MVP
     meta_context = (
         f"Last orchestrator task: {memory.get('last_task', 'N/A')}\n"
         f"Recent run history (task + time): {json.dumps(recent_history, indent=2)}\n"
-        f"Recent plan_outcomes / proposal runs: {json.dumps(plan_outcomes, indent=2)}\n"
+        f"Recent plan_outcomes (with meta_summary when present for prior plans): {json.dumps(plan_outcomes, indent=2)}\n"
         f"Memory notes: {memory.get('notes', '')[:500]}\n"
-        "Note: Full prior 'Meta Notes for Future Improvement' sections live in historical orchestrator --task stdout (Master may supply additional excerpts when invoking). "
-        "This first increment uses the structured memory fields above as the primary simple outcome data + any Meta Notes reflected in notes/run_history."
+        "Note: meta_summary (if present) contains a short bounded excerpt of the '## Meta Notes for Future Improvement' section from that run's plan output. "
+        "Use it + run timestamps to detect patterns (e.g. repeated weak Meta Notes quality, missing context). "
+        "Master may still supply additional full excerpts when invoking. This increment improves specificity while remaining proposals-only."
     )
 
     # Use dedicated focused prompt (new for Phase 2 inc). load_prompt via core/grok_client SOT.
@@ -151,9 +178,9 @@ async def main() -> None:
     )
     # Phase 1 flag (existing)
     parser.add_argument("--task", help="High-level description of the task to plan Sub-Agents for (Phase 1).")
-    # Phase 2 first inc flag (condition 10: extend existing orchestrator; Master-driven only)
+    # Phase 2 flag (condition 10 + richer context inc: extend existing orchestrator; Master-driven only)
     parser.add_argument("--propose-improvements", action="store_true",
-                        help="Phase 2 first scoped increment: read past Meta Notes + outcomes from memory and generate gated proposals for prompts (grok_orchestrator_plan.txt) and memory schema only. Proposals-only (no apply). Review Gate language is embedded in output. Master-driven only.")
+                        help="Phase 2: read past Meta Notes + outcomes (incl. tiny meta_summary excerpts) from memory and generate gated proposals for prompts (grok_orchestrator_plan.txt) and memory schema only. Richer history for more specific/actionable proposals. Proposals-only (no apply). Review Gate language embedded. Master-driven only.")
     args = parser.parse_args()
 
     if args.propose_improvements and args.task:
@@ -188,6 +215,7 @@ async def main() -> None:
         print("5. Commit referencing Review Agent 2026-06 decision.")
 
         # Minimal memory append (condition 7: prefer plan output + simple appends; do not store full proposals here)
+        # Review Agent 2026-06: proposal run record only (no meta content needed beyond the printed proposals).
         from datetime import datetime, timezone
         memory.setdefault("plan_outcomes", []).append({
             "type": "improvement_proposal",
@@ -217,14 +245,20 @@ async def main() -> None:
     print("6. Commit with reference to this run and Review Agent 2026-06.")
 
     update_memory_after_run(memory, args.task)
-    # Review Agent 2026-06 (Phase 2 prep): also append a lightweight plan outcome record so future --propose-improvements runs have simple history.
+    # Review Agent 2026-06 (richer context inc): append plan outcome + tiny meta_summary excerpt (high-risk per condition 6).
+    # Only the bounded excerpt of '## Meta Notes for Future Improvement' is captured here so future --propose-improvements
+    # runs can detect patterns. Full Meta Notes text lives in the printed plan + reviews/ files. No auto-apply.
     from datetime import datetime, timezone
-    memory.setdefault("plan_outcomes", []).append({
+    meta_excerpt = _extract_meta_notes_excerpt(plan)
+    plan_outcome = {
         "type": "plan",
         "time": datetime.now(timezone.utc).isoformat(),
         "task": args.task,
-        "note": "Phase 1 plan run. Meta Notes for this plan (if any) were in the printed Grok output under '## Meta Notes for Future Improvement'."
-    })
+        "note": "Phase 1 plan run. See meta_summary for bounded excerpt of '## Meta Notes for Future Improvement'. Full text in printed output + reviews/.",
+    }
+    if meta_excerpt:
+        plan_outcome["meta_summary"] = meta_excerpt
+    memory.setdefault("plan_outcomes", []).append(plan_outcome)
     if len(memory["plan_outcomes"]) > 10:
         memory["plan_outcomes"] = memory["plan_outcomes"][-10:]
     save_agent_memory(memory)

@@ -141,6 +141,9 @@ See also the implementation in `.github/scripts/call_grok.py` and the two update
 - See project-awareness.md 4.7, GROK_COORDINATION.md Section 3, reviews/2026-06-XX-phase2-feedback-loop.md, and the prompt file for the 10 mandatory conditions and compliance.
 - # Review Agent 2026-06: First gated self-improvement readiness increment. "proposals only" + non-bypassable Review language in generated output + coordinated Primary SOT updates. This review decision is the gate for the inc.
 
+**Richer-context increment (higher-quality/specific proposals)**: plan_outcomes "plan" entries may include tiny `meta_summary` (excerpt). propose_improvements passes last ~8 outcomes + meta_summary; prompt now requires pattern detection across history, explicit citations of timestamps/entries, and precise copy-paste-ready suggestions (sections + before/after). Scope and all 9 mandatory conditions preserved (proposals-only, Review Gate paragraph intact and now references new review file, high-risk minimal memory, core client only). See project-awareness.md 4.7 + reviews/2026-06-XX-improve-proposer-quality.md.
+# Review Agent 2026-06: Targeted context + prompt improvements for better proposals while keeping every original guardrail.
+
 ---
 
 ## 6. Pending / Incomplete Grok Integrations
