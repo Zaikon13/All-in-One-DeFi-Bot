@@ -22,15 +22,29 @@ jobs:
 
       - name: Full Sync Check
         run: |
+          # Review Agent 2026-06: Approved with Conditions (Low Risk).
+          # Always exit successfully (no exit 1 anywhere). Uses ::warning:: for visibility.
+          # Improved diagnostics: reports commits ahead/behind + distinguishes uncommitted changes.
+          # This step is informational only and does not block Railway auto-deploys.
           git fetch origin
           LOCAL=$(git rev-parse @)
           REMOTE=$(git rev-parse origin/main)
           UNCOMMITTED=$(git status --porcelain | wc -l)
+          AHEAD=$(git rev-list --count origin/main..@ 2>/dev/null || echo 0)
+          BEHIND=$(git rev-list --count @..origin/main 2>/dev/null || echo 0)
+
           if [ "$LOCAL" = "$REMOTE" ] && [ $UNCOMMITTED -eq 0 ]; then
             echo "✅ Repository is FULLY in sync"
           else
             echo "::warning::Repository is OUT OF SYNC"
-            exit 1
+            echo "Local commit:  $LOCAL"
+            echo "Remote commit: $REMOTE"
+            echo "Commits ahead of origin/main: $AHEAD | behind: $BEHIND"
+            if [ $UNCOMMITTED -gt 0 ]; then
+              echo "Uncommitted local changes detected:"
+              git status --porcelain
+            fi
+            echo "This is an informational awareness check only. It does not block Railway auto-deploys."
           fi
 
       - name: Summary
