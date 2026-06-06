@@ -173,6 +173,50 @@ async def scheduled_eod_pnl():
             try:
                 from core.pnl_calculator import get_daily_pnl_report
                 report = await get_daily_pnl_report()
+
+                # Review Agent 2026-06: Optional market context for scheduled EOD PnL (second inc, analysis-only).
+                # Approved with Conditions (High risk). Exactly one additional point (EOD post-process only).
+                # Reuses *exact* core/market_analysis.py + prompts/grok_market_analysis.txt (no new prompts, no CONTRACT changes).
+                # Pre-compute compact snapshot here (after await, inside existing scheduled_eod_pnl task).
+                # Uses proven inline dexscreener fetch pattern (from poll_dexscreener in same file) for minimal change.
+                # Env-gated via MARKET_ANALYSIS_ENABLED (default false), 25s timeout, is_valid_grok_response gate + fallback.
+                # Appends clearly labeled **Market Context:** section *after* the untouched report (incl. any internal Grok Daily Insight).
+                # Lazy import + try/except: base EOD report never degraded. Logged. Continue-on-error.
+                # No decision/execution language (enforced by prompt CONTRACT). No new loops. Runtime analysis only.
+                # See 12 mandatory conditions in new reviews/ file + prior 2026-06-XX-grok-market-analysis.md.
+                market_enabled = os.getenv("MARKET_ANALYSIS_ENABLED", "false").lower() == "true"
+                if market_enabled:
+                    try:
+                        from core.market_analysis import get_market_insight_with_fallback
+                        pair_summary = "Cronos ecosystem EOD market snapshot"
+                        mkt_data_summary = "Limited recent pair data available"
+                        try:
+                            # Minimal one-off fetch for compact pre-computed context (top pairs liquidity/activity).
+                            # Data stays in Python summaries; Grok receives only qualitative-friendly strings per CONTRACT.
+                            url = "https://api.dexscreener.com/latest/dex/search?q=cronos"
+                            async with httpx.AsyncClient(timeout=15) as client:
+                                r = await client.get(url)
+                                if r.status_code == 200:
+                                    pairs = (r.json() or {}).get("pairs", [])[:3]
+                                    parts = []
+                                    for p in pairs:
+                                        b = p.get("baseToken", {}).get("symbol", "?")
+                                        q = p.get("quoteToken", {}).get("symbol", "?")
+                                        liq = p.get("liquidity", {}).get("usd", 0)
+                                        parts.append(f"{b}/{q} (liq ~{liq})")
+                                    if parts:
+                                        mkt_data_summary = "; ".join(parts)
+                        except Exception:
+                            pass  # best-effort snapshot; safe empty fallback
+                        insight = await get_market_insight_with_fallback(
+                            pair_summary, mkt_data_summary, raw_fallback="", timeout=25.0
+                        )
+                        if insight:
+                            report = f"{report}\n\n**Market Context:**\n{insight.strip()}"
+                    except Exception as e:
+                        logger.error(f"Market analysis error (EOD PnL): {e}")
+                        # continue - original report sent unchanged (never degrade)
+
                 await send_telegram(f"📊 **Automatic EOD PnL Report**\n\n{report}")
             except Exception as e:
                 logger.error(f"EOD PnL error: {e}")
