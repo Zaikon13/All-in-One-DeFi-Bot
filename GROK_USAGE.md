@@ -80,8 +80,10 @@ Both Grok-calling workflows now reuse the centralized Python client (no more inl
 - **.github/workflows/grok-code-review.yml**:
   - Trigger: PR opened/synchronize/reopened.
   - Gets diff (truncated), calls via script + `prompts/grok_code_review.txt` (loaded with {diff}).
+  - Uses strict **GROK CODE REVIEW CONTRACT** (redesigned 2026-06 per Review Agent "Approved with Conditions" - High Risk): requires Critical/High/Medium with file:line, SOT & Coordination Alignment, mandatory Documentation & Primary SOT Impact section, High-Risk Files Touched, Project Rule Violations (Review Gate comments, core/ reuse, UTC, Railway ephemeral FS, legacy protection, smallest correct change, etc.), Actionable Recommendations.
   - Posts review as PR comment via github-script.
-  - `continue-on-error: true`.
+  - `continue-on-error: true` (advisory/supplementary only; the true mandatory gate is the internal Review Agent pre-edit per project-awareness.md 4.3).
+  - # Review Agent 2026-06: Contract enforces full alignment with Primary SOTs, personas, and coordination rules. This CI review supports (does not replace) the Review Gate.
 
 - **.github/workflows/health-check.yml**:
   - Trigger: schedule + workflow_dispatch.

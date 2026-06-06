@@ -44,7 +44,7 @@ This is the **central coordination and Single Source of Truth** document for all
   - `core/pnl_calculator.py`: `/daily_pnl` Grok insight enhancement using `prompts/grok_daily_pnl.txt` (with pre-computed summaries, 25s timeout, quality gate, safe fallbacks).
 - **CI / GitHub Actions** (now unified to reuse `core/grok_client.py`):
   - `.github/scripts/call_grok.py`: Reusable CLI (setup-python + pip -r + PYTHONPATH) that loads from `prompts/` and calls via the SOT client.
-  - `.github/workflows/grok-code-review.yml`: PR diff reviews (via `prompts/grok_code_review.txt` + {diff} var).
+  - `.github/workflows/grok-code-review.yml`: PR diff reviews (via `prompts/grok_code_review.txt` + {diff} var). Now uses strict GROK CODE REVIEW CONTRACT (2026-06, Review Agent Approved with Conditions) requiring SOT alignment, mandatory doc impact, high-risk scrutiny, Review Gate comments, core/ reuse, UTC/Railway/legacy rules. Advisory (`continue-on-error: true`).
   - `.github/workflows/health-check.yml`: Railway failure analysis + Issue (via `prompts/grok_health_check.txt` + {status} var).
   - Both keep `continue-on-error: true` and github-script posting.
 - **Prompts** (in `prompts/` , now shared by runtime + CI, loaded exclusively via client):
