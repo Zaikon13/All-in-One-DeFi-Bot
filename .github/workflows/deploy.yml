@@ -28,13 +28,17 @@ jobs:
           echo "All Python files syntax OK"
 
       - name: Test Critical Imports
+        # Review Agent 2026-06: Rewritten as valid YAML step (was broken by embedded multi-line Python code with quotes inside the | block, causing "Invalid workflow file" errors).
+        # This step validates that critical production modules can be imported successfully at runtime (complements the pure syntax check in the "Validate Python Syntax" step above).
+        # Dummy environment variables are supplied to bypass top-level API key / wallet checks inside core/pnl_calculator.py that would otherwise raise ValueError on import in CI.
+        # Uses separate single-line python -c commands for clean YAML parsing (no complex quoting or heredocs needed).
+        env:
+          COVALENT_API_KEY: ci-dummy-for-import-test-only
+          ETHERSCAN_API_KEY: ci-dummy-for-import-test-only
+          WALLET_ADDRESS: 0x0000000000000000000000000000000000000000
         run: |
-          python -c "
-from app.main import app
-print('FastAPI app imports successfully')
-from core.pnl_calculator import calculate_daily_pnl
-print('PnL calculator imports successfully')
-          "
+          python -c "from app.main import app; print('FastAPI app imports successfully')"
+          python -c "from core.pnl_calculator import calculate_daily_pnl; print('PnL calculator imports successfully')"
 
       - name: Deployment Status
         if: success()
