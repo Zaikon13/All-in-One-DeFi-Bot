@@ -4,7 +4,8 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -122,6 +123,41 @@ async def monitor_wallet():
         await asyncio.sleep(WALLET_CHECK_INTERVAL)
 
 
+# Review Agent 2026-06-06: EOD PnL Automation (scheduled daily report).
+# Design: Approved with Conditions by Review Agent (robust scheduler required).
+# Mandatory: zoneinfo.ZoneInfo (no pytz), proper next target calc at startup + after
+# each cycle (DST-safe for Europe/Athens), if now past target hour then schedule next day,
+# avoid dups/misses especially post-Railway restart, max(60s) sleep, continue on error.
+# Reuses core.pnl_calculator.get_daily_pnl_report() *exactly* (no modifications allowed).
+# Automatic path ONLY adds the "📊 **Automatic EOD PnL Report**" header.
+# Manual /daily_pnl (app/main.py process_daily_pnl) remains 100% untouched and primary.
+# Env: EOD_PNL_ENABLED (default false), EOD_PNL_HOUR (0-23, default 0).
+# Lazy import of the PnL reporter inside the send block (protects worker startup if
+# COVALENT/ETHERSCAN keys not present in worker service env; top-level in pnl_calculator
+# has hard guards).
+async def scheduled_eod_pnl():
+    athens = ZoneInfo("Europe/Athens")
+    enabled = os.getenv("EOD_PNL_ENABLED", "false").lower() == "true"
+    hour = int(os.getenv("EOD_PNL_HOUR", "0"))
+
+    while True:
+        now = datetime.now(athens)
+        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        sleep_s = max(60, (target - datetime.now(athens)).total_seconds())
+        await asyncio.sleep(sleep_s)
+
+        if enabled:
+            try:
+                from core.pnl_calculator import get_daily_pnl_report
+                report = await get_daily_pnl_report()
+                await send_telegram(f"📊 **Automatic EOD PnL Report**\n\n{report}")
+            except Exception as e:
+                logger.error(f"EOD PnL error: {e}")
+                await send_telegram("❌ Automatic EOD PnL report failed. Check logs.")
+
+
 async def main():
     global seen_pairs
     logger.info("🚀 Worker started")
@@ -132,10 +168,17 @@ async def main():
         logger.info(f"Loaded {len(seen_pairs)} known pairs from disk")
 
     await send_telegram("✅ **All-in-One-DeFi-Bot worker is online.**")
+
+    # EOD PnL schedule (Review Agent 2026-06-06)
+    eod_enabled = os.getenv("EOD_PNL_ENABLED", "false").lower() == "true"
+    eod_hour = int(os.getenv("EOD_PNL_HOUR", "0"))
+    logger.info(f"EOD PnL scheduled for {eod_hour:02d}:00 Europe/Athens (enabled={eod_enabled})")
+
     await asyncio.gather(
         heartbeat(),
         poll_dexscreener(),
-        monitor_wallet()
+        monitor_wallet(),
+        scheduled_eod_pnl()
     )
 
 
