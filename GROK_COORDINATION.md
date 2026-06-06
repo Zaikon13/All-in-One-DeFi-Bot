@@ -122,6 +122,17 @@ From `SYNC.md` (core rule): **SPOT υπερισχύει** — these files define
 - Personas live in `agents/personas/` (in addition to bundled skills personas). The bundled `review` skill is for GitHub PR reviews only; the internal Review Agent is the pre-edit gate.
 - MCP Server: `grok_com_github` — all GitHub operations. Use `search_tool` first for schema.
 
+**Phase 1 Orchestrator (agents/orchestrator.py + agents/memory/)** (added 2026-06 per Review Agent "Approved with Conditions", High Risk):
+- Tool that **assists the Master Agent** (Grok retains final authority; does not replace Master or bypass Review Gate).
+- Loads committed shared `memory/project_context.md` (SOT-like human summary; meaningful updates are high-risk SOT changes requiring Review + coordinated Primary SOT update) and `agent_memory.json` (simple state, committed for auditability, subject to Railway ephemeral FS limitations).
+- Uses **core/grok_client.py exclusively** for any Grok planning calls.
+- Suggests plans that reference the existing handoff protocol (todo_write, full personas prepended, SOT refs, spawn_subagent).
+- For high-risk work: explicitly recommends spawning Review Agent first.
+- Start simple: script (manual or scheduled via existing skills); foundation only (no autonomy, loops, or self-improvement in Phase 1).
+- Sub-agents/ are thin wrappers only; spawning uses the official mechanism.
+- Traceability: # Review Agent 2026-06 comments in new code. reviews/ for outputs.
+- See agents/README.md for Master-Orchestrator relationship and full conditions.
+
 **Protocol for Using Them**:
 - Always open complex tasks (3+ steps or any edit/SOT impact) with `todo_write` (merge:false for new lists).
 - One `in_progress` item at a time.

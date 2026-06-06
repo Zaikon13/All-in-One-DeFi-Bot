@@ -24,7 +24,8 @@
 - Health Check + Telegram automation (strict GROK HEALTH CHECK CONTRACT, improved Telegram value with safe Markdown, worker limitation noted per Review Agent 2026-06)
 - Documentation cleanup
 - Workflow stability
+- Phase 1 Orchestrator + Shared Memory (agents/orchestrator.py + agents/memory/ per Review Agent 2026-06 Approved with Conditions, High Risk): assists Master (Grok retains authority), loads committed context/memory, uses core/grok_client.py, references existing spawn_subagent + Review Gate. Foundation/script only. Coordinated SOT updates (no new Primary SOT).
 
 **Next Priority**: Complete remaining Worker Loop features (persistence, EOD PnL, better filtering) + PnL refactoring. See GROK_COORDINATION.md + GROK_USAGE.md for coordination.
 
-All non-trivial implementation work (including the above) must follow the **Mandatory Review Gate** defined in `project-awareness.md` Section 4.3 and `agents/personas/review-agent.md`. The improved Grok Code Review (strict contract + expanded triggers) and Health Check CI (strict contracts) are advisory support for this gate.
+All non-trivial implementation work (including the above) must follow the **Mandatory Review Gate** defined in `project-awareness.md` Section 4.3 and `agents/personas/review-agent.md`. The improved Grok Code Review (strict contract + expanded triggers), Health Check CI (strict contracts), and Phase 1 Orchestrator are advisory support for this gate. Master retains final authority.

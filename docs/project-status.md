@@ -20,7 +20,7 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 | **Dependency Check** | ✅ Active | Weekly security + outdated package audit (creates issues) |
 | **Worker Loop** | Partially Functional | Real new pair alerts (Dexscreener) + wallet monitoring + heartbeat active |
 | **Grok Usage Map** | New Primary SOT | Complete canonical inventory of all Grok integrations (see GROK_USAGE.md) |
-| **Sub-Agent System + Mandatory Review Gate** | Formalized | 5 agents (Review mandatory before edits) + detailed protocol in project-awareness.md + personas in agents/personas/ |
+| **Sub-Agent System + Mandatory Review Gate** | Formalized | 5 agents (Review mandatory before edits) + detailed protocol in project-awareness.md + personas in agents/personas/. Phase 1 Orchestrator + Shared Memory (agents/orchestrator.py + agents/memory/) added 2026-06 per Review Agent Approved with Conditions (High Risk): assists Master (Grok retains authority), committed context/memory, uses core/grok_client.py, references existing spawn_subagent + Review Gate. Foundation/script only. Coordinated SOT updates (no new Primary SOT). |
 
 **Key Improvements Made**
 - All workflows updated to `actions/checkout@v5` (Node.js 24 support)

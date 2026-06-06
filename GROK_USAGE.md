@@ -122,6 +122,16 @@ See also the implementation in `.github/scripts/call_grok.py` and the two update
 - **Skills**: Bundled `review` is for GitHub PR reviews. Internal Sub-Agent Review is the pre-edit gate. Other skills (pr-babysit, implement, etc.) for specific automation.
 - **MCP**: grok_com_github for GitHub ops.
 
+**Phase 1 Orchestrator (2026-06, Review Agent "Approved with Conditions", High Risk)**:
+- `agents/orchestrator.py` + `agents/memory/` assists Master (Grok retains final authority; does not replace or bypass Review Gate).
+- Loads committed `project_context.md` (SOT-like; meaningful updates high-risk requiring Review + coordinated SOT update) and `agent_memory.json`.
+- Uses `core/grok_client.py` (SOT) exclusively for Grok planning.
+- Plans reference existing handoff (todo_write + full personas + SOTs + spawn_subagent).
+- High-risk: must recommend Review Agent first.
+- Start simple/script (manual/scheduled). Foundation only.
+- See agents/README.md, GROK_COORDINATION.md Section 3, project-awareness.md Section 4.6.
+- # Review Agent 2026-06: Per Approved with Conditions. Master authority preserved. Use existing protocol. Memory committed. Coordinated SOT updates (no new Primary SOT).
+
 ---
 
 ## 6. Pending / Incomplete Grok Integrations

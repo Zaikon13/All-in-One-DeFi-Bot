@@ -233,6 +233,20 @@ The emphasis is on **traceability and protection of what matters**, not on burea
 - All permanent decisions live in the repo (especially Primary SOTs). Never rely on chat history alone.
 - For GitHub PR reviews, use the separate bundled `review` skill (posts PENDING reviews on GitHub). The internal Review Agent is for pre-edit gatekeeping.
 
+### 4.6 Phase 1 Orchestrator + Shared Memory (2026-06, Review Agent "Approved with Conditions", High Risk)
+- `agents/orchestrator.py` + `agents/memory/` (project_context.md + agent_memory.json) is a **tool that assists the Master**, not a replacement. Grok (Master) retains final decision authority.
+- Loads committed shared context/memory to reduce repeated SOT re-reading.
+- Uses `core/grok_client.py` (SOT) exclusively for Grok planning calls.
+- Plans must reference the existing handoff (todo_write + full persona prepended + SOT refs + spawn_subagent).
+- High-risk work: must still enforce Review Gate (spawn Review persona or require Master to run it).
+- Start simple: script (manual/scheduled). No long-running autonomous daemon or self-improvement in Phase 1.
+- `project_context.md` is SOT-like (committed); meaningful updates are high-risk and require Review + coordinated Primary SOT updates.
+- `agent_memory.json` is committed for auditability (subject to Railway ephemeral FS risks, like worker known_pairs).
+- Sub-agents/ wrappers are convenience only; use official spawn_subagent.
+- Traceability: # Review Agent 2026-06 comments in new code. Save reviews to reviews/ (e.g. 2026-06-XX-orchestrator-phase1.md).
+- See agents/README.md (Master-Orchestrator relationship) and GROK_COORDINATION.md Section 3.
+- All 10 conditions from the Review Agent 2026-06 decision must be followed for implementation.
+
 ### 4.6 Practical Integration & Enforcement (How to Use Daily)
 
 **For Human + Master (Grok) Sessions**:

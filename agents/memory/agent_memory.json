@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-06",
+  "last_orchestrator_run": null,
+  "context_version": "2026-06",
+  "pending_high_risk_tasks": [],
+  "agent_state": {
+    "review": {
+      "last_used": null,
+      "last_context": null
+    },
+    "code": {
+      "last_used": null,
+      "last_context": null
+    },
+    "execute": {
+      "last_used": null
+    },
+    "analysis": {
+      "last_used": null
+    },
+    "research": {
+      "last_used": null
+    }
+  },
+  "notes": "This file is committed for auditability. It assists the Master Agent with state between sessions. Updates to project_context.md (SOT-like) or significant memory changes are high-risk and require the Mandatory Review Gate + coordinated Primary SOT updates. Railway ephemeral FS limitations apply (see RAILWAY.md and worker persistence). Phase 1 foundation only - no autonomous loops.",
+  "review_agent_2026_06": "Created as part of Phase 1 per Review Agent Approved with Conditions (High Risk). Master retains authority."
+}
