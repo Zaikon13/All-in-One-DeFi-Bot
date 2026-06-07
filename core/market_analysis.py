@@ -11,10 +11,18 @@ Usage pattern (exact match to PnL/grok-analyze):
 - Check is_valid_grok_response; fallback to raw summary if not.
 - Env-gated and logged by caller.
 
-# Review Agent 2026-06: First increment of worker-side Grok market analysis.
-# High-risk (worker.py + new Grok site + prompt contract). Must follow full Review Gate.
-# Reuses client exclusively. No autonomy. Thin extension of existing runtime patterns.
-# See 12 mandatory conditions in reviews/2026-06-XX-grok-market-analysis.md and Primary SOTs.
+The prompt now produces structured 6-section Markdown output (enrichment inc):
+1. Summary 2. Key Metrics 3. Market Narrative 4. Risk Signals
+5. Observed Patterns & Contextual Watchpoints (renamed per Review to avoid actionable framing)
+6. Confidence & Data Notes
+
+# Review Agent 2026-06: Structured output enrichment (Approved with Conditions, High risk).
+# Follows all 12 mandatory conditions from the Review Agent report (see reviews/2026-06-XX-grok-market-analysis-structured.md).
+# Key: read-only/thin, CONTRACT updated for structure but analysis-only + safe MD preserved,
+# section 5 renamed, no execution language, pre-compute unchanged, safety gates untouched,
+# no pnl_calculator or grok_daily_pnl changes, coordinated 5-SOT + new review artifact required,
+# capability itself subject to gate. Primary SOTs read before edit.
+# Reuses client exclusively. No new data, no autonomy. Thin extension of existing runtime patterns.
 """
 
 from core.grok_client import load_prompt, call_grok, is_valid_grok_response

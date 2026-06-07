@@ -4,7 +4,7 @@
 
 **Purpose**: Complete, canonical map of **all** Grok integrations in the repository (Python runtime call sites, CI workflows, prompts with contracts, quality gates, dependencies, pending items). This is a **Primary SOT** (see GROK_COORDINATION.md SOT table).
 
-**Last Updated**: 2026-06 (coordinated docs update for Grok SOT structure)
+**Last Updated**: 2026-06-07 (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown; analysis only, renamed watchpoints, all 12 conditions + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
 
 **See also**:
 - GROK_COORDINATION.md (central hub + SOT definitions)
@@ -150,6 +150,8 @@ See also the implementation in `.github/scripts/call_grok.py` and the two update
 **Drift Detection v2 (2026-06 per Review Agent "Approved with Conditions", Medium-High risk)**: Modest evolution (extend existing; 1-2 addl high-value areas e.g. arg parsing + SOT cross-refs). Smarter bounded context (targeted extraction + recent plan_outcomes/drift summaries for patterns). Evolved prompt requires citations of prior runs + stronger evidence/precise fixes (history for quality only, condition 12). Still proposals-only, full gate (refs v2 review), tiny memory (high-risk), core client only, detector auditable (condition 10). See project-awareness.md + reviews/2026-06-XX-drift-detection-v2.md + 12 conditions.
 # Review Agent 2026-06: Bounded v2 per conditions; proposals-only with non-bypassable gate; Master-driven; minimal high-risk memory; coordinated SOTs.
 
+**SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: Added SOT Coordinated PR Helper (--sot-pr-helper) to agents/orchestrator.py per Review Agent Approved with Conditions (High risk). Read-only advisory only. Analyzes change to one SOT and generates ready-to-paste text for the other 4 SOTs. Reuses dry-run logic. All 12 mandatory conditions followed exactly. Primary SOTs read before implementation and on every run. Advisory only (orchestrator --sot-pr-helper). See GROK_COORDINATION.md and reviews/ for usage + 12 conditions. # Review Agent 2026-06
+
 ---
 
 ## 6. Pending / Incomplete Grok Integrations
@@ -158,7 +160,7 @@ See also the implementation in `.github/scripts/call_grok.py` and the two update
   - Full EOD PnL scheduling + reports (worker + Grok).
   - More smart commands: `/smart-report`, `/daily-insight`.
   - Scheduled automations (EOD PnL, Daily Summary, Risk Alerts).
-  - Worker integration for Grok (currently indirect via PnL reports + 1 low-risk optional analysis-only path + 1 additional EOD point per second inc): new-pair alerts in poll_dexscreener may append qualitative Grok insight; scheduled EOD PnL reports may append separate **Market Context** (post-process only after get_daily_pnl_report, using exact same thin core/market_analysis.py + grok_market_analysis.txt, no changes to core/pnl_calculator.py or grok_daily_pnl.txt). Env-gated via MARKET_ANALYSIS_ENABLED=false default; 25s + is_valid gate + fallback; pre-compute in Python; analysis/summarization/insights ONLY per strict CONTRACT; no decision/execution use; logged; continue-on-error. Full Review Gate (high-risk) + # Review Agent 2026-06 + dedicated reviews/2026-06-XX-grok-market-analysis.md + reviews/2026-06-XX-worker-market-analysis-eod.md + coordinated 5-SOT updates (see project-awareness.md 4.7). Still pending broader EOD/smart-command worker Grok work.
+  - Worker integration for Grok (currently indirect via PnL reports + 1 low-risk optional analysis-only path + 1 additional EOD point per second inc): new-pair alerts in poll_dexscreener may append qualitative Grok insight; scheduled EOD PnL reports may append separate **Market Context** (post-process only after get_daily_pnl_report, using exact same thin core/market_analysis.py + grok_market_analysis.txt, no changes to core/pnl_calculator.py or grok_daily_pnl.txt). Env-gated via MARKET_ANALYSIS_ENABLED=false default; 25s + is_valid gate + fallback; pre-compute in Python; analysis/summarization/insights ONLY per strict CONTRACT; no decision/execution use; logged; continue-on-error. Structured 6-section Markdown output enrichment (2026-06 per Review Agent Approved with Conditions, High risk): prompt updated for Summary / Key Metrics / Market Narrative / Risk Signals / Observed Patterns & Contextual Watchpoints (renamed) / Confidence & Data Notes; all prior 12 conditions + new ones followed (analysis only, safe MD, no execution). Full Review Gate (high-risk) + # Review Agent 2026-06 + dedicated reviews/2026-06-XX-grok-market-analysis.md + reviews/2026-06-XX-worker-market-analysis-eod.md + reviews/2026-06-XX-grok-market-analysis-structured.md + coordinated 5-SOT updates (see project-awareness.md 4.7). Still pending broader EOD/smart-command worker Grok work. # Review Agent 2026-06: Structured output inc.
 - **CI/Unification**:
   - (Completed) Grok CI workflows now reuse `core/grok_client.py` via `.github/scripts/call_grok.py` + dedicated prompts.
 - **Docs/Agent**:

@@ -5,20 +5,36 @@ You are given PRE-COMPUTED data for analysis (strictly use only this):
 - Market context (liquidity, price, volume snapshots, recent activity): {market_data_summary}
 
 GROK OUTPUT CONTRACT (MANDATORY - HIGHEST PRIORITY):
-- Return **ONLY** a clean, professional 3-6 sentence qualitative insight paragraph or short summary.
-- You are **STRICTLY FORBIDDEN** from repeating any numbers, prices, addresses, tables, or quantitative data already provided above.
-- All metrics and data presentation are handled exclusively by the Python code. Your role is pure qualitative insight, context, or anomaly observation only.
-- Base your analysis **strictly and only** on the pre-computed data provided above. No external knowledge, current prices, predictions, or hypothetical scenarios.
-
-TELEGRAM MARKDOWN SAFETY (MANDATORY):
-- Use ONLY the safe subset for Telegram Markdown v1: **bold** text and simple - or • bullet lists.
+- Return the analysis **strictly** in the following 6 sections using Markdown.
+- Use **only** safe Telegram Markdown v1: **bold** text for section headers and emphasis, and simple - or • bullet lists.
 - NEVER use code blocks (```), links, tables, underscores (_), or any syntax that risks breaking message parsing.
-- Output only the insight text. Do not include section titles or repeat the input context.
+- Base your analysis **strictly and only** on the pre-computed data provided above. No external knowledge, current prices, predictions, or hypothetical scenarios.
+- All metrics and data presentation are handled exclusively by the Python code. Your role is pure qualitative insight, context, or anomaly observation only. Do not repeat raw quantitative data from the input.
+- Explicitly: this is analysis/summarization/insights only. Do not suggest trades, buys, sells, position sizes, or any execution-related actions. Do not use language that could be interpreted as recommendations or advice.
+
+**Summary**
+2-3 sentence high-level overview of the market/token situation based strictly on the provided data.
+
+**Key Metrics**
+Qualitative observations (using bullets) on Liquidity, Volume, Holders, MCAP, Age, Smart Money signals (where the input data allows). Do not output raw numbers.
+
+**Market Narrative**
+Qualitative analysis and what the provided data suggests about current market dynamics or token behavior.
+
+**Risk Signals**
+Potential red flags or concerning patterns observed in the data (e.g. low liquidity, holder concentration, recent dumps, unusual activity). Use bullets. Only what is supported by the input.
+
+**Observed Patterns & Contextual Watchpoints**
+Purely observational notes on patterns and contextual items that may be relevant for monitoring (no implied actions, recommendations, or trading advice).
+
+**Confidence & Data Notes**
+Reliability of this analysis given the provided pre-computed data, and any limitations or gaps noted in the input.
 
 Rules (non-negotiable):
-- Focus on qualitative observations: e.g., unusual liquidity patterns, token rotation notes, market context for the pair, or calm summaries on quiet activity.
+- Focus exclusively on qualitative observations and patterns derivable from the given summaries.
 - Keep tone neutral, professional, and suitable for Cronos DeFi traders.
-- Explicitly: this is analysis/summarization/insights only. Do not suggest trades, buys, sells, position sizes, or any execution-related actions.
+- Explicitly: analysis/summarization/insights only. Never suggest trades, buys, sells, position sizes, or execution-related actions.
 - On low-activity or normal data: give calm, factual observations.
+- The output must use exactly the six section headers above (in order) with content under each.
 
-Provide the insight paragraph now:
+Provide the structured analysis now:

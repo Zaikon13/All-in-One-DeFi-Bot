@@ -6,7 +6,7 @@
 **Repository**: Zaikon13/All-in-One-DeFi-Bot  
 **Primary Coordinator**: Grok (xAI Grok-4.3)  
 **Created**: 2026-05 (post Full Repo Sync)  
-**Last Updated**: 2026-06 (coordinated docs update for Grok SOT structure)
+**Last Updated**: 2026-06-07 (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment in grok_market_analysis.txt + thin helper update; analysis/insights only, renamed watchpoints section, all prior 12 conditions + new review artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
 
 This is the **central coordination and Single Source of Truth** document for all Grok-led work on the repository. All agents, sub-agents, and manual sessions must reference and keep this file updated.
 
@@ -42,7 +42,7 @@ This is the **central coordination and Single Source of Truth** document for all
 - **Runtime (Python)**: Centralized in `core/grok_client.py` (SOT for load_prompt, call_grok with timeout, is_valid_grok_response quality gate). Used in:
   - `app/main.py`: `/grok-analyze` (Telegram + HTTP) with live wallet balances + recent txs via core/wallet, using `prompts/grok_wallet_analysis.txt`.
   - `core/pnl_calculator.py`: `/daily_pnl` Grok insight enhancement using `prompts/grok_daily_pnl.txt` (with pre-computed summaries, 25s timeout, quality gate, safe fallbacks).
-  - `worker.py`: optional analysis-only market context via thin core/market_analysis.py (first inc: new-pair alerts; second inc: EOD PnL post-process only; env-gated, reuse exact same helper/prompt, no core/pnl_calculator changes). See project-awareness.md + reviews/ for 12+ conditions.
+  - `worker.py`: optional analysis-only market context via thin core/market_analysis.py (first inc: new-pair alerts; second inc: EOD PnL post-process only; third inc: structured 6-section Markdown output enrichment per Review Agent 2026-06 Approved with Conditions (High risk) — prompt CONTRACT updated for sections (Summary, Key Metrics, Market Narrative, Risk Signals, Observed Patterns & Contextual Watchpoints, Confidence & Data Notes), analysis/insights only, safe MD, no execution language, reuse same thin helper; env-gated, 25s, is_valid/fallback/continue-on-error/lazy; no core/pnl_calculator or grok_daily_pnl changes). See project-awareness.md + reviews/ for 12+ conditions. # Review Agent 2026-06: Structured output inc.
 - **CI / GitHub Actions** (now unified to reuse `core/grok_client.py`):
   - `.github/scripts/call_grok.py`: Reusable CLI (setup-python + pip -r + PYTHONPATH) that loads from `prompts/` and calls via the SOT client.
   - `.github/workflows/grok-code-review.yml`: PR diff reviews (via `prompts/grok_code_review.txt` + {diff} var). Uses strict GROK CODE REVIEW CONTRACT (2026-06, Review Agent Approved with Conditions). Triggers updated 2026-06 per Review Agent Approved with Conditions (High Risk): pull_request to branches: [main] + paths filter (**.py, .github/workflows/**, prompts/**, core/**, docs/** etc.) for automatic reviews on relevant changes to main. Remains advisory (`continue-on-error: true`). # Review Agent 2026-06: Expanded per decision to improve automatic useful reviews while controlling noise.
@@ -150,6 +150,8 @@ From `SYNC.md` (core rule): **SPOT υπερισχύει** — these files define
 
 **Drift Detection v2 (2026-06 per Review Agent "Approved with Conditions", Medium-High risk)**: Modest evolution (extend existing; 1-2 additional high-value areas e.g. arg parsing/modes + SOT cross-refs). Smarter bounded context (targeted + recent plan_outcomes/drift history summaries for patterns). Evolved prompt for stronger citations/precision (history quality-only per condition 12). Still proposals-only, full gate (refs v2 review), tiny memory (high-risk), core client only, detector auditable (condition 10). See project-awareness.md v2 subsection + reviews/2026-06-XX-drift-detection-v2.md + 12 conditions.
 # Review Agent 2026-06: Bounded v2 per conditions; proposals-only with non-bypassable gate; Master-driven; minimal high-risk memory; coordinated SOTs.
+
+**SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent "Approved with Conditions", High risk)**: Added SOT Coordinated PR Helper (--sot-pr-helper) to agents/orchestrator.py per Review Agent Approved with Conditions (High risk). Read-only advisory only. Analyzes change to one SOT and generates ready-to-paste text for the other 4 SOTs. Reuses dry-run logic. All 12 mandatory conditions followed exactly. Primary SOTs read before implementation and on every run. (See GROK_COORDINATION Section 3 + reviews/2026-06-XX-sot-coordinated-pr-helper.md). # Review Agent 2026-06
 
 **Protocol for Using Them**:
 - Always open complex tasks (3+ steps or any edit/SOT impact) with `todo_write` (merge:false for new lists).
