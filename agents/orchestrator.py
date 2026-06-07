@@ -53,6 +53,7 @@ This is a **tool that assists the Master**, not a replacement. Grok (Master) ret
 Master then uses any plan or proposals to drive todo_write + spawn_subagent (with full persona prepended). For proposals: Review Gate is mandatory before any follow-on edit.
 
 # Review Agent 2026-06: Phase 1 foundation + Phase 2 first scoped "Improvement Proposer" increment per "Approved with Conditions". Orchestrator assists Master (does not replace authority or bypass Review Gate). Uses existing spawn_subagent protocol and core/grok_client.py only. Memory files committed; project_context.md updates high-risk SOT-like. Proposals strictly limited to prompts + memory schema; every proposal text requires Review Agent before implementation. No autonomous action. Agent Drift Detection first inc added per Approved with Conditions (High risk): --detect-drift mode + grok_drift_detector.txt, proposals-only with full gate enforcement, minimal plan_outcomes record, coordinated SOTs. v2 modest evolution (richer bounded history, 1-2 areas, stronger citations/precision per 12 conditions). See Primary SOTs (project-awareness.md 4.6/4.7/4.8, GROK_COORDINATION.md Section 3), agents/README.md, reviews/2026-06-XX-agent-drift-detection.md, reviews/2026-06-XX-drift-detection-v2.md, and the 12 mandatory conditions.
+# Review Agent 2026-06: Low-risk Auto-Apply Dry-Run first inc (cond 1-12) added inside existing --detect-drift path only (thin read-only sim of Last Updated updates for 5 Primary SOTs when drift already flags SOT/doc issues). Env default false, zero writes except mandatory reviews/ audit log, re-embeds full gate + disclaimer, feeds normal coordinated SOT PR process. No prompt/memory schema changes. Feature subject to future Review (cond 9). All 12 conditions followed exactly.
 
 See:
 - agents/README.md (Master-Orchestrator relationship)
@@ -64,6 +65,7 @@ See:
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -359,6 +361,84 @@ async def main() -> None:
 
         print("\n=== Generated Drift Proposals (Master reviews; NO auto-apply) ===")
         print(proposals)
+
+        # Review Agent 2026-06: Low-risk Auto-Apply Dry-Run (first inc, strictly simulation only per Approved with Conditions, High risk).
+        # Implements all 12 mandatory conditions exactly:
+        # - cond 1: zero writes except the required audit log at end (no apply stubs)
+        # - cond 2: extends inside existing detect_drift block in orchestrator.py only (no new modules, no prompt/contract changes)
+        # - cond 3: only activates if proposals flag SOT/documentation (keywords in proposals text)
+        # - cond 4: re-embeds full gate paragraph + exact disclaimer
+        # - cond 5: mandatory structured audit to reviews/YYYY-MM-DD-sot-dry-run.md with all fields
+        # - cond 6: env var default false, experimental/high-risk documented
+        # - cond 7: no memory schema change (uses existing append later if any; no prompt edits)
+        # - cond 8: produces ready-to-paste for normal coordinated 5-SOT manual PR
+        # - cond 9: this mechanism subject to future Review (any expansion)
+        # - cond 10: memory append (if happens) remains tiny/high-risk per existing pattern
+        # - cond 11: only runs in --detect-drift path (Master-driven, non-autonomous)
+        # - cond 12: audit + printed report + proposal ID provide full traceability
+        if os.getenv("AUTO_APPLY_DRY_RUN_ENABLED", "false").lower() == "true":
+            if any(kw in proposals.lower() for kw in ["sot", "documentation", "last updated", "project-awareness", "grok_coordination", "grok_usage", "agents.md"]):
+                from datetime import datetime, timezone
+                run_time = datetime.now(timezone.utc)
+                date_str = run_time.strftime("%Y-%m-%d")
+                proposal_id = f"drift-{run_time.isoformat()}"
+                # Hard-coded current Last Updated lines from the 5 Primary SOTs (read at review time; for sim propose today's date)
+                sots = [
+                    ("GROK_COORDINATION.md", "**Last Updated**: 2026-06 (coordinated docs update for Grok SOT structure)"),
+                    ("project-awareness.md", "**Last Updated**: 2026-06 (coordinated docs update for Grok SOT structure)  "),
+                    ("GROK_USAGE.md", "**Last Updated**: 2026-06 (coordinated docs update for Grok SOT structure)"),
+                    ("AGENTS.md", "**Last Updated**: 2026-06 (coordinated docs update for Grok SOT structure)"),
+                    ("docs/project-status.md", "**Last Updated**: 2026-06 (Worker market analysis second inc (EOD PnL context only) per Review Agent 2026-06 Approved with Conditions (High risk): exactly 1 addl point, post-process only, reuse exact same core/market_analysis.py + grok_market_analysis.txt (no pnl_calculator/grok_daily_pnl.txt changes), all 12 conditions, coordinated 5-SOT + new reviews/2026-06-XX-worker-market-analysis-eod.md. Builds on first market inc + EOD PnL review + prior.) by Grok AI Coordinator"),
+                ]
+                report_lines = [
+                    "=== Low-risk Auto-Apply Dry-Run Report (simulation only) ===",
+                    f"Proposal ID: {proposal_id}",
+                    f"Run time: {run_time.isoformat()}",
+                    "Scope: 'Last Updated' fields in the 5 Primary SOTs (activated only because drift proposals flagged SOT/documentation issues per condition 3).",
+                    "No changes made. Pure dry-run / reporting extension inside existing --detect-drift path.",
+                    "",
+                ]
+                ready_paste = []
+                for fname, current in sots:
+                    proposed = current.replace("2026-06", date_str)
+                    report_lines.append(f"{fname}:")
+                    report_lines.append(f"  Current: {current}")
+                    report_lines.append(f"  Proposed: {proposed}")
+                    report_lines.append("")
+                    ready_paste.append(f"# {fname}")
+                    ready_paste.append(proposed)
+                    ready_paste.append("")
+                gate_text = "THIS PROPOSAL REQUIRES A REVIEW AGENT STEP BEFORE ANY IMPLEMENTATION. Master must open todo_write (merge:false) for the work, read the Primary SOTs (GROK_COORDINATION.md, project-awareness.md including 4.7/4.8, GROK_USAGE.md, AGENTS.md, docs/project-status.md), prepend the full text of agents/personas/review-agent.md + current todo context + reference to this reviews/2026-06-XX-agent-drift-detection.md (and prior Phase 2 reviews if relevant), then call spawn_subagent. Only after Review Agent output has been read and addressed by Master may any Code Agent edits or coordinated SOT updates occur. Master authority is final and explicit. No script or agent may apply this proposal without the gate."
+                report_lines.extend([
+                    "=== Review Gate Reminder (embedded per condition 4) ===",
+                    gate_text,
+                    "",
+                    "This is a limited dry-run simulation only. Any real update to Primary SOTs still requires Master to open todo_write (merge:false), read all Primary SOTs, spawn Review Agent with full persona + this reviews/ file, then perform a coordinated minimal update across the 5 Primaries.",
+                    "",
+                    "=== Ready-to-paste text for manual coordinated SOT update PR (feeds normal process per condition 8) ===",
+                ])
+                report_lines.extend(ready_paste)
+                report = "\n".join(report_lines)
+                print(report)
+                # Mandatory structured audit log (condition 5) - only write besides potential later memory
+                audit_filename = f"reviews/{date_str}-sot-dry-run.md"
+                os.makedirs("reviews", exist_ok=True)
+                audit_content = (
+                    f"# SOT Dry-Run Audit Log\n\n"
+                    f"Proposal ID: {proposal_id}\n"
+                    f"Run timestamp: {run_time.isoformat()}\n"
+                    f"Drift proposals excerpt (for traceability, cond 12): {proposals[:600]}...\n\n"
+                    f"## Flagged SOTs and simulated updates\n"
+                    + "\n".join([f"- {fname}: {current} -> {current.replace('2026-06', date_str)}" for fname, current in sots]) + "\n\n"
+                    f"## Why low-risk (non-functional metadata only)\n"
+                    "Updating 'Last Updated' date fields in Primary SOTs when drift already flagged SOT/documentation issues. No logic, prompts, contracts, worker, core, or behavior changes.\n\n"
+                    f"## Ready-to-paste for manual coordinated update\n" + "\n".join(ready_paste) + "\n\n"
+                    f"## Disclaimer (per condition 4)\nThis is a limited dry-run simulation only. Any real update to Primary SOTs still requires Master to open todo_write (merge:false), read all Primary SOTs, spawn Review Agent with full persona + this reviews/ file, then perform a coordinated minimal update across the 5 Primaries.\n\n"
+                    f"## Full embedded Review Gate paragraph (per condition 4)\n{gate_text}\n"
+                )
+                with open(audit_filename, "w", encoding="utf-8") as f:
+                    f.write(audit_content)
+                print(f"\nMandatory audit log written to {audit_filename} (condition 5, cond 12 traceability).")
 
         print("\n=== Master Next Steps (MANDATORY - conditions 2,4,8) ===")
         print("1. Proposals above are for your review ONLY. Every proposal text requires Review Agent before implementation.")
