@@ -36,9 +36,11 @@ python agents/orchestrator.py --task "Review and implement the new feature X"
 
 See Primary SOTs for full protocol:
 - GROK_COORDINATION.md (Section 3)
-- project-awareness.md (Section 4)
+- project-awareness.md (Section 4, including 4.7 for Phase 2)
 - AGENTS.md
 - GROK_USAGE.md
 - docs/project-status.md
 
-# Review Agent 2026-06: Phase 1 Orchestrator + memory per "Approved with Conditions (High Risk)". Orchestrator assists Master; Review Gate and Master authority strictly preserved. Uses existing spawn_subagent + core/grok_client. No new SOT file. Foundation scope only. All new code has traceability. Memory files committed and documented as SOT-like for updates.
+**Phase 2 first scoped increment note** (2026-06, Review Agent "Approved with Conditions"): `orchestrator.py --propose-improvements` + `prompts/grok_improvement_proposer.txt` adds a minimal Master-driven Improvement Proposer. Generates gated proposals (prompts + memory schema only). Every proposal text requires Review Agent + Master todo_write + handoff before any edit. Proposals-only (no auto-apply). See project-awareness.md 4.7 and reviews/2026-06-XX-phase2-feedback-loop.md.
+
+# Review Agent 2026-06: Phase 1 Orchestrator + memory per "Approved with Conditions (High Risk)". Phase 2 first inc (Improvement Proposer) added per same Review decision: proposals only, Review Gate language non-bypassable in output, core/grok_client only, Master authority explicit, coordinated SOTs. All new code has traceability. Memory files committed (plan_outcomes addition high-risk documented).

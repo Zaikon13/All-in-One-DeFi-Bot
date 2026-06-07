@@ -15,7 +15,7 @@
 
 ## Pending Items
 
-- Full Worker Loop implementation (in progress)
+- Worker Loop: Partially Functional (real new pair alerts + wallet monitoring active). Remaining: persistence, EOD PnL, better filtering.
 - Complete PnL module refactoring
 
 **Overall System Health**: ✅ **Good**
