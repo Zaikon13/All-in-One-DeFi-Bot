@@ -2,7 +2,7 @@
 
 **Primary Source of Truth (SOT)** — See the SOT table in [GROK_COORDINATION.md](GROK_COORDINATION.md). All Grok-related changes must be coordinated across Primaries (no fragmented updates). See also [GROK_USAGE.md](GROK_USAGE.md) for the complete canonical map of all Grok integrations.
 
-**Last Updated**: 2026-06-07 (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints, all 12 conditions + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
+**Last Updated**: 2026-06-08 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints, all 12 conditions + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
 
 ## Current Ownership
 
@@ -34,5 +34,9 @@
 - Structured output enrichment (2026-06 per Review Agent 2026-06 Approved with Conditions, High risk): 6-section Markdown (Summary, Key Metrics, Market Narrative, Risk Signals, Observed Patterns & Contextual Watchpoints [renamed], Confidence & Data Notes) via prompt update + thin helper docs; all prior safety + 12 conditions + new ones (analysis/insights only, safe MD, no execution). Coordinated 5-SOT + new reviews/2026-06-XX-grok-market-analysis-structured.md. # Review Agent 2026-06: Structured inc.
 
 **Next Priority**: Complete remaining Worker Loop features (persistence, EOD PnL, better filtering) + PnL refactoring. See GROK_COORDINATION.md + GROK_USAGE.md for coordination.
+
+**SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: feat(worker): Worker Persistence First Increment addressing all 12 conditions from Review Agent 2026-06-08 (commit 8d322ad). Enhanced known_pairs persistence in worker.py with last_seen timestamps + last_eod_run (backward-compatible migration from old plain list JSON), atomic writes (temp + os.replace), optional RAILWAY_VOLUME_MOUNT_PATH support (fallback 'data/'), and strong WARNING logs + documentation that data is NOT durable across Railway redeploys without attached Volume. Added all required # Review Agent 2026-06-08 comments. Per condition 7: this is a coordinated Primary SOT status update only. Worker Loop status updated to note the first increment for known_pairs (with last_seen, atomic writes, Railway guards) is now in place; remains 'Partially Functional' overall. Full durability across redeploys still requires Railway Volume. EOD scheduling enhancements are minimal reliability state only. No claim that persistence is 'complete' or production-durable.
+
+<!-- Review Agent 2026-06-08: coordinated SOT status update applied (approved, status language only; no completion claim, Volume still required per condition 7) -->
 
 All non-trivial implementation work (including the above) must follow the **Mandatory Review Gate** defined in `project-awareness.md` Section 4.3 and `agents/personas/review-agent.md`. The improved Grok Code Review (strict contract + expanded triggers), Health Check CI (strict contracts), and Phase 1 Orchestrator are advisory support for this gate. Master retains final authority.

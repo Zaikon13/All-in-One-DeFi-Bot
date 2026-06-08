@@ -24,6 +24,9 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 
 **Key Improvements Made**
 
+  **SOT Coordinated PR Helper (first inc, Review Agent 2026-06 Approved with Conditions, High risk)**: feat(worker): Worker Persistence First Increment addressing all 12 conditions from Review Agent 2026-06-08 (commit 8d322ad). Enhanced known_pairs persistence in worker.py with last_seen timestamps + last_eod_run (backward-compatible migration from old plain list JSON), atomic writes (temp + os.replace), optional RAILWAY_VOLUME_MOUNT_PATH support (fallback 'data/'), and strong WARNING logs + documentation that data is NOT durable across Railway redeploys without attached Volume. Added all required # Review Agent 2026-06-08 comments. Per condition 7: this is a coordinated Primary SOT status update only. Worker Loop status updated to note the first increment for known_pairs (with last_seen, atomic writes, Railway guards) is now in place; remains 'Partially Functional' overall. Full durability across redeploys still requires Railway Volume. EOD scheduling enhancements are minimal reliability state only. No claim that persistence is 'complete' or production-durable.. All 12 conditions. Coordinated 5-SOT + reviews/ artifact. # Review Agent 2026-06
+
+
 **SOT Coordinated PR Helper (first inc, Review Agent 2026-06 Approved with Conditions, High risk)**: Added SOT Coordinated PR Helper (--sot-pr-helper) to agents/orchestrator.py per Review Agent Approved with Conditions (High risk). Read-only advisory only. Analyzes change to one SOT and generates ready-to-paste text for the other 4 SOTs. Reuses dry-run logic. All 12 mandatory conditions followed exactly. Primary SOTs read before implementation and on every run. All 12 conditions. Coordinated 5-SOT + reviews/ artifact. # Review Agent 2026-06
 - All workflows updated to `actions/checkout@v5` (Node.js 24 support)
 - Removed all YAML syntax errors
@@ -46,4 +49,4 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 
 **Core Rule**: Small PRs → Green CI → Update docs
 
-**Last Updated**: 2026-06-07 (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment (Summary/Key Metrics/Market Narrative/Risk Signals/Observed Patterns & Contextual Watchpoints/Confidence & Data Notes); analysis only, renamed watchpoints per conditions, all 12 + new artifact, Primary SOTs read; coordinated 5-SOT. Builds on first market inc + EOD + prior.) by Grok AI Coordinator
+**Last Updated**: 2026-06-08 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment (Summary/Key Metrics/Market Narrative/Risk Signals/Observed Patterns & Contextual Watchpoints/Confidence & Data Notes); analysis only, renamed watchpoints per conditions, all 12 + new artifact, Primary SOTs read; coordinated 5-SOT. Builds on first market inc + EOD + prior.) by Grok AI Coordinator
