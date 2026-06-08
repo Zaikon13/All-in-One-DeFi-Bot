@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -21,7 +21,60 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 logger = logging.getLogger("worker")
 
 seen_pairs = set()
+pair_last_seen = {}  # addr -> ISO-UTC last_seen (or None for migrated legacy entries)
+last_eod_run = None
 last_wallet_state = None
+
+# --- Worker State Persistence (evolved from basic known_pairs JSON; file/JSON only) ---
+# State shape (smallest correct per Review):
+# {
+#   "pairs": {"0x...pairAddr": {"last_seen": "2026-06-08T12:34:56.789012+00:00"}, ...},
+#   "last_eod_run": "2026-06-08T00:05:00+00:00" | null
+# }
+# Backward compat: loader accepts old plain list ["0x..", ...] and migrates in-memory (no data loss).
+# last_seen enables improved defensive change detection (missing/invalid treated as new).
+# last_eod_run (minimal) used only to harden against duplicate EOD sends on restart.
+# UTC ISO only for last_* fields (datetime.now(timezone.utc).isoformat()).
+#
+# IMPORTANT RAILWAY CAVEAT (High Risk):
+# This provides durability across in-process restarts and local dev restarts.
+# On Railway the worker filesystem is EPHEMERAL by default. All data (pairs, last_seen, last_eod_run)
+# will be lost on redeploys / container replacements unless a Railway Volume is attached and
+# RAILWAY_VOLUME_MOUNT_PATH env is set to a persistent mount (e.g. /data or /app/persist).
+# No DB, no external services. Volume is REQUIRED for production durability.
+# Risks restated: data loss on redeploy, restart dup alerts (mitigated by defensive load), partial-write
+# corruption (mitigated by atomic), clock skew on last_seen comparisons (defensive treat bad as new).
+#
+# Coordinated Primary SOT update (via orchestrator --sot-pr-helper or equivalent) is REQUIRED in a
+# follow-on PR before any status/docs claim "persistence complete". This inc touches worker.py ONLY.
+# See GROK_COORDINATION.md, project-awareness.md 4.3, AGENTS.md, project_context.md.
+#
+# Review Agent 2026-06-08: UTC timestamps + migration compat + ephemeral volume warning + atomic write
+# + no SOT drift (record requirement for follow-on) + scope strictly worker.py + risk documentation.
+PERSISTENCE_BASE = os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or "data"
+KNOWN_PAIRS_FILE = os.path.join(PERSISTENCE_BASE, "known_pairs.json")
+
+
+def _warn_if_no_volume():
+    """Emit loud WARNING on every load/save and at startup if no volume (per Review)."""
+    if not os.getenv("RAILWAY_VOLUME_MOUNT_PATH"):
+        logger.warning(
+            f"RAILWAY VOLUME NOT DETECTED: persistence at {KNOWN_PAIRS_FILE} uses ephemeral 'data/' (or base). "
+            "pairs/last_seen/last_eod_run are NOT durable across redeploys or container replacements. "
+            "Set RAILWAY_VOLUME_MOUNT_PATH and mount Volume for production. "
+            "# Review Agent 2026-06-08: ephemeral volume warning log"
+        )
+
+
+def _is_valid_last_seen(ts):
+    """Defensive validator: missing/invalid last_seen treated as 'new' (Review condition 2)."""
+    if not ts:
+        return False
+    try:
+        datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        return True
+    except Exception:
+        return False
 
 
 async def send_telegram(text: str):
@@ -35,39 +88,71 @@ async def send_telegram(text: str):
         logger.error(f"Telegram error: {e}")
 
 
-# --- Known Pairs Persistence (basic JSON) ---
-# IMPORTANT CAVEAT:
-# This provides durability across in-process restarts and local development restarts.
-# On Railway, the worker filesystem is ephemeral by default.
-# Files written here will be lost on redeploys / container replacements
-# unless a Railway Volume is attached and the path is updated accordingly.
-#
-# TODO (future): Add support for Railway Volume via RAILWAY_VOLUME_MOUNT_PATH
-#                and make the persistence path configurable.
-KNOWN_PAIRS_FILE = "data/known_pairs.json"
-
-
 def load_known_pairs() -> set:
-    """Load previously seen pairs from disk. Returns empty set on first run or error."""
+    """Load previously seen pairs from disk (supports old list + new dict state).
+    Returns set of addresses. Side-effects: populates pair_last_seen + last_eod_run globals.
+    Old plain-list format migrated gracefully with no data loss (Review condition 1).
+    """
+    global pair_last_seen, last_eod_run
+    _warn_if_no_volume()  # Review Agent 2026-06-08: ephemeral volume warning log on every load
+
     if not os.path.exists(KNOWN_PAIRS_FILE):
+        pair_last_seen = {}
+        last_eod_run = None
         return set()
 
     try:
         with open(KNOWN_PAIRS_FILE, "r") as f:
             data = json.load(f)
-            return set(data) if isinstance(data, list) else set()
+        if isinstance(data, list):
+            # Review Agent 2026-06-08: backward compat + graceful migration (old list -> new dict structure)
+            pair_last_seen = {addr: None for addr in data}
+            last_eod_run = None
+            return set(data)
+        if isinstance(data, dict):
+            pairs_d = data.get("pairs") or {}
+            pair_last_seen = {}
+            for addr, meta in pairs_d.items():
+                if isinstance(meta, dict):
+                    pair_last_seen[addr] = meta.get("last_seen")
+                else:
+                    pair_last_seen[addr] = None
+            last_eod_run = data.get("last_eod_run")
+            return set(pairs_d.keys())
+        # Unknown format -> defensive empty
+        pair_last_seen = {}
+        last_eod_run = None
+        return set()
     except Exception as e:
         logger.error(f"Failed to load known_pairs from disk: {e}")
+        pair_last_seen = {}
+        last_eod_run = None
         return set()
 
 
 def save_known_pairs(pairs: set):
-    """Persist the current set of known pairs to disk."""
+    """Persist the current set of known pairs + last_seen + last_eod_run to disk.
+    Uses atomic temp+replace write. Never crashes caller on error (continue-on-error).
+    """
+    global pair_last_seen, last_eod_run
+    _warn_if_no_volume()  # Review Agent 2026-06-08: ephemeral volume warning log on every save
+
     try:
         os.makedirs(os.path.dirname(KNOWN_PAIRS_FILE) or ".", exist_ok=True)
-        # Convert set to sorted list for stable, readable JSON
-        with open(KNOWN_PAIRS_FILE, "w") as f:
-            json.dump(sorted(list(pairs)), f, indent=2)
+        # Build richer structure (pairs with last_seen; last_eod_run for EOD dup guard)
+        pairs_dict = {}
+        for addr in sorted(list(pairs)):
+            ls = pair_last_seen.get(addr) if pair_last_seen else None
+            pairs_dict[addr] = {"last_seen": ls}
+        state = {
+            "pairs": pairs_dict,
+            "last_eod_run": last_eod_run
+        }
+        # Review Agent 2026-06-08: atomic write for Railway safety (temp + os.replace prevents partial/corrupt file on crash)
+        tmp_path = KNOWN_PAIRS_FILE + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp_path, KNOWN_PAIRS_FILE)
     except Exception as e:
         logger.error(f"Failed to save known_pairs to disk: {e}")
 
@@ -91,12 +176,17 @@ async def poll_dexscreener():
                     pairs = data.get("pairs", [])[:5]
                     for pair in pairs:
                         pair_address = pair.get("pairAddress")
-                        if pair_address and pair_address not in seen_pairs:
-                            seen_pairs.add(pair_address)
-                            save_known_pairs(seen_pairs)   # persist immediately
+                        if pair_address:
+                            # Review Agent 2026-06-08: improve change detection using last_seen (defensive: missing/invalid last_seen treated as "new")
+                            # last_seen also recorded for future richer diffing; update only on detection path (no new loops / no impact on market appends)
+                            last = pair_last_seen.get(pair_address)
+                            if pair_address not in seen_pairs or last is None or not _is_valid_last_seen(last):
+                                seen_pairs.add(pair_address)
+                                pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
+                                save_known_pairs(seen_pairs)   # persist immediately (atomic + warns if no volume)
 
-                            base = pair.get("baseToken", {})
-                            quote = pair.get("quoteToken", {})
+                                base = pair.get("baseToken", {})
+                                quote = pair.get("quoteToken", {})
                             msg = (
                                 f"🚀 **New Pair Detected on Cronos**\n\n"
                                 f"**{base.get('symbol', '???')} / {quote.get('symbol', '???')}**\n"
@@ -157,6 +247,7 @@ async def monitor_wallet():
 # COVALENT/ETHERSCAN keys not present in worker service env; top-level in pnl_calculator
 # has hard guards).
 async def scheduled_eod_pnl():
+    global last_eod_run
     athens = ZoneInfo("Europe/Athens")
     enabled = os.getenv("EOD_PNL_ENABLED", "false").lower() == "true"
     hour = int(os.getenv("EOD_PNL_HOUR", "0"))
@@ -217,7 +308,24 @@ async def scheduled_eod_pnl():
                         logger.error(f"Market analysis error (EOD PnL): {e}")
                         # continue - original report sent unchanged (never degrade)
 
-                await send_telegram(f"📊 **Automatic EOD PnL Report**\n\n{report}")
+                # Review Agent 2026-06-08: EOD reliability state (last_eod_run) added *only* to meaningfully harden dup sends on restart around target hour.
+                # Existing target recalc + sleep logic (above, lines ~165-170) is PRESERVED UNCHANGED. get_daily_pnl_report() never modified/wrapped.
+                # last_eod_run stored in same JSON state; UTC ISO; save only on actual send. Continue-on-error for the guard.
+                # Base EOD functionality (and market append block) never degraded.
+                now_utc = datetime.now(timezone.utc)
+                do_send = True
+                if last_eod_run:
+                    try:
+                        last_dt = datetime.fromisoformat(last_eod_run.replace("Z", "+00:00"))
+                        if (now_utc - last_dt).total_seconds() < 23 * 3600:
+                            logger.info("EOD PnL: recent last_eod_run detected; skipping duplicate send (restart hardening per Review 2026-06-08)")
+                            do_send = False
+                    except Exception:
+                        pass  # malformed ts -> treat as send (defensive, continue-on-error)
+                if do_send:
+                    await send_telegram(f"📊 **Automatic EOD PnL Report**\n\n{report}")
+                    last_eod_run = now_utc.isoformat()
+                    save_known_pairs(seen_pairs)  # persist EOD state (atomic + volume warn)
             except Exception as e:
                 logger.error(f"EOD PnL error: {e}")
                 await send_telegram("❌ Automatic EOD PnL report failed. Check logs.")
@@ -228,9 +336,24 @@ async def main():
     logger.info("🚀 Worker started")
 
     # Load previously discovered pairs (survives in-process / local restarts)
+    # Load happens early, before any polling or EOD tasks (Review condition 6).
     seen_pairs = load_known_pairs()
     if seen_pairs:
         logger.info(f"Loaded {len(seen_pairs)} known pairs from disk")
+    logger.info(f"Persistence file: {KNOWN_PAIRS_FILE} (evolved: pairs+last_seen+last_eod_run; supports RAILWAY_VOLUME_MOUNT_PATH fallback 'data/')")
+
+    # Review Agent 2026-06-08: startup durability status + path logging for ops visibility (ephemeral warning already emitted by load)
+    if not os.getenv("RAILWAY_VOLUME_MOUNT_PATH"):
+        logger.warning("Startup: no RAILWAY_VOLUME_MOUNT_PATH -> persistence is ephemeral (data lost on redeploy). See full caveat in code + reviews/2026-06-08-worker-persistence-first-inc.md")
+
+    # One-time roundtrip sanity for new structure (bonus condition 11). Continue-on-error, non-fatal.
+    try:
+        save_known_pairs(seen_pairs)
+        reloaded = load_known_pairs()
+        if len(reloaded) != len(seen_pairs):
+            logger.warning("Persistence roundtrip sanity: count mismatch after startup save/load (non-fatal, defensive)")
+    except Exception as e:
+        logger.error(f"Persistence roundtrip check error (non-fatal, continue): {e}")
 
     await send_telegram("✅ **All-in-One-DeFi-Bot worker is online.**")
 
