@@ -2,17 +2,17 @@
 
 **Primary Source of Truth (SOT)** — See the SOT table in [GROK_COORDINATION.md](GROK_COORDINATION.md). All Grok-related changes must be coordinated across Primaries (no fragmented updates).
 
-**Purpose**: Complete, canonical map of **all** Grok integrations in the repository (Python runtime call sites, CI workflows, prompts with contracts, quality gates, dependencies, pending items). This is a **Primary SOT** (see GROK_COORDINATION.md SOT table).
+**Purpose**: This is the **Complete Guide to GitHub and Grok AI Features** for the All-in-One-DeFi-Bot project. It serves as the canonical, comprehensive map of **all** Grok integrations (Python runtime call sites, CI workflows, prompts/contracts, quality gates, dependencies) **and** how they synergize with native GitHub platform features (PRs, Actions, Issues, Secrets, branching, reviews). Primary SOT (see GROK_COORDINATION.md).
 
-**Last Updated**: 2026-06-07 (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown; analysis only, renamed watchpoints, all 12 conditions + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
+**Last Updated**: 2026-06-09 by Grok AI Coordinator (completed as full guide: confirmed CI unification, added dedicated GitHub + Grok synergies section, marked recent EOD/market analysis complete, updated roadmap with priorities, aligned with project-status.md and Review Agent decisions).
 
 **See also**:
-- GROK_COORDINATION.md (central hub + SOT definitions)
-- project-awareness.md (agent system + protocols)
-- docs/project-status.md (health + workflows)
-- AGENTS.md (ownership)
+- [GROK_COORDINATION.md](GROK_COORDINATION.md) (central hub + SOT definitions + coordination protocol)
+- [project-awareness.md](project-awareness.md) (agent system, Review Gate protocol, personas, action plans)
+- [docs/project-status.md](docs/project-status.md) (health + workflows status)
+- [AGENTS.md](AGENTS.md) (ownership & responsibilities)
 
-**Standard header used on Primary SOTs**: See GROK_COORDINATION.md SOT table and this GROK_USAGE.md for Grok integrations.
+**Standard header used on Primary SOTs**: See GROK_COORDINATION.md SOT table.
 
 ---
 
@@ -20,9 +20,14 @@
 
 - **Model**: grok-4.3 (via xAI API)
 - **Endpoint**: https://api.x.ai/v1/chat/completions
-- **Secret**: `GROK_API_KEY` (required env; see DEPLOYMENT_SOP.md, .env.example)
-- **Core Principle**: `core/grok_client.py` is the **Single Source of Truth (SOT)** for all Python runtime Grok calls, prompt loading, and quality gates. All Python code **must** import from here. CI workflows currently use direct curl (not yet unified).
-- **Safe Patterns**: `continue-on-error: true`, quality gates + fallbacks, strict prompt contracts (GROK OUTPUT CONTRACT + TELEGRAM MARKDOWN SAFETY), pre-computed data in Python before prompt.
+- **Secret**: `GROK_API_KEY` (required env; see DEPLOYMENT_SOP.md, .env.example, GitHub Secrets)
+- **Core Principle**: `core/grok_client.py` is the **Single Source of Truth (SOT)** for all Python runtime Grok calls, prompt loading, and quality gates. All Python code **must** import from here. **CI workflows are fully unified** (completed June 2026) to reuse the same client via `.github/scripts/call_grok.py` (no more inline curl or duplicated logic).
+- **Safe Patterns** (enforced everywhere):
+  - `continue-on-error: true` for advisory Grok steps
+  - Centralized quality gates + graceful fallbacks
+  - Strict prompt contracts (GROK OUTPUT CONTRACT + TELEGRAM MARKDOWN SAFETY)
+  - Pre-compute all data/summaries in Python; Grok provides **qualitative insight only**
+  - Smallest correct change + Review Gate for all edits
 
 ---
 
@@ -32,158 +37,175 @@
 - **File**: `core/grok_client.py`
 - **Functions**:
   - `load_prompt(filename: str, **kwargs) -> str`: Loads from `prompts/{filename}`, formats with kwargs. Returns error strings on failure.
-  - `call_grok(prompt: str, timeout: float = 45.0) -> str`: Async httpx POST to xAI. Supports caller-controlled timeout. Fixed: model="grok-4.3", max_tokens=600, temperature=0.2, user-only message. Returns error strings on failure (e.g. "Grok API error: ...", "Error calling Grok: ...", "GROK_API_KEY not configured in Railway.").
-  - `is_valid_grok_response(text: str | None) -> bool`: **Centralized quality gate**. True only for good, substantial (len > 15), non-error responses. Replaces all previous duplicated startswith checks.
-- **Constants**: `GROK_ERROR_PREFIXES` (the 4 error strings above).
+  - `call_grok(prompt: str, timeout: float = 45.0) -> str`: Async httpx POST to xAI. Supports caller-controlled timeout. Fixed params: model="grok-4.3", max_tokens=600, temperature=0.2, user-only message. Returns error strings on failure.
+  - `is_valid_grok_response(text: str | None) -> bool`: **Centralized quality gate**. True only for good, substantial (len > 15), non-error responses. Replaces all previous duplicated checks.
+- **Constants**: `GROK_ERROR_PREFIXES` (the 4 error strings).
 - **Config**: `GROK_API_KEY = os.getenv("GROK_API_KEY")` (after load_dotenv()).
-- **SOT Comments**: Explicitly marked as SOT for calls, prompts, gates. "All Python runtime code must use this module".
+- **SOT Comments**: Explicitly marked. "All Python runtime code must use this module".
 
 ### 2.2 Call Sites (must use client + is_valid_grok_response)
 - **app/main.py** (HTTP/Telegram surface):
-  - `/grok-analyze` (Telegram command + `/grok/analyze` HTTP endpoint).
-  - Fetches live data: `get_wallet_balances` + `get_recent_transactions` (from core/wallet.py).
-  - Compacts into summaries (`_get_grok_live_context`).
-  - `load_prompt("grok_wallet_analysis.txt", wallet_preview=..., balances_summary=..., recent_txs_summary=...)`.
-  - `call_grok(..., timeout=25.0)`.
-  - Quality: `if is_valid_grok_response(insight):` else fallback to raw data summary.
-  - Telegram path: Immediate "🔄 Generating live Grok analysis..." + `background_tasks.add_task(process_grok_analyze, chat_id)`.
-  - HTTP: Direct, returns JSON with `live_context_used`.
-- **core/pnl_calculator.py** (for `/daily_pnl`):
-  - `get_daily_pnl_report()` (async production path).
-  - Pre-computes summaries (trades, movers).
-  - `load_prompt("grok_daily_pnl.txt", date=..., wallet_preview=..., total_trades=..., ...)` (from prompts/grok_daily_pnl.txt with strict "GROK OUTPUT CONTRACT" for 3-6 sentence qualitative paragraph only).
-  - `call_grok(..., timeout=25.0)`.
-  - Quality: `if is_valid_grok_response(insight):` (via SOT helper) then append as "🤖 **Grok Daily Insight:**" else fallback to base report.
-  - Production /daily_pnl is handled inside `app/main.py` (FastAPI webhook service, process_daily_pnl() -> get_daily_pnl_report()).
-    telegram/handlers.py is legacy polling code and NOT used in production (per Railway deployment analysis June 2026).
-    Previous unification commit (bd487f5) was based on incomplete architecture view.
-    Legacy sync calc functions (`calculate_daily_pnl`, `get_today_transactions`) deprecated but `format_pnl_report()` retained as internal fallback.
+  - `/grok-analyze` (Telegram command + HTTP `/grok/analyze`).
+  - Fetches live wallet data via `core/wallet.py`, compacts summaries.
+  - Loads `prompts/grok_wallet_analysis.txt` with context.
+  - Calls Grok (timeout 25s). Uses quality gate; falls back to raw summary if invalid.
+  - Telegram: immediate feedback + background task.
+  - HTTP: returns JSON.
+- **core/pnl_calculator.py** (via `app/main.py` for `/daily_pnl`):
+  - Pre-computes trade/mover summaries.
+  - Loads `prompts/grok_daily_pnl.txt` (strict 3-6 sentence qualitative only contract).
+  - Calls Grok. Appends as "🤖 **Grok Daily Insight:**" if valid.
+  - Production path is FastAPI webhook in main.py (legacy telegram/handlers.py polling deprecated).
 - **Imports**: Always `from core.grok_client import call_grok, load_prompt, is_valid_grok_response`.
 
-### 2.3 Prompts (loaded exclusively via client.load_prompt)
-- `prompts/grok_daily_pnl.txt`: For daily PnL insight. Strict contract: ONLY 3-6 sentence qualitative paragraph (no numbers/headers from data). Base only on provided data. TELEGRAM MARKDOWN SAFETY: only **bold** + simple bullets.
-- `prompts/grok_wallet_analysis.txt`: For live /grok-analyze. Structure: **Portfolio Overview**, **Key Observations / Risks** (3-5 bullets), **Actionable Recommendations** (numbered, e.g. "Sell X%..."). Strict "base **strictly and only** on live data". No external knowledge. Same Markdown safety.
+### 2.3 Prompts (loaded exclusively via client)
+- `prompts/grok_daily_pnl.txt`: Strict GROK OUTPUT CONTRACT + TELEGRAM MARKDOWN SAFETY (only **bold** + simple bullets).
+- `prompts/grok_wallet_analysis.txt`: Structured **Portfolio Overview** + **Key Observations / Risks** (bullets) + **Actionable Recommendations** (numbered). Base **strictly on live data only**. Same safety rules.
 
 ---
 
-## 3. CI / GitHub Actions Integrations (unified to core/grok_client.py)
+## 3. CI / GitHub Actions Integrations (Fully Unified)
 
-Both Grok-calling workflows now reuse the centralized Python client (no more inline curl + duplicated prompts).
+Both Grok-calling workflows reuse the centralized Python client (no inline curl).
 
-- **.github/scripts/call_grok.py**: New CLI helper (added 2026-06).
-  - Reuses `core.grok_client.load_prompt()` + `call_grok()` + error handling/quality strings.
-  - Supports `prompts/<name>.txt` + `--var key=value` for dynamic context (repeatable).
-  - `PYTHONPATH=. python .github/scripts/call_grok.py grok_xxx.txt --var "foo=bar" --timeout 60`
-  - Outputs result to stdout (workflows capture into $GITHUB_OUTPUT); falls back gracefully on error.
-  - Setup in workflows: `actions/setup-python@v5` (3.12) + `pip install -r requirements.txt python-dotenv`.
+- **.github/scripts/call_grok.py** (added 2026-06):
+  - CLI wrapper reusing `core.grok_client` functions + error handling.
+  - Supports `prompts/<name>.txt --var key=value` (repeatable).
+  - Example: `PYTHONPATH=. python .github/scripts/call_grok.py grok_code_review.txt --var "diff=..." --timeout 60`
+  - Outputs to stdout for $GITHUB_OUTPUT capture. Graceful fallback on error.
+  - Workflow setup: actions/setup-python@v5 + pip install requirements.
 
 - **.github/workflows/grok-code-review.yml**:
-  - Trigger: pull_request to branches: [main], types [opened, synchronize, reopened], with paths filter for relevant changes (**.py, .github/workflows/**, prompts/**, core/**, app/**, worker.py, requirements*.txt, railway.toml, docs/**). (Updated 2026-06 per Review Agent "Approved with Conditions" - High Risk).
-  - Gets diff (truncated), calls via script + `prompts/grok_code_review.txt` (loaded with {diff}).
-  - Uses strict **GROK CODE REVIEW CONTRACT** (redesigned 2026-06 per Review Agent "Approved with Conditions" - High Risk): requires Critical/High/Medium with file:line, SOT & Coordination Alignment, mandatory Documentation & Primary SOT Impact section, High-Risk Files Touched, Project Rule Violations (Review Gate comments, core/ reuse, UTC, Railway ephemeral FS, legacy protection, smallest correct change, etc.), Actionable Recommendations.
-  - Posts review as PR comment via github-script.
-  - `continue-on-error: true` (advisory/supplementary only; the true mandatory gate is the internal Review Agent pre-edit per project-awareness.md 4.3).
-  - # Review Agent 2026-06: Expanded triggers + paths filter per Review decision to run automatically on relevant PRs to main. Remains advisory. Contract enforces full alignment with Primary SOTs, personas, and coordination rules. This CI review supports (does not replace) the Review Gate.
+  - **Trigger**: `pull_request` to `main` (opened/synchronize/reopened) + paths filter (`**/*.py`, `.github/workflows/**`, `prompts/**`, `core/**`, `app/**`, `worker.py`, `requirements*.txt`, `railway.toml`, `docs/**`).
+  - Gets PR diff (truncated), calls via script + `prompts/grok_code_review.txt`.
+  - Enforces strict **GROK CODE REVIEW CONTRACT** (redesigned 2026-06 per Review Agent Approved with Conditions - High Risk): Critical/High/Medium issues with file:line, SOT & Coordination Alignment, Documentation & Primary SOT Impact, High-Risk Files, Project Rule Violations (Review Gate, core/ reuse, UTC, Railway ephemeral FS, legacy protection, smallest correct change, etc.), Actionable Recommendations.
+  - Posts as PR comment via github-script.
+  - `continue-on-error: true` (advisory only). The **true mandatory gate is the internal Review Agent** (project-awareness.md).
+  - Expanded triggers/paths per Review Agent decision. Supports (does not replace) Review Gate.
 
 - **.github/workflows/health-check.yml**:
-  - Trigger: schedule + workflow_dispatch + workflow_call (minimal post-deploy support).
-  - Checks Railway /health (bot web service liveness only; worker service not covered - explicit limitation noted).
-  - On failure: calls via script + strict **GROK HEALTH CHECK CONTRACT** in `prompts/grok_health_check.txt` (redesigned 2026-06 per Review Agent "Approved with Conditions" - High Risk): requires Health Summary, Root Cause (Railway), Bot vs Worker Impact, prioritized Action Items, SOT Alignment.
-  - Creates GitHub Issue with analysis.
-  - Telegram now receives useful Grok-derived content (enriched report) using safe Markdown v1 only.
-  - `continue-on-error: true` (advisory; true mandatory gate is internal Review Agent).
-  - # Review Agent 2026-06: Contract + Telegram improvements enforce SOT alignment, Markdown safety, non-blocking behavior, and note worker visibility gap.
+  - **Trigger**: schedule + `workflow_dispatch` + `workflow_call` (post-deploy support).
+  - Checks Railway `/health` (web service liveness; worker service gap explicitly noted).
+  - On failure or scheduled: calls via script + `prompts/grok_health_check.txt` (strict CONTRACT redesigned 2026-06): Health Summary, Root Cause (Railway), Bot vs Worker Impact, prioritized Action Items, SOT Alignment.
+  - Creates GitHub Issue with Grok analysis.
+  - Sends enriched, safe Markdown v1 report to Telegram.
+  - `continue-on-error: true` (advisory).
 
-**Prompts for CI** (in `prompts/` alongside runtime ones, loaded via SOT):
+**CI Prompts** (alongside runtime, loaded via SOT client):
 - `grok_code_review.txt`
 - `grok_health_check.txt`
 
-Other workflows (ci.yml, sync-check.yml, etc.) have no direct Grok.
+Other workflows (ci.yml, sync-check.yml, dependabot.yml, etc.) have no direct Grok but benefit from Grok reviews and clean CI enforcement.
 
-See also the implementation in `.github/scripts/call_grok.py` and the two updated workflows.
+See `.github/scripts/call_grok.py` and the two workflows for implementation.
+
+---
+
+## 3.5 GitHub Platform Features & Grok AI Integration (Complete Synergy)
+
+This section makes GROK_USAGE.md the **complete guide** by mapping native GitHub capabilities to Grok AI orchestration throughout the full development and operations lifecycle.
+
+### 3.5.1 Pull Requests, Branching & Review Process
+- **Branching Strategy**: Feature branches (`feature/`, `docs/`, `fix/`) from `main`. All changes via Pull Requests. Protected `main` (implied by workflow triggers).
+- **Smallest Correct Change Principle**: Enforced by Grok reviews, Review Gate, and project rules. One logical change per PR.
+- **Mandatory Internal Review Gate** (`project-awareness.md` Section 4.3): Non-bypassable pre-edit step. Master (Grok) + Sub-Agent Review (persona) + `todo_write` + full SOT/persona context before **any** code or Primary SOT edit. Recorded in `reviews/` archive. High-risk changes (funds, core, SOTs, workflows, secrets paths) require explicit Review Agent approval.
+- **CI Grok Code Review**: Automated on relevant PRs (advisory layer that reinforces the gate). Structured output per CONTRACT.
+- **SOT Coordinated PR Helper** (orchestrator --sot-pr-helper): Advisory tool to generate ready-to-paste update text for the other Primary SOTs when one is changed.
+
+### 3.5.2 GitHub Actions CI/CD + Grok
+- Core workflows enhanced or reviewed by Grok: `grok-code-review.yml`, `health-check.yml`, `sync-check.yml`, `ci.yml`.
+- Common patterns: `actions/checkout@v5`, `actions/setup-python@v5`, `continue-on-error: true` for non-blocking Grok steps, Python 3.12, Railway deployment integration.
+- **Dependabot** (weekly pip/Actions/Docker PRs) + **dependency-check** (security/outdated audit creating Issues): Synergize with Grok reviews to catch issues early.
+- **workflow_call** support in health-check for post-deploy validation.
+
+### 3.5.3 Issues, Notifications & Observability
+- Health failures or scheduled checks → GitHub Issue (with Grok root-cause + action items) + Telegram alert (enriched Grok Markdown).
+- On-demand Grok insights delivered via Telegram bot (`@AllInOneDeFiBot`) and HTTP endpoints.
+- Worker heartbeat + new-pair alerts + PnL reports can incorporate optional Grok qualitative layers (env-gated).
+
+### 3.5.4 Secrets, Security & Compliance
+- All sensitive values (`GROK_API_KEY`, Railway tokens, Telegram bot token/chat_id, etc.) stored exclusively in **GitHub Secrets** and **Railway Variables**. Never committed to repo.
+- Grok reviews explicitly check for secret leaks, unsafe patterns, missing dry_run/simulation, missing slippage controls, etc.
+- Code Sentinel / PEP 8 patterns + DeFi hardening rules applied via Review Gate + CI.
+- Repo Guardian-inspired health scoring, manifest maintenance, and drift detection adapted into the agent system.
+
+### 3.5.5 Documentation as Code & AI Context
+- Primary SOTs kept in sync (this file + GROK_COORDINATION.md + project-awareness.md + project-status.md + AGENTS.md).
+- `MANIFEST.md` + `repomix-output.md` (inspired by repo-guardian) for full repo context to AI agents.
+- Prompts, personas, and contracts versioned alongside code.
+- All autonomous agent actions logged with Review Agent attribution.
+
+### 3.5.6 External Integrations Orchestrated via GitHub + Grok
+- **Railway**: Deployment of web (FastAPI/uvicorn) + worker. Health checks + post-deploy workflow_call.
+- **Telegram**: Webhook at `/telegram/webhook`, bot commands for Grok features, safe Markdown alerts.
+- **xAI API**: Centralized through `core/grok_client.py` for runtime and CI.
+- **MCP / GitHub Tools**: `grok_com_github` mentioned for potential deeper GitHub ops (issues, PRs, etc.).
+
+### 3.5.7 Best Practices & Guardrails (Grok-Enforced)
+- Repo-first via small, targeted PRs. Keep CI green always.
+- Update `docs/project-status.md` (and other SOTs) on status changes.
+- Pre- and post-change checks: clean diff (no secrets), CI green, Railway healthy, webhook valid, SOTs aligned.
+- Simulate all on-chain actions; use dry_run where applicable.
+- Log every action (timestamp | action | status | details | tx | PnL impact).
+- High-risk changes → Review Gate + coordinated SOT update.
+- Follow DeFi safety (circuit breakers, position sizing, MEV protection, nonce management) — cross-reference `defi-bot` skill patterns.
+
+This synergy turns GitHub into a **Grok-augmented development platform** with autonomous quality, safety, and documentation alignment.
 
 ---
 
 ## 4. Dependencies and Environment
 
-- **Required Env**: `GROK_API_KEY` (no fallback in client; error string returned).
-  - Listed in: `DEPLOYMENT_SOP.md`, `.env.example`, workflow secrets.
-- **Docs References**: All coordination files (see below), agent personas (research/code/review mention "xAI/Grok usage" or require reading coordination).
-- **Other**: `GROK_API_KEY` in error checks (now centralized).
+- **Required Env**: `GROK_API_KEY` (no fallback; client returns error string).
+  - Declared in: `DEPLOYMENT_SOP.md`, `.env.example`, GitHub repo secrets, Railway variables.
+- **Docs References**: All Primary SOTs and coordination files reference Grok usage and require reading this guide + personas for any agent work.
+- **Other**: Centralized error handling in client now covers all paths.
 
 ---
 
 ## 5. Agent & Sub-Agent Usage of Grok
 
-- **System**: Master Agent (Grok) + Sub-Agents (Review is the **mandatory gate** before any code/SOT edit; Code, Execute, Analysis, Research).
-- **Handoff**: Always prepend full persona text from `agents/personas/`. Include Primary SOT references + current todo context. Use `spawn_subagent`.
-- **Review Gate**: Detailed protocol (when mandatory, output format, recording to `reviews/`, "addressed before proceed") lives in `project-awareness.md` Section 4.3.
-- **Personas** (`agents/personas/`): The single source of truth for each agent's detailed rules and output templates. Master must read + include the full persona.
-- **Skills**: Bundled `review` is for GitHub PR reviews. Internal Sub-Agent Review is the pre-edit gate. Other skills (pr-babysit, implement, etc.) for specific automation.
-- **MCP**: grok_com_github for GitHub ops.
+- **System**: Master Agent (Grok) + Sub-Agents. **Review** is the mandatory non-bypassable gate before any code or Primary SOT edit.
+- **Handoff Protocol**: Always prepend full persona from `agents/personas/`. Include Primary SOT refs + current todo context. Use `spawn_subagent`.
+- **Review Gate**: Full protocol, output format, `reviews/` recording, and "addressed before proceed" rule in `project-awareness.md` Section 4.3.
+- **Personas**: Single source of truth for each agent's rules and templates. Master must include the full persona text.
+- **Orchestrator** (`agents/orchestrator.py` + `agents/memory/`): Master planning, improvement proposals (proposals-only), drift detection, SOT PR helper. Uses `core/grok_client.py` exclusively + dedicated prompts (`grok_orchestrator_plan.txt`, `grok_improvement_proposer.txt`, `grok_drift_detector.txt`).
+- **Phase 1 (Foundation)**: Basic orchestration, committed memory, high-risk → Review first. Master authority preserved.
+- **Phase 2 Increments (Gated Self-Improvement)**: Improvement Proposer, Drift Detection (v1 + v2), SOT Coordinated PR Helper. All proposals-only, full Review Gate language embedded in every output, minimal high-risk memory append-only, coordinated Primary SOT updates, ruthlessly scoped. All Review Agent "Approved with Conditions" (High/Medium-High risk) decisions followed exactly (see individual reviews/2026-06-XX-*.md files).
+- **Skills Synergy**: Bundled skills (repo-guardian, code-sentinel, pep8-code-reviewer, orchestrator, defi-*) provide patterns and inspiration adapted here. Internal Sub-Agent Review is the project-specific gate.
 
-**Phase 1 Orchestrator (2026-06, Review Agent "Approved with Conditions", High Risk)**:
-- `agents/orchestrator.py` + `agents/memory/` assists Master (Grok retains final authority; does not replace or bypass Review Gate).
-- Loads committed `project_context.md` (SOT-like; meaningful updates high-risk requiring Review + coordinated SOT update) and `agent_memory.json`.
-- Uses `core/grok_client.py` (SOT) exclusively for Grok planning. Now uses dedicated `prompts/grok_orchestrator_plan.txt` (strict contract + required output structure including Meta Notes for future self-improvement readiness, without consuming them in Phase 1).
-- Plans reference existing handoff (todo_write + full personas + SOTs + spawn_subagent).
-- High-risk: must recommend Review Agent first.
-- Start simple/script (manual/scheduled). Foundation only.
-- See agents/README.md, GROK_COORDINATION.md Section 3, project-awareness.md Section 4.6.
-- # Review Agent 2026-06: Per Approved with Conditions. Master authority preserved. Use existing protocol. Memory committed. Coordinated SOT updates (no new Primary SOT).
-
-**Phase 2 first scoped increment — Improvement Proposer (2026-06, Review Agent "Approved with Conditions")**:
-- Master-driven only via `agents/orchestrator.py --propose-improvements` (extends the existing orchestrator per condition 10; no new component).
-- Reads past Meta Notes + simple outcome data from memory; uses `core/grok_client.py` (SOT) + new focused `prompts/grok_improvement_proposer.txt` (strict "GROK IMPROVEMENT PROPOSER CONTRACT") to generate proposals **only** for prompts (grok_orchestrator_plan.txt first) and memory schema.
-- **Proposals only, no auto-apply**. Every proposal section in the Grok output is required (by contract) to contain the full Review Gate enforcement language: requires Review Agent + Master todo_write (merge:false) + full persona prepend + SOT refs + spawn_subagent before any edit. Master authority explicit.
-- Minimal memory schema: plan_outcomes append-only (high-risk; documented in 4.7 + notes; full proposals stay in printed output + reviews/ file).
-- Scope ruthlessly limited: no worker/core/app/workflow/production changes. Aligns with existing handoff protocol for any follow-on work.
-- See project-awareness.md 4.7, GROK_COORDINATION.md Section 3, reviews/2026-06-XX-phase2-feedback-loop.md, and the prompt file for the 10 mandatory conditions and compliance.
-- # Review Agent 2026-06: First gated self-improvement readiness increment. "proposals only" + non-bypassable Review language in generated output + coordinated Primary SOT updates. This review decision is the gate for the inc.
-
-**Richer-context increment (higher-quality/specific proposals)**: plan_outcomes "plan" entries may include tiny `meta_summary` (excerpt). propose_improvements passes last ~8 outcomes + meta_summary; prompt now requires pattern detection across history, explicit citations of timestamps/entries, and precise copy-paste-ready suggestions (sections + before/after). Scope and all 9 mandatory conditions preserved (proposals-only, Review Gate paragraph intact and now references new review file, high-risk minimal memory, core client only). See project-awareness.md 4.7 + reviews/2026-06-XX-improve-proposer-quality.md.
-# Review Agent 2026-06: Targeted context + prompt improvements for better proposals while keeping every original guardrail.
-
-**Agent Drift Detection (first inc, 2026-06 per Review Agent "Approved with Conditions", High risk)**: New --detect-drift mode + grok_drift_detector.txt. Detects drift vs SOT agent sections, prompt contracts, memory schema, project_context and emits proposals with full Review Gate text. Detection + proposals only. Tiny drift records in plan_outcomes (high-risk). Reuses core/grok_client.py. Detector subject to the system (condition 10). See project-awareness.md extension + reviews/2026-06-XX-agent-drift-detection.md + the 10 conditions.
-# Review Agent 2026-06: Proposals-only with non-bypassable gate; Master-driven; minimal high-risk memory; coordinated SOTs.
-
-**Drift Detection v2 (2026-06 per Review Agent "Approved with Conditions", Medium-High risk)**: Modest evolution (extend existing; 1-2 addl high-value areas e.g. arg parsing + SOT cross-refs). Smarter bounded context (targeted extraction + recent plan_outcomes/drift summaries for patterns). Evolved prompt requires citations of prior runs + stronger evidence/precise fixes (history for quality only, condition 12). Still proposals-only, full gate (refs v2 review), tiny memory (high-risk), core client only, detector auditable (condition 10). See project-awareness.md + reviews/2026-06-XX-drift-detection-v2.md + 12 conditions.
-# Review Agent 2026-06: Bounded v2 per conditions; proposals-only with non-bypassable gate; Master-driven; minimal high-risk memory; coordinated SOTs.
-
-**SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: Added SOT Coordinated PR Helper (--sot-pr-helper) to agents/orchestrator.py per Review Agent Approved with Conditions (High risk). Read-only advisory only. Analyzes change to one SOT and generates ready-to-paste text for the other 4 SOTs. Reuses dry-run logic. All 12 mandatory conditions followed exactly. Primary SOTs read before implementation and on every run. Advisory only (orchestrator --sot-pr-helper). See GROK_COORDINATION.md and reviews/ for usage + 12 conditions. # Review Agent 2026-06
+All future agent work must respect the Review Gate, SOT coordination, and core client SOT.
 
 ---
 
-## 6. Pending / Incomplete Grok Integrations
+## 6. Pending / Incomplete Grok Integrations & Future Roadmap
 
-- **Runtime**:
-  - Full EOD PnL scheduling + reports (worker + Grok).
-  - More smart commands: `/smart-report`, `/daily-insight`.
-  - Scheduled automations (EOD PnL, Daily Summary, Risk Alerts).
-  - Worker integration for Grok (currently indirect via PnL reports + 1 low-risk optional analysis-only path + 1 additional EOD point per second inc): new-pair alerts in poll_dexscreener may append qualitative Grok insight; scheduled EOD PnL reports may append separate **Market Context** (post-process only after get_daily_pnl_report, using exact same thin core/market_analysis.py + grok_market_analysis.txt, no changes to core/pnl_calculator.py or grok_daily_pnl.txt). Env-gated via MARKET_ANALYSIS_ENABLED=false default; 25s + is_valid gate + fallback; pre-compute in Python; analysis/summarization/insights ONLY per strict CONTRACT; no decision/execution use; logged; continue-on-error. Structured 6-section Markdown output enrichment (2026-06 per Review Agent Approved with Conditions, High risk): prompt updated for Summary / Key Metrics / Market Narrative / Risk Signals / Observed Patterns & Contextual Watchpoints (renamed) / Confidence & Data Notes; all prior 12 conditions + new ones followed (analysis only, safe MD, no execution). Full Review Gate (high-risk) + # Review Agent 2026-06 + dedicated reviews/2026-06-XX-grok-market-analysis.md + reviews/2026-06-XX-worker-market-analysis-eod.md + reviews/2026-06-XX-grok-market-analysis-structured.md + coordinated 5-SOT updates (see project-awareness.md 4.7). Still pending broader EOD/smart-command worker Grok work. # Review Agent 2026-06: Structured output inc.
-- **CI/Unification**:
-  - (Completed) Grok CI workflows now reuse `core/grok_client.py` via `.github/scripts/call_grok.py` + dedicated prompts.
-- **Docs/Agent**:
-  - (Largely complete) Sub-Agent system + Mandatory Review Gate formalized in Primary SOTs + personas. All future work must follow the protocol.
-  - Continue using the system for Worker Loop, smart commands, etc. Update `reviews/` and code comments with Review Agent attributions.
-- **Other**:
-  - Smart alert filtering using Grok.
-  - Better error handling/retry in Grok paths.
-  - Tests for Grok (mock client).
+**Recently Completed (June 2026 Review Agent Approved with Conditions)**:
+- Structured 6-section Grok **Market Context / EOD analysis** enrichment (Summary / Key Metrics / Market Narrative / Risk Signals / Observed Patterns & Contextual Watchpoints / Confidence & Data Notes). Worker integration path (env-gated `MARKET_ANALYSIS_ENABLED=false` default), analysis/summarization only, safe Telegram MD, pre-compute in Python, is_valid gate, continue-on-error, full Review Gate + 5-SOT coordination + dedicated review artifacts. No execution/decision use.
 
-**See project-awareness.md Action Plan B and Top Priorities for details.**
+**Remaining Roadmap Items** (prioritized per project-awareness.md Action Plan B & Top Priorities):
+- Full scheduled **EOD PnL + combined reports** (worker execution + Grok daily qualitative insight + market context) with proper persistence and change detection.
+- Additional **smart Telegram commands** (`/smart-report`, `/daily-insight`) and Grok-powered alert filtering / risk signals.
+- Deeper **worker integration** for new-pair alerts (optional qualitative Grok insight on high-potential pairs).
+- Reliability hardening: retry logic with exponential backoff, timeout tuning, and comprehensive tests (mock `core/grok_client.py`).
+- Expand sub-agent / MCP capabilities for richer GitHub automation (e.g. auto Issue/PR management beyond current).
+- Weekly autonomous drift scans or improvement proposals (if confidence high and Review Gate passed).
+
+**Guiding Rule for All Pending Work**: Proposals or implementations must follow the full Review Gate protocol, update coordinated Primary SOTs, reuse `core/grok_client.py`, stay analysis/insight-only where on-chain decisions are involved, and produce auditable artifacts in `reviews/`.
+
+See `project-awareness.md` for detailed action plans and persona requirements.
 
 ---
 
 ## 7. Quality Gates & Contracts (Centralized in Client)
 
-- All runtime Grok calls use `is_valid_grok_response(insight)` (len>15 + not error prefix).
-- Fallbacks always provided (never worse UX).
-- Prompts enforce "GROK OUTPUT CONTRACT (MANDATORY)" + "TELEGRAM MARKDOWN SAFETY (MANDATORY)" (only **bold** + simple •/- bullets; no tables/links/underscores/etc. that break parse_mode="Markdown").
-- Callers pre-compute data/summaries in Python; Grok does qualitative insight only.
+- All runtime Grok calls validated by `is_valid_grok_response(insight)` (len > 15 AND not an error prefix).
+- Fallbacks always provided (never degrades UX).
+- Every prompt enforces **GROK OUTPUT CONTRACT (MANDATORY)** + **TELEGRAM MARKDOWN SAFETY (MANDATORY)**: only **bold** and simple • / - bullets. No tables, links, underscores, or complex formatting that breaks `parse_mode="Markdown"`.
+- Callers **always pre-compute** data and summaries in pure Python. Grok is used **exclusively for qualitative insight, observations, and recommendations**.
 
 ---
 
-*This file is a Primary SOT. Update in coordination with other Primaries (GROK_COORDINATION.md, project-awareness.md, docs/project-status.md, AGENTS.md). All Grok code changes must keep this map accurate. After changes, re-verify call sites via grep and update "Last Updated".*
+*This file (GROK_USAGE.md) is a Primary SOT and the Complete Guide to GitHub + Grok AI Features. Any change to Grok integration, prompts, client, workflows, or agent behavior must keep this document accurate and must be coordinated across all other Primary SOTs. After edits, re-verify call sites (grep), run Review Gate if high-risk, update "Last Updated", and preferably use the SOT Coordinated PR Helper. CI must remain green.*
 
-**End of GROK_USAGE.md**
+**End of Complete Guide to GitHub and Grok AI Features (GROK_USAGE.md)**
