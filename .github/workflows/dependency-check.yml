@@ -26,22 +26,7 @@ jobs:
       - name: Install tools
         run: |
           python -m pip install --upgrade pip
-          pip install pip-audit safety
-
-      - name: Check for outdated packages
-        id: outdated
-        run: |
-          echo "🔍 Checking for outdated packages..."
-          pip list --outdated --format=columns > outdated.txt || true
-          
-          if [ -s outdated.txt ]; then
-            echo "has_outdated=true" >> $GITHUB_OUTPUT
-            echo "📦 Outdated packages found!"
-            cat outdated.txt
-          else
-            echo "has_outdated=false" >> $GITHUB_OUTPUT
-            echo "✅ All packages are up to date."
-          fi
+          pip install pip-audit
 
       - name: Run security audit (pip-audit)
         id: audit
@@ -57,33 +42,29 @@ jobs:
             cat audit.json
           fi
 
-      - name: Create GitHub Issue if problems found
-        if: steps.outdated.outputs.has_outdated == 'true' || steps.audit.outputs.no_vulns == 'false'
+      - name: Create GitHub Issue if security issues found
+        if: steps.audit.outputs.no_vulns == 'false'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             
-            let body = `## 📦 Dependency Check Report\n\n`;
+            let body = `## 📦 Dependency Security Check Report\n\n`;
             body += `**Date:** ${new Date().toISOString()}\n\n`;
-            
-            if (fs.existsSync('outdated.txt')) {
-              body += `### Outdated Packages\n\`\`\`\n${fs.readFileSync('outdated.txt', 'utf8')}\n\`\`\`\n\n`;
-            }
             
             if (fs.existsSync('audit.json')) {
               body += `### Security Audit\n\`\`\`json\n${fs.readFileSync('audit.json', 'utf8')}\n\`\`\`\n\n`;
             }
             
-            body += `**Action Required:** Please review and update the dependencies.\n`;
-            body += `**Labels:** dependencies, maintenance`;
+            body += `**Action Required:** Please review and update the dependencies (Dependabot handles routine updates via PRs).\n`;
+            body += `**Labels:** dependencies, maintenance, security`;
 
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: '📦 Outdated Dependencies or Security Issues Detected',
+              title: '📦 Security Issues Detected in Dependencies',
               body: body,
-              labels: ['dependencies', 'maintenance', 'automated']
+              labels: ['dependencies', 'maintenance', 'security', 'automated']
             });
 
       - name: Summary
