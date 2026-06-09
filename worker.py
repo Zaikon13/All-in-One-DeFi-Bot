@@ -17,6 +17,14 @@ HEARTBEAT_INTERVAL = 3600
 DEXSCREENER_INTERVAL = 300
 WALLET_CHECK_INTERVAL = 600
 
+# Phase 1 (2026-06-09 extension): short time window for restart noise reduction only.
+# Pairs with last_seen older than this will intentionally re-trigger on restart
+# (freshness side-effect of using last_seen; not a permanent blacklist).
+# See improved Phase 1 proposal in todo + reviews/2026-06-08-worker-persistence-first-inc.md
+# and reviews/2026-06-09-worker-persistence-phase1.md.
+# # Review Agent 2026-06-09 (Phase 1 extension)
+RESTART_DEDUP_WINDOW_SECONDS = 3600
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("worker")
 
@@ -51,6 +59,13 @@ last_wallet_state = None
 #
 # Review Agent 2026-06-08: UTC timestamps + migration compat + ephemeral volume warning + atomic write
 # + no SOT drift (record requirement for follow-on) + scope strictly worker.py + risk documentation.
+#
+# Review Agent 2026-06-09 (Phase 1 extension): dict as single source of truth for last_seen
+# + explicit short time-window dedup on restart (RESTART_DEDUP_WINDOW_SECONDS).
+# This hardens in-process / local-restart behavior only. Does NOT change durability claims.
+# Reinforces: "Partially Functional" overall; Volume REQUIRED for production durability across redeploys.
+# Additive only to prior honest language. See reviews/2026-06-08-worker-persistence-first-inc.md
+# and reviews/2026-06-09-worker-persistence-phase1.md. No over-claims.
 PERSISTENCE_BASE = os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or "data"
 KNOWN_PAIRS_FILE = os.path.join(PERSISTENCE_BASE, "known_pairs.json")
 
@@ -62,7 +77,11 @@ def _warn_if_no_volume():
             f"RAILWAY VOLUME NOT DETECTED: persistence at {KNOWN_PAIRS_FILE} uses ephemeral 'data/' (or base). "
             "pairs/last_seen/last_eod_run are NOT durable across redeploys or container replacements. "
             "Set RAILWAY_VOLUME_MOUNT_PATH and mount Volume for production. "
-            "# Review Agent 2026-06-08: ephemeral volume warning log"
+            "# Review Agent 2026-06-08: ephemeral volume warning log. "
+            "# Review Agent 2026-06-09 (Phase 1 extension): Phase 1 (dict as source of truth + time-window dedup) "
+            "reinforces 'in-process / local-restart behavior only'. Volume REQUIRED for production durability. "
+            "See reviews/2026-06-08-worker-persistence-first-inc.md + reviews/2026-06-09-worker-persistence-phase1.md. "
+            "Additive to existing 'Partially Functional' framing; no weakening or over-claim."
         )
 
 
@@ -75,6 +94,45 @@ def _is_valid_last_seen(ts):
         return True
     except Exception:
         return False
+
+
+def _sync_seen_pairs_from_dict():
+    """Centralized single-source-of-truth sync.
+    Ensures seen_pairs is always derived from pair_last_seen dict after any mutation.
+    Call after updates to pair_last_seen.
+    # Review Agent 2026-06-09 (Phase 1 extension of first inc)
+    """
+    global seen_pairs
+    seen_pairs = set(pair_last_seen.keys())
+
+
+def _is_new_or_stale(pair_address: str) -> bool:
+    """Defensive helper for change detection using last_seen + explicit time window.
+
+    Policy documentation (addresses Review Agent 2026-06-09 Medium issue #1):
+    - The RESTART_DEDUP_WINDOW_SECONDS window is ONLY for short-term restart noise
+      reduction (e.g. 5-60min container flaps or quick restarts).
+    - If last_seen within window: treat as recently seen (skip re-alert).
+    - If last_seen older than window (or missing/invalid): intentionally re-trigger
+      as side-effect of using last_seen for freshness. This is NOT a permanent
+      blacklist of old pairs.
+    - Confirm this UX matches desired new-pair alert behavior for the project.
+    All timestamps are UTC ISO. Defensive (treat bad data as new).
+
+    # Review Agent 2026-06-09 (Phase 1 extension of first inc; builds on condition 2)
+    References: reviews/2026-06-08-worker-persistence-first-inc.md (original 12 conditions)
+    and reviews/2026-06-09-worker-persistence-phase1.md.
+    """
+    last = pair_last_seen.get(pair_address)
+    if not _is_valid_last_seen(last):
+        return True
+    try:
+        last_dt = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+        if (datetime.now(timezone.utc) - last_dt).total_seconds() > RESTART_DEDUP_WINDOW_SECONDS:
+            return True
+    except Exception:
+        return True
+    return False
 
 
 async def send_telegram(text: str):
@@ -179,10 +237,13 @@ async def poll_dexscreener():
                         if pair_address:
                             # Review Agent 2026-06-08: improve change detection using last_seen (defensive: missing/invalid last_seen treated as "new")
                             # last_seen also recorded for future richer diffing; update only on detection path (no new loops / no impact on market appends)
+                            # Review Agent 2026-06-09 (Phase 1 extension): use improved _is_new_or_stale() for explicit time-window policy
+                            # + centralized _sync_seen_pairs_from_dict() to keep dict as single source of truth.
                             last = pair_last_seen.get(pair_address)
-                            if pair_address not in seen_pairs or last is None or not _is_valid_last_seen(last):
+                            if pair_address not in seen_pairs or _is_new_or_stale(pair_address):
                                 seen_pairs.add(pair_address)
                                 pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
+                                _sync_seen_pairs_from_dict()
                                 save_known_pairs(seen_pairs)   # persist immediately (atomic + warns if no volume)
 
                                 base = pair.get("baseToken", {})
@@ -344,7 +405,14 @@ async def main():
 
     # Review Agent 2026-06-08: startup durability status + path logging for ops visibility (ephemeral warning already emitted by load)
     if not os.getenv("RAILWAY_VOLUME_MOUNT_PATH"):
-        logger.warning("Startup: no RAILWAY_VOLUME_MOUNT_PATH -> persistence is ephemeral (data lost on redeploy). See full caveat in code + reviews/2026-06-08-worker-persistence-first-inc.md")
+        logger.warning(
+            "Startup: no RAILWAY_VOLUME_MOUNT_PATH -> persistence is ephemeral (data lost on redeploy). "
+            "See full caveat in code + reviews/2026-06-08-worker-persistence-first-inc.md. "
+            "# Review Agent 2026-06-09 (Phase 1 extension): Phase 1 improvements (dict source-of-truth + "
+            "RESTART_DEDUP_WINDOW_SECONDS time-window) are in-process / local-restart hardening only. "
+            "Reinforces 'Partially Functional' status and 'Volume REQUIRED for production durability'. "
+            "References reviews/2026-06-09-worker-persistence-phase1.md (additive language only)."
+        )
 
     # One-time roundtrip sanity for new structure (bonus condition 11). Continue-on-error, non-fatal.
     try:
