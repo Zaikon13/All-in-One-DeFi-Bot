@@ -4,7 +4,7 @@
 
 **Purpose**: This is the **Complete Guide to GitHub and Grok AI Features** for the All-in-One-DeFi-Bot project. It serves as the canonical, comprehensive map of **all** Grok integrations (Python runtime call sites, CI workflows, prompts/contracts, quality gates, dependencies) **and** how they synergize with native GitHub platform features (PRs, Actions, Issues, Secrets, branching, reviews). Primary SOT (see GROK_COORDINATION.md).
 
-**Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc + Phase 2 worker EOD guard) by Grok AI Coordinator (completed as full guide: confirmed CI unification, added dedicated GitHub + Grok synergies section, marked recent EOD/market analysis complete, updated roadmap with priorities, aligned with project-status.md and Review Agent decisions) (Phase 2: commit 61059a6 addresses reviews/2026-06-09-worker-persistence-phase2.md)
+**Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc + Phase 2 worker EOD guard) by Grok AI Coordinator (completed as full guide: confirmed CI unification, added dedicated GitHub + Grok synergies section, marked recent EOD/market analysis complete, updated roadmap with priorities, aligned with project-status.md and Review Agent decisions) (Phase 2: commit 61059a6 addresses reviews/2026-06-09-worker-persistence-phase2.md) (Railway Volume attachment for worker: worker-persistence, 5GB at /data, ID c13adabe-5db7-4050-8d46-2c7c0fa58876)
 
 **See also**:
 - [GROK_COORDINATION.md](GROK_COORDINATION.md) (central hub + SOT definitions + coordination protocol)
@@ -176,6 +176,8 @@ This synergy turns GitHub into a **Grok-augmented development platform** with au
   **SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: feat(worker): Phase 1 persistence hardening (commit 30521a3). Still 'Partially Functional'. Volume still REQUIRED for production durability. No SOT changes in this commit (deferred to follow-on via --sot-pr-helper).. Advisory only (orchestrator --sot-pr-helper). See GROK_COORDINATION.md and reviews/ for usage + 12 conditions.
 
   **SOT Coordinated PR Helper (Phase 2, 2026-06 per Review Agent "Approve with minor revisions")**: feat(worker): Phase 2 EOD PnL guard hardening + startup sanity (commit 61059a6). Addresses Review Agent 2026-06-09-worker-persistence-phase2.md (all 3 Medium issues addressed). EOD PnL guard + startup sanity hardening only (in-process / local-restart behavior only). Still 'Partially Functional'. Volume still REQUIRED for production durability. No over-claims on EOD completeness. Scheduler/target/sleep/report generation and core/ untouched. No SOT changes in this commit (deferred to follow-on via --sot-pr-helper).. Advisory only (orchestrator --sot-pr-helper). See GROK_COORDINATION.md and reviews/ for usage + 12 conditions.
+
+  **Railway Volume (worker)**: Volume attached (5GB at /data). Persistence now survives redeploys as long as the Volume remains attached. Still 'Partially Functional'. Full durability depends on Volume + active subscription.
 - **Skills Synergy**: Bundled skills (repo-guardian, code-sentinel, pep8-code-reviewer, orchestrator, defi-*) provide patterns and inspiration adapted here. Internal Sub-Agent Review is the project-specific gate.
 
 All future agent work must respect the Review Gate, SOT coordination, and core client SOT.
