@@ -4,7 +4,7 @@
 
 **Purpose**: This is the **Complete Guide to GitHub and Grok AI Features** for the All-in-One-DeFi-Bot project. It serves as the canonical, comprehensive map of **all** Grok integrations (Python runtime call sites, CI workflows, prompts/contracts, quality gates, dependencies) **and** how they synergize with native GitHub platform features (PRs, Actions, Issues, Secrets, branching, reviews). Primary SOT (see GROK_COORDINATION.md).
 
-**Last Updated**: 2026-06-09 by Grok AI Coordinator (completed as full guide: confirmed CI unification, added dedicated GitHub + Grok synergies section, marked recent EOD/market analysis complete, updated roadmap with priorities, aligned with project-status.md and Review Agent decisions).
+**Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) by Grok AI Coordinator (completed as full guide: confirmed CI unification, added dedicated GitHub + Grok synergies section, marked recent EOD/market analysis complete, updated roadmap with priorities, aligned with project-status.md and Review Agent decisions).
 
 **See also**:
 - [GROK_COORDINATION.md](GROK_COORDINATION.md) (central hub + SOT definitions + coordination protocol)
@@ -172,6 +172,8 @@ This synergy turns GitHub into a **Grok-augmented development platform** with au
 - **Orchestrator** (`agents/orchestrator.py` + `agents/memory/`): Master planning, improvement proposals (proposals-only), drift detection, SOT PR helper. Uses `core/grok_client.py` exclusively + dedicated prompts (`grok_orchestrator_plan.txt`, `grok_improvement_proposer.txt`, `grok_drift_detector.txt`).
 - **Phase 1 (Foundation)**: Basic orchestration, committed memory, high-risk → Review first. Master authority preserved.
 - **Phase 2 Increments (Gated Self-Improvement)**: Improvement Proposer, Drift Detection (v1 + v2), SOT Coordinated PR Helper. All proposals-only, full Review Gate language embedded in every output, minimal high-risk memory append-only, coordinated Primary SOT updates, ruthlessly scoped. All Review Agent "Approved with Conditions" (High/Medium-High risk) decisions followed exactly (see individual reviews/2026-06-XX-*.md files).
+
+  **SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: feat(worker): Phase 1 persistence hardening (commit 30521a3). Still 'Partially Functional'. Volume still REQUIRED for production durability. No SOT changes in this commit (deferred to follow-on via --sot-pr-helper).. Advisory only (orchestrator --sot-pr-helper). See GROK_COORDINATION.md and reviews/ for usage + 12 conditions.
 - **Skills Synergy**: Bundled skills (repo-guardian, code-sentinel, pep8-code-reviewer, orchestrator, defi-*) provide patterns and inspiration adapted here. Internal Sub-Agent Review is the project-specific gate.
 
 All future agent work must respect the Review Gate, SOT coordination, and core client SOT.
