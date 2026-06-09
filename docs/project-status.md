@@ -45,14 +45,17 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 
 **Grok Build Coordinator Action (2026-06-09)**: Merged `docs/complete-grok-usage-guide` into main (Complete Guide to GitHub + Grok AI Features via cherry-picks; small docs-only; Review Gate + SOT coordination rules followed). Enhanced `GROK_USAGE.md` with full GitHub + Grok synergies section, confirmed CI unification, marked recent EOD market analysis complete, and cleaned roadmap. Merged Dependabot PRs #15 (docker: python-3.14-slim) and #16 (pip: python-telegram-bot ==22.*). Consolidated duplicate dependency-check issues (removed outdated packages step from .github/workflows/dependency-check.yml; workflow now security-audit only; Dependabot handles routine updates via PRs). Coordinated Primary SOT update to project-status.md. All Grok AI workflows, Review Gate, and agent system remain production-ready. # Review Agent aligned
 
+**Hotfix PR #22 (2026-06-09)**: fix(docker): revert python base image from 3.14-slim back to stable 3.11-slim (hotfix for Railway deployment via PR #22). Restores consistent Python runtime after Dependabot #15 broke deployment (multi-stage COPY python3.11 paths mismatched 3.14 base). Only Dockerfile changed. Merged to main. Railway redeploy verification in progress (bot + worker + web). # Review Agent aligned
+
+**Long-term recommendation for Dependabot PR #15**: Python 3.14-slim upgrade introduced Railway deployment breakage due to inconsistent Python paths in Dockerfile multi-stage build (base 3.14 but COPY from python3.11 site-packages). Recommend: Stick with stable python:3.11-slim for now (as hotfix does). If upgrading later, fully update Dockerfile (all FROM and COPY paths to 3.14), test locally + Railway preview, pin in dependabot.yml if needed, and re-evaluate. Avoid partial upgrades. See Dockerfile and this hotfix for details. # Review Agent aligned
+
 **Next Steps**
-- Merge `docs/complete-grok-usage-guide` (Complete Guide) — small docs PR, will trigger Grok Code Review
-- Merge open Dependabot PRs (#15, #16)
-- Clean duplicate dependency-check issues
+- Verify full Railway redeploy on main after hotfix PR #22 (bot + worker + web)
+- Long-term: Review viability of Dependabot PR #15 (python 3.14 upgrade) — see note below on risks (inconsistent paths, Railway breakage)
 - Continue Worker Loop improvements (persistence for known pairs, full change detection, EOD PnL reports) — all edits must go through the Review Gate
 - Adopt the full Sub-Agent + Review Gate protocol for all non-trivial work (see project-awareness.md)
 - Continue with Railway improvements and bot features
 
 **Core Rule**: Small PRs → Green CI → Update docs
 
-**Last Updated**: 2026-06-09 by Grok AI Coordinator (Complete Guide staged on feature branch + coordinated SOT update)
+**Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) by Grok AI Coordinator (Complete Guide staged on feature branch + coordinated SOT update + hotfix PR #22 for python:3.11-slim revert)

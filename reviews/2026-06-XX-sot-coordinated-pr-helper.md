@@ -1,15 +1,15 @@
 # SOT Coordinated PR Helper - Audit Log (implementation support + runtime use)
 
-Run timestamp: 2026-06-09T00:07:17.597653+00:00
-Changed/proposed SOT: AGENTS.md
-Change summary: feat(agent): Context Strengthening for Drift v2 + Proposer (bounded reviews/ glob+read cross-refs + structured citation-friendly history bullets + one-sentence citation format tightening). Per Review Agent 2026-06-08 (Approve with minor revisions + 5 conditions addressed exactly by Code Agent subagent). Extend-existing only (agents/orchestrator.py private helpers + 2 prompts + 1 reviews/ traceability file). No SOT edits in the inc itself (per conditions 3+5); this is the follow-on coordinated status update. New logic remains subject to condition 10. Full non-bypassable Review Gate preserved (only ref append). See reviews/2026-06-08-drift-proposer-context-strengthening.md . Master retains final authority. Honest status-only language.
+Run timestamp: 2026-06-09T02:06:18.421246+00:00
+Changed/proposed SOT: docs/project-status.md
+Change summary: fix(docker): revert python base image from 3.14-slim back to stable 3.11-slim (hotfix for Railway deployment via PR #22). Restores consistent Python runtime after Dependabot #15 broke deployment. Only Dockerfile changed.
 
 ## Generated ready-to-paste (exact console output for traceability)
 ## Last Updated (apply the proposed line to the changed SOT and the 4 generated lines to the others)
 
 ### For GROK_COORDINATION.md
 Find this exact string:
-  **Last Updated**: 2026-06-08 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment in grok_market_analysis.txt + thin helper update; analysis/insights only, renamed watchpoints section, all prior 12 conditions + new review artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
+  **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment in grok_market_analysis.txt + thin helper update; analysis/insights only, renamed watchpoints section, all prior 12 conditions + new review artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
 
 Replace with this block:
   **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment in grok_market_analysis.txt + thin helper update; analysis/insights only, renamed watchpoints section, all prior 12 conditions + new review artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
@@ -17,7 +17,7 @@ Replace with this block:
 
 ### For project-awareness.md
 Find this exact string:
-  **Last Updated**: 2026-06-08 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints section per conditions, all prior 12 + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
+  **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints section per conditions, all prior 12 + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
 
 Replace with this block:
   **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints section per conditions, all prior 12 + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
@@ -25,15 +25,15 @@ Replace with this block:
 
 ### For GROK_USAGE.md
 Find this exact string:
-  **Last Updated**: 2026-06-08 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown; analysis only, renamed watchpoints, all 12 conditions + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
+  **Last Updated**: 2026-06-09 by Grok AI Coordinator (completed as full guide: confirmed CI unification, added dedicated GitHub + Grok synergies section, marked recent EOD/market analysis complete, updated roadmap with priorities, aligned with project-status.md and Review Agent decisions).
 
 Replace with this block:
-  **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown; analysis only, renamed watchpoints, all 12 conditions + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
+  **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) by Grok AI Coordinator (completed as full guide: confirmed CI unification, added dedicated GitHub + Grok synergies section, marked recent EOD/market analysis complete, updated roadmap with priorities, aligned with project-status.md and Review Agent decisions).
 
 
 ### For AGENTS.md
 Find this exact string:
-  **Last Updated**: 2026-06-08 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints, all 12 conditions + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
+  **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints, all 12 conditions + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
 
 Replace with this block:
   **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints, all 12 conditions + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
@@ -41,10 +41,10 @@ Replace with this block:
 
 ### For docs/project-status.md
 Find this exact string:
-  **Last Updated**: 2026-06-08 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment (Summary/Key Metrics/Market Narrative/Risk Signals/Observed Patterns & Contextual Watchpoints/Confidence & Data Notes); analysis only, renamed watchpoints per conditions, all 12 + new artifact, Primary SOTs read; coordinated 5-SOT. Builds on first market inc + EOD + prior.) by Grok AI Coordinator
+  **Last Updated**: 2026-06-09 by Grok AI Coordinator (Complete Guide staged on feature branch + coordinated SOT update)
 
 Replace with this block:
-  **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment (Summary/Key Metrics/Market Narrative/Risk Signals/Observed Patterns & Contextual Watchpoints/Confidence & Data Notes); analysis only, renamed watchpoints per conditions, all 12 + new artifact, Primary SOTs read; coordinated 5-SOT. Builds on first market inc + EOD + prior.) by Grok AI Coordinator
+  **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) by Grok AI Coordinator (Complete Guide staged on feature branch + coordinated SOT update)
 
 
 ## Additional coordination notes (paste/adapt under the matching section in each target SOT)
@@ -54,7 +54,7 @@ Find this exact anchor string near the relevant section:
   **Agent Drift Detection (first inc, 2026-06 per Review Agent "Approved with Conditions", High risk)**:
 
 Insert the following block immediately after it (or in the appropriate parallel location):
-  **SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent "Approved with Conditions", High risk)**: feat(agent): Context Strengthening for Drift v2 + Proposer (bounded reviews/ glob+read cross-refs + structured citation-friendly history bullets + one-sentence citation format tightening). Per Review Agent 2026-06-08 (Approve with minor revisions + 5 conditions addressed exactly by Code Agent subagent). Extend-existing only (agents/orchestrator.py private helpers + 2 prompts + 1 reviews/ traceability file). No SOT edits in the inc itself (per conditions 3+5); this is the follow-on coordinated status update. New logic remains subject to condition 10. Full non-bypassable Review Gate preserved (only ref append). See reviews/2026-06-08-drift-proposer-context-strengthening.md . Master retains final authority. Honest status-only language..
+  **SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent "Approved with Conditions", High risk)**: fix(docker): revert python base image from 3.14-slim back to stable 3.11-slim (hotfix for Railway deployment via PR #22). Restores consistent Python runtime after Dependabot #15 broke deployment. Only Dockerfile changed..
 
 
 ### For project-awareness.md
@@ -62,7 +62,7 @@ Find this exact anchor string near the relevant section:
   **Drift Detection v2 (per Review Agent 2026-06 "Approved with Conditions", Medium-High risk)**:
 
 Insert the following block immediately after it (or in the appropriate parallel location):
-  **SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: feat(agent): Context Strengthening for Drift v2 + Proposer (bounded reviews/ glob+read cross-refs + structured citation-friendly history bullets + one-sentence citation format tightening). Per Review Agent 2026-06-08 (Approve with minor revisions + 5 conditions addressed exactly by Code Agent subagent). Extend-existing only (agents/orchestrator.py private helpers + 2 prompts + 1 reviews/ traceability file). No SOT edits in the inc itself (per conditions 3+5); this is the follow-on coordinated status update. New logic remains subject to condition 10. Full non-bypassable Review Gate preserved (only ref append). See reviews/2026-06-08-drift-proposer-context-strengthening.md . Master retains final authority. Honest status-only language.. Thin read-only extension inside orchestrator. See GROK_COORDINATION Section 3 and the helper audit.
+  **SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: fix(docker): revert python base image from 3.14-slim back to stable 3.11-slim (hotfix for Railway deployment via PR #22). Restores consistent Python runtime after Dependabot #15 broke deployment. Only Dockerfile changed.. Thin read-only extension inside orchestrator. See GROK_COORDINATION Section 3 and the helper audit.
 
 
 ### For GROK_USAGE.md
@@ -70,19 +70,19 @@ Find this exact anchor string near the relevant section:
   **Drift Detection v2 (2026-06 per Review Agent "Approved with Conditions", Medium-High risk)**:
 
 Insert the following block immediately after it (or in the appropriate parallel location):
-  **SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: feat(agent): Context Strengthening for Drift v2 + Proposer (bounded reviews/ glob+read cross-refs + structured citation-friendly history bullets + one-sentence citation format tightening). Per Review Agent 2026-06-08 (Approve with minor revisions + 5 conditions addressed exactly by Code Agent subagent). Extend-existing only (agents/orchestrator.py private helpers + 2 prompts + 1 reviews/ traceability file). No SOT edits in the inc itself (per conditions 3+5); this is the follow-on coordinated status update. New logic remains subject to condition 10. Full non-bypassable Review Gate preserved (only ref append). See reviews/2026-06-08-drift-proposer-context-strengthening.md . Master retains final authority. Honest status-only language.. Advisory only (orchestrator --sot-pr-helper). See GROK_COORDINATION.md and reviews/ for usage + 12 conditions.
+  **SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: fix(docker): revert python base image from 3.14-slim back to stable 3.11-slim (hotfix for Railway deployment via PR #22). Restores consistent Python runtime after Dependabot #15 broke deployment. Only Dockerfile changed.. Advisory only (orchestrator --sot-pr-helper). See GROK_COORDINATION.md and reviews/ for usage + 12 conditions.
 
 
-### For docs/project-status.md
+### For AGENTS.md
 Find this exact anchor string near the relevant section:
-  **Key Improvements Made**
+  **Next Priority**: Complete remaining Worker Loop features
 
 Insert the following block immediately after it (or in the appropriate parallel location):
-  **SOT Coordinated PR Helper (first inc, Review Agent 2026-06 Approved with Conditions, High risk)**: feat(agent): Context Strengthening for Drift v2 + Proposer (bounded reviews/ glob+read cross-refs + structured citation-friendly history bullets + one-sentence citation format tightening). Per Review Agent 2026-06-08 (Approve with minor revisions + 5 conditions addressed exactly by Code Agent subagent). Extend-existing only (agents/orchestrator.py private helpers + 2 prompts + 1 reviews/ traceability file). No SOT edits in the inc itself (per conditions 3+5); this is the follow-on coordinated status update. New logic remains subject to condition 10. Full non-bypassable Review Gate preserved (only ref append). See reviews/2026-06-08-drift-proposer-context-strengthening.md . Master retains final authority. Honest status-only language.. All 12 conditions. Coordinated 5-SOT + reviews/ artifact. # Review Agent 2026-06
+  **SOT Coordinated PR Helper (first inc)**: fix(docker): revert python base image from 3.14-slim back to stable 3.11-slim (hotfix for Railway deployment via PR #22). Restores consistent Python runtime after Dependabot #15 broke deployment. Only Dockerfile changed. (see GROK_COORDINATION.md Sec 3 + reviews/2026-06-XX-sot-coordinated-pr-helper.md). # Review Agent 2026-06
 
 
-### For the source changed SOT (AGENTS.md)
-Use the Last Updated proposed line above in your edit of AGENTS.md.
+### For the source changed SOT (docs/project-status.md)
+Use the Last Updated proposed line above in your edit of docs/project-status.md.
 Add the intent described by --change-summary in the natural place (Section 3 / 4.8 / ownership / pending / status map).
 
 
@@ -96,27 +96,27 @@ Add the intent described by --change-summary in the natural place (Section 3 / 4
 **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints section per conditions, all prior 12 + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
 
 # GROK_USAGE.md
-**Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown; analysis only, renamed watchpoints, all 12 conditions + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
+**Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) by Grok AI Coordinator (completed as full guide: confirmed CI unification, added dedicated GitHub + Grok synergies section, marked recent EOD/market analysis complete, updated roadmap with priorities, aligned with project-status.md and Review Agent decisions).
 
 # AGENTS.md
 **Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints, all 12 conditions + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)
 
 # docs/project-status.md
-**Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment (Summary/Key Metrics/Market Narrative/Risk Signals/Observed Patterns & Contextual Watchpoints/Confidence & Data Notes); analysis only, renamed watchpoints per conditions, all 12 + new artifact, Primary SOTs read; coordinated 5-SOT. Builds on first market inc + EOD + prior.) by Grok AI Coordinator
+**Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) by Grok AI Coordinator (Complete Guide staged on feature branch + coordinated SOT update)
 
 
 ## Additional per-SOT coordination notes (use with the Last Updated blocks above)
 # GROK_COORDINATION.md (coordination note)
-**SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent "Approved with Conditions", High risk)**: feat(agent): Context Strengthening for Drift v2 + Proposer (bounded reviews/ glob+read cross-refs + structured citation-friendly history bullets + one-sentence citation format tightening). Per Review Agent 2026-06-08 (Approve with minor revisions + 5 conditions addressed exactly by Code Agent subagent). Extend-existing only (agents/orchestrator.py private helpers + 2 prompts + 1 reviews/ traceability file). No SOT edits in the inc itself (per conditions 3+5); this is the follow-on coordinated status update. New logic remains subject to condition 10. Full non-bypassable Review Gate preserved (only ref append). See reviews/2026-06-08-drift-proposer-context-strengthening.md . Master retains final authority. Honest status-only language..
+**SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent "Approved with Conditions", High risk)**: fix(docker): revert python base image from 3.14-slim back to stable 3.11-slim (hotfix for Railway deployment via PR #22). Restores consistent Python runtime after Dependabot #15 broke deployment. Only Dockerfile changed..
 
 # project-awareness.md (coordination note)
-**SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: feat(agent): Context Strengthening for Drift v2 + Proposer (bounded reviews/ glob+read cross-refs + structured citation-friendly history bullets + one-sentence citation format tightening). Per Review Agent 2026-06-08 (Approve with minor revisions + 5 conditions addressed exactly by Code Agent subagent). Extend-existing only (agents/orchestrator.py private helpers + 2 prompts + 1 reviews/ traceability file). No SOT edits in the inc itself (per conditions 3+5); this is the follow-on coordinated status update. New logic remains subject to condition 10. Full non-bypassable Review Gate preserved (only ref append). See reviews/2026-06-08-drift-proposer-context-strengthening.md . Master retains final authority. Honest status-only language.. Thin read-only extension inside orchestrator. See GROK_COORDINATION Section 3 and the helper audit.
+**SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: fix(docker): revert python base image from 3.14-slim back to stable 3.11-slim (hotfix for Railway deployment via PR #22). Restores consistent Python runtime after Dependabot #15 broke deployment. Only Dockerfile changed.. Thin read-only extension inside orchestrator. See GROK_COORDINATION Section 3 and the helper audit.
 
 # GROK_USAGE.md (coordination note)
-**SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: feat(agent): Context Strengthening for Drift v2 + Proposer (bounded reviews/ glob+read cross-refs + structured citation-friendly history bullets + one-sentence citation format tightening). Per Review Agent 2026-06-08 (Approve with minor revisions + 5 conditions addressed exactly by Code Agent subagent). Extend-existing only (agents/orchestrator.py private helpers + 2 prompts + 1 reviews/ traceability file). No SOT edits in the inc itself (per conditions 3+5); this is the follow-on coordinated status update. New logic remains subject to condition 10. Full non-bypassable Review Gate preserved (only ref append). See reviews/2026-06-08-drift-proposer-context-strengthening.md . Master retains final authority. Honest status-only language.. Advisory only (orchestrator --sot-pr-helper). See GROK_COORDINATION.md and reviews/ for usage + 12 conditions.
+**SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: fix(docker): revert python base image from 3.14-slim back to stable 3.11-slim (hotfix for Railway deployment via PR #22). Restores consistent Python runtime after Dependabot #15 broke deployment. Only Dockerfile changed.. Advisory only (orchestrator --sot-pr-helper). See GROK_COORDINATION.md and reviews/ for usage + 12 conditions.
 
-# docs/project-status.md (coordination note)
-**SOT Coordinated PR Helper (first inc, Review Agent 2026-06 Approved with Conditions, High risk)**: feat(agent): Context Strengthening for Drift v2 + Proposer (bounded reviews/ glob+read cross-refs + structured citation-friendly history bullets + one-sentence citation format tightening). Per Review Agent 2026-06-08 (Approve with minor revisions + 5 conditions addressed exactly by Code Agent subagent). Extend-existing only (agents/orchestrator.py private helpers + 2 prompts + 1 reviews/ traceability file). No SOT edits in the inc itself (per conditions 3+5); this is the follow-on coordinated status update. New logic remains subject to condition 10. Full non-bypassable Review Gate preserved (only ref append). See reviews/2026-06-08-drift-proposer-context-strengthening.md . Master retains final authority. Honest status-only language.. All 12 conditions. Coordinated 5-SOT + reviews/ artifact. # Review Agent 2026-06
+# AGENTS.md (coordination note)
+**SOT Coordinated PR Helper (first inc)**: fix(docker): revert python base image from 3.14-slim back to stable 3.11-slim (hotfix for Railway deployment via PR #22). Restores consistent Python runtime after Dependabot #15 broke deployment. Only Dockerfile changed. (see GROK_COORDINATION.md Sec 3 + reviews/2026-06-XX-sot-coordinated-pr-helper.md). # Review Agent 2026-06
 
 
 ## Full embedded Review Gate paragraph (per condition 6)
