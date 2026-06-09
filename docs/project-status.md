@@ -38,12 +38,16 @@ All GitHub Actions workflows are now **clean, stable, and production-ready** aft
 - Grok Code Review triggers expanded (branches: [main] + paths filter) per Review Agent 2026-06 Approved with Conditions (High Risk) for automatic reviews on relevant PRs to main. Remains advisory.
 - Health Check + Telegram upgraded with strict GROK HEALTH CHECK CONTRACT, enriched actionable Telegram output (safe Markdown), and explicit worker visibility limitation note (Review Agent 2026-06 Approved with Conditions)
 
+**Grok Build Coordinator Action (2026-06-09)**: Prepared and staged the **Complete Guide to GitHub and Grok AI Features** on branch `docs/complete-grok-usage-guide`. Enhanced `GROK_USAGE.md` with full GitHub + Grok synergies section, confirmed CI unification, marked recent EOD market analysis complete, and cleaned roadmap. This is a coordinated Primary SOT update. Branch is ready for merge. # Review Agent aligned
+
 **Next Steps**
-- Test `Grok Code Review` with a small Pull Request (optional)
+- Merge `docs/complete-grok-usage-guide` (Complete Guide) — small docs PR, will trigger Grok Code Review
+- Merge open Dependabot PRs (#15, #16)
+- Clean duplicate dependency-check issues
 - Continue Worker Loop improvements (persistence for known pairs, full change detection, EOD PnL reports) — all edits must go through the Review Gate
 - Adopt the full Sub-Agent + Review Gate protocol for all non-trivial work (see project-awareness.md)
 - Continue with Railway improvements and bot features
 
 **Core Rule**: Small PRs → Green CI → Update docs
 
-**Last Updated**: 2026-06-07 (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment (Summary/Key Metrics/Market Narrative/Risk Signals/Observed Patterns & Contextual Watchpoints/Confidence & Data Notes); analysis only, renamed watchpoints per conditions, all 12 + new artifact, Primary SOTs read; coordinated 5-SOT. Builds on first market inc + EOD + prior.) by Grok AI Coordinator
+**Last Updated**: 2026-06-09 by Grok AI Coordinator (Complete Guide staged on feature branch + coordinated SOT update)
