@@ -2,6 +2,6 @@ fastapi
 uvicorn[standard]
 httpx
 pydantic
-python-telegram-bot==21.*
+python-telegram-bot==22.*
 schedule
 websockets
