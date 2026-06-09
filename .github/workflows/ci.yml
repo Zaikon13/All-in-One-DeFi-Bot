@@ -48,6 +48,9 @@ jobs:
           print("ci: smoke ok")
           PY
 
+      - name: Install pytest
+        run: pip install pytest
+
       - name: Run pytest (if tests/ exists)
         run: |
           if [ -d tests ]; then
