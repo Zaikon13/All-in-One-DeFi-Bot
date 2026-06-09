@@ -165,18 +165,93 @@ def _extract_meta_notes_excerpt(plan_text: str, max_chars: int = 450) -> str:
     return excerpt or ""
 
 
+# Review Agent 2026-06-08: Two strictly private reusable helpers for richer bounded context (replaces aspirational raw json + static note in drift_ctx).
+# - _build_recent_history_section: structured plain-text bullets (no tables/links/underscores) from plan_outcomes for pattern detection (quality only, condition 12).
+# - _build_reviews_crossref_evidence: actual bounded reads of prior reviews/ files (keywords only) + short excerpts for SOT cross-ref area.
+# Hard bounds: max_files=5, excerpt_len=500, defensive Path.exists() + try/except on every IO (matching existing detect_drift pattern), explicit total context cap.
+# These helpers + the updated context logic in detect_drift/propose_improvements remain subject to condition 10 (auditable by future Improvement Proposer / --detect-drift runs).
+# No memory schema, no production files, no SOT changes. Private only (no public API).
+def _build_recent_history_section(memory: dict, types: tuple = ("plan", "drift_detection", "improvement_proposal"), max_items: int = 8) -> str:
+    """Build structured recent history bullets for pattern-aware proposals/drift (history for quality only per condition 12).
+
+    # Review Agent 2026-06-08: Private helper. Subject to condition 10 (auditable by future Improvement Proposer / --detect-drift runs).
+    Returns plain text only. Replaces raw json.dumps in meta_context / drift_ctx.
+    """
+    plan_outcomes = memory.get("plan_outcomes", []) if isinstance(memory, dict) else []
+    recent = [r for r in plan_outcomes if isinstance(r, dict) and r.get("type") in types][-max_items:]
+    lines = ["=== RECENT HISTORY (plan_outcomes / prior runs for pattern detection - summaries only; full in printed + reviews/) ==="]
+    for r in recent:
+        t = str(r.get("time", "N/A"))
+        typ = str(r.get("type", "?"))
+        task_or_focus = str(r.get("task", r.get("focus", "")))[:120]
+        meta = str(r.get("meta_summary", r.get("summary", "")))[:200]
+        lines.append(f"- Run at {t} (type: {typ}, task/focus: '{task_or_focus}', meta: '{meta}')")
+    if not recent:
+        lines.append("(no recent plan_outcomes entries)")
+    return "\n".join(lines) + "\n"
+
+
+def _build_reviews_crossref_evidence(max_files: int = 5, excerpt_len: int = 500) -> str:
+    """Build bounded actual reviews/ evidence for SOT cross-ref (v2 area). Defensive IO, keyword-targeted globs only, total cap.
+
+    # Review Agent 2026-06-08: Private helper. Subject to condition 10 (auditable by future Improvement Proposer / --detect-drift runs).
+    Keywords limited to prior Phase 2/drift/proposer/sot reviews. Plain text excerpts (compliance notes / Master sections preferred).
+    Explicit caps prevent bloat in drift_ctx.
+    """
+    from pathlib import Path as _Path  # local to keep scope minimal
+    reviews_dir = _Path("reviews")
+    if not reviews_dir.exists():
+        return "=== REVIEWS CROSS-REF EVIDENCE (bounded actual files vs SOT mentions) ===\n(no reviews/ dir at read time)\n"
+    keywords = ["drift", "phase2", "improve-proposer", "sot-coordinated", "agent-drift"]
+    candidates = []
+    try:
+        for kw in keywords:
+            for p in reviews_dir.glob(f"*{kw}*.md"):
+                if p not in candidates:
+                    candidates.append(p)
+    except Exception:
+        return "=== REVIEWS CROSS-REF EVIDENCE (bounded actual files vs SOT mentions) ===\n(glob error, skipped)\n"
+    candidates = candidates[:max_files]  # hard max_files=5
+    lines = ["=== REVIEWS CROSS-REF EVIDENCE (actual files vs SOT mentions; bounded max_files=5, excerpt_len=500; defensive) ==="]
+    total_added = 0
+    for p in candidates:
+        try:
+            if not p.exists():
+                continue
+            txt = p.read_text(encoding="utf-8")
+            excerpt = ""
+            # Prefer compliance / Master sections for citation value (matching prior review format)
+            for marker in ["## Deliverables", "## The ", "Master Next Steps", "# Review Agent 2026-06 (this file)"]:
+                idx = txt.find(marker)
+                if idx != -1:
+                    excerpt = txt[idx : idx + excerpt_len].strip()
+                    break
+            if not excerpt:
+                excerpt = txt[:excerpt_len].strip()
+            # Normalize to single-line safe excerpt (plain text)
+            excerpt = " ".join(excerpt.split())[:excerpt_len]
+            lines.append(f"- File: {p.name} excerpt: {excerpt}")
+            total_added += len(excerpt)
+            if total_added > 2200:  # explicit total context cap
+                lines.append("(total evidence cap reached; truncated)")
+                break
+        except Exception:
+            lines.append(f"- File: {p.name} (read error, skipped defensively)")
+    if not candidates:
+        lines.append("(no matching prior review files for targeted keywords)")
+    return "\n".join(lines) + "\n"
+
+
 async def propose_improvements(context: str, memory: dict) -> str:
     """Generate gated improvement proposals (prompts + memory schema) using Grok via SOT only. Master reviews output."""
     from datetime import datetime, timezone
     # Build richer "past Meta Notes + outcome data" context (this inc: last 5-8 plan_outcomes + any meta_summary).
     # # Review Agent 2026-06: Richer but still bounded history for higher-quality, specific, pattern-aware proposals.
     # Full prior Meta Notes live in stdout/reviews/; we only pass tiny excerpts via meta_summary in plan_outcomes.
-    recent_history = memory.get("run_history", [])[-5:]
-    plan_outcomes = memory.get("plan_outcomes", [])[-8:]  # modestly richer per scoped MVP
+    # Review Agent 2026-06-08: Reused private _build_recent_history_section (structured bullets, bounded, cond 12 quality-only, cond 10 subject).
     meta_context = (
         f"Last orchestrator task: {memory.get('last_task', 'N/A')}\n"
-        f"Recent run history (task + time): {json.dumps(recent_history, indent=2)}\n"
-        f"Recent plan_outcomes (with meta_summary when present for prior plans): {json.dumps(plan_outcomes, indent=2)}\n"
+        f"{_build_recent_history_section(memory)}\n"
         f"Memory notes: {memory.get('notes', '')[:500]}\n"
         "Note: meta_summary (if present) contains a short bounded excerpt of the '## Meta Notes for Future Improvement' section from that run's plan output. "
         "Use it + run timestamps to detect patterns (e.g. repeated weak Meta Notes quality, missing context). "
@@ -260,12 +335,11 @@ async def detect_drift(context: str, memory: dict) -> str:
 
     proj_ctx = _Path("agents/memory/project_context.md").read_text(encoding="utf-8")[:900] if _Path("agents/memory/project_context.md").exists() else ""
 
-    # Bounded recent history for patterns (v2; filter relevant types, small summaries only)
-    recent = [r for r in memory.get("plan_outcomes", []) if r.get("type") in ("plan", "drift_detection", "improvement_proposal")][-8:]
-    history_section = "=== RECENT HISTORY (plan_outcomes / prior drift for pattern detection - summaries/truncated only; full in printed + reviews/) ===\n" + json.dumps(recent, indent=2)[:900] + "\n"
-
-    # SOT cross-ref examples + reviews/ note (v2 modest area)
-    cross_ref_note = "=== SOT CROSS-REFS vs ACTUAL (v2 area; examples from SOTs like 'see reviews/2026-06-XX-...' or 'see project-awareness 4.7' vs files in reviews/ and consistency) ===\n" + " (Check for dangling refs in the DOCUMENTED excerpts above vs actual reviews/ dir contents.)\n"
+    # Review Agent 2026-06-08: Replaced raw json + static note with calls to private bounded helpers (real cross-ref evidence + structured history).
+    # Strictly max_files=5, excerpt_len=500, defensive IO, keyword globs only, total cap. Plain text. Call sites carry attribution.
+    # New logic remains subject to condition 10.
+    history_section = _build_recent_history_section(memory)
+    cross_ref_evidence = _build_reviews_crossref_evidence()
 
     drift_ctx = (
         "=== DOCUMENTED (SOTs / prompts / project_context expectations) ===\n"
@@ -279,7 +353,7 @@ async def detect_drift(context: str, memory: dict) -> str:
         "=== CURRENT IMPLEMENTATION (orchestrator.py memory/propose/arg parsing + modes for v1/v2) ===\n"
         f"{orch_excerpt}\n\n"
         f"{history_section}\n"
-        f"{cross_ref_note}\n"
+        f"{cross_ref_evidence}\n"
         "=== MEMORY SCHEMA (from agent_memory.json notes) ===\n"
         f"{memory.get('notes','')[:700]}\n"
     )
