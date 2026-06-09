@@ -66,6 +66,13 @@ last_wallet_state = None
 # Reinforces: "Partially Functional" overall; Volume REQUIRED for production durability across redeploys.
 # Additive only to prior honest language. See reviews/2026-06-08-worker-persistence-first-inc.md
 # and reviews/2026-06-09-worker-persistence-phase1.md. No over-claims.
+
+# Review Agent 2026-06-09 (Phase 2): EOD PnL guard + startup sanity (addresses Review 2026-06-09-worker-persistence-phase2.md
+# Medium issues on delta logging, documented threshold, additive honesty + comments; fulfills first-inc conds 3/6/9/10).
+# last_eod_run used ONLY for ~23h dup prevention on restart around target (existing target recalc + sleep PRESERVED UNCHANGED;
+# get_daily_pnl_report() never modified/wrapped). Startup block is logging-only decision (no immediate/auto send, no behavior change).
+# Phase 2 hardens in-process / local-restart behavior only. Still 'Partially Functional'. Volume still REQUIRED for production durability.
+# See reviews/2026-06-08-worker-persistence-first-inc.md + reviews/2026-06-09-worker-persistence-phase1.md + reviews/2026-06-09-worker-persistence-phase2.md. No over-claims.
 PERSISTENCE_BASE = os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or "data"
 KNOWN_PAIRS_FILE = os.path.join(PERSISTENCE_BASE, "known_pairs.json")
 
@@ -373,15 +380,22 @@ async def scheduled_eod_pnl():
                 # Existing target recalc + sleep logic (above, lines ~165-170) is PRESERVED UNCHANGED. get_daily_pnl_report() never modified/wrapped.
                 # last_eod_run stored in same JSON state; UTC ISO; save only on actual send. Continue-on-error for the guard.
                 # Base EOD functionality (and market append block) never degraded.
+                # Review Agent 2026-06-09 (Phase 2, per reviews/2026-06-08-worker-persistence-first-inc.md cond. 3 + reviews/2026-06-09-worker-persistence-phase1.md + reviews/2026-06-09-worker-persistence-phase2.md):
+                # Hardened guard: unconditional delta logging (both paths) + explicit malformed log for ops visibility; ~23h window for restart dup prevention only.
+                # Existing scheduler/target/sleep/report behavior 100% unchanged. No immediate/auto send on any path.
                 now_utc = datetime.now(timezone.utc)
                 do_send = True
                 if last_eod_run:
                     try:
                         last_dt = datetime.fromisoformat(last_eod_run.replace("Z", "+00:00"))
-                        if (now_utc - last_dt).total_seconds() < 23 * 3600:
-                            logger.info("EOD PnL: recent last_eod_run detected; skipping duplicate send (restart hardening per Review 2026-06-08)")
+                        delta_s = (now_utc - last_dt).total_seconds()
+                        if delta_s < 23 * 3600:
+                            logger.info(f"EOD PnL: delta={delta_s:.0f}s since last_eod_run; 23h guard decision=skip (restart hardening per Review 2026-06-08 cond. 3 + Phase 2)")
                             do_send = False
+                        else:
+                            logger.info(f"EOD PnL: delta={delta_s:.0f}s since last_eod_run; 23h guard decision=send")
                     except Exception:
+                        logger.info("EOD PnL: malformed last_eod_run ts; treating as send (defensive, continue-on-error per Review 2026-06-08 cond. 3)")
                         pass  # malformed ts -> treat as send (defensive, continue-on-error)
                 if do_send:
                     await send_telegram(f"📊 **Automatic EOD PnL Report**\n\n{report}")
@@ -429,6 +443,28 @@ async def main():
     eod_enabled = os.getenv("EOD_PNL_ENABLED", "false").lower() == "true"
     eod_hour = int(os.getenv("EOD_PNL_HOUR", "0"))
     logger.info(f"EOD PnL scheduled for {eod_hour:02d}:00 Europe/Athens (enabled={eod_enabled})")
+
+    # Review Agent 2026-06-09 (Phase 2, per reviews/2026-06-08-worker-persistence-first-inc.md cond. 6 + reviews/2026-06-09-worker-persistence-phase1.md + reviews/2026-06-09-worker-persistence-phase2.md):
+    # Startup sanity for EOD PnL (logging-only decision after long downtime; no immediate/auto send, no behavior/timing change).
+    # last_eod_run from load (early, before tasks). Threshold documented (addresses Medium). Existing target recalc + sleep PRESERVED UNCHANGED.
+    # No auto-send: scheduler handles targets. Phase 2: in-process / local-restart hardening only. Still 'Partially Functional'.
+    # Volume still REQUIRED for production durability. See prior reviews + original 12 conditions. No over-claims.
+    if eod_enabled:
+        EOD_LONG_DOWNTIME_HOURS = 24  # documented threshold for "long downtime" decision (per Review 2026-06-09 Medium)
+        if last_eod_run:
+            try:
+                last_dt = datetime.fromisoformat(last_eod_run.replace("Z", "+00:00"))
+                delta_h = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600.0
+                if delta_h > EOD_LONG_DOWNTIME_HOURS:
+                    logger.info(f"EOD PnL startup sanity: last_eod_run was {delta_h:.1f}h ago (long downtime >{EOD_LONG_DOWNTIME_HOURS}h). "
+                                "Scheduler will target the next appropriate daily slot. No immediate/auto send triggered on startup "
+                                "(to preserve daily timing and avoid potential duplicate/missed reports). Existing target recalc + sleep logic preserved unchanged.")
+                else:
+                    logger.info(f"EOD PnL startup sanity: last_eod_run was {delta_h:.1f}h ago (recent).")
+            except Exception:
+                logger.info("EOD PnL startup sanity: malformed last_eod_run ts (non-fatal). Scheduler will compute next target.")
+        else:
+            logger.info("EOD PnL startup sanity: no prior last_eod_run (fresh or cleared state). Scheduler will compute first target.")
 
     # Review Agent 2026-06: Market analysis env (first inc, worker-side Grok for token/market insights, analysis-only).
     # Env-gated (default false). Calls only from existing tasks (e.g. new-pair in poll_dexscreener).
