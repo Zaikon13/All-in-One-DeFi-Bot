@@ -4,7 +4,7 @@
 
 **Project**: All-in-One-DeFi-Bot  
 **Repository**: Zaikon13/All-in-One-DeFi-Bot  
-**Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints section per conditions, all prior 12 + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure)  
+**Last Updated**: 2026-06-09 (SOT Coordinated PR Helper first inc + Phase 2 worker EOD guard) (structured Grok market analysis output per Review Agent 2026-06 Approved with Conditions (High risk): 6-section Markdown enrichment; analysis only, renamed watchpoints section per conditions, all prior 12 + new artifact; Primary SOTs read) (coordinated docs update for Grok SOT structure) (Phase 2: commit 61059a6 addresses reviews/2026-06-09-worker-persistence-phase2.md) 
 **Purpose**: Single Source of Truth for the Grok AI Agent System operating on this project.
 
 ---
@@ -267,6 +267,8 @@ The emphasis is on **traceability and protection of what matters**, not on burea
 **Drift Detection v2 (per Review Agent 2026-06 "Approved with Conditions", Medium-High risk)**:
 
   **SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: feat(worker): Phase 1 persistence hardening (commit 30521a3). Still 'Partially Functional'. Volume still REQUIRED for production durability. No SOT changes in this commit (deferred to follow-on via --sot-pr-helper).. Thin read-only extension inside orchestrator. See GROK_COORDINATION Section 3 and the helper audit.
+
+  **SOT Coordinated PR Helper (Phase 2, 2026-06 per Review Agent "Approve with minor revisions")**: feat(worker): Phase 2 EOD PnL guard hardening + startup sanity (commit 61059a6). Addresses Review Agent 2026-06-09-worker-persistence-phase2.md (all 3 Medium issues addressed). EOD PnL guard + startup sanity hardening only (in-process / local-restart behavior only). Still 'Partially Functional'. Volume still REQUIRED for production durability. No over-claims on EOD completeness. Scheduler/target/sleep/report generation and core/ untouched. No SOT changes in this commit (deferred to follow-on via --sot-pr-helper).. Thin read-only extension inside orchestrator. See GROK_COORDINATION Section 3 and the helper audit.
 
 **SOT Coordinated PR Helper (first inc, 2026-06 per Review Agent Approved with Conditions, High risk)**: feat(agent): Context Strengthening for Drift v2 + Proposer (bounded reviews/ glob+read cross-refs + structured citation-friendly history bullets + one-sentence citation format tightening). Per Review Agent 2026-06-08 (Approve with minor revisions + 5 conditions addressed exactly by Code Agent subagent). Extend-existing only (agents/orchestrator.py private helpers + 2 prompts + 1 reviews/ traceability file). No SOT edits in the inc itself (per conditions 3+5); this is the follow-on coordinated status update. New logic remains subject to condition 10. Full non-bypassable Review Gate preserved (only ref append). See reviews/2026-06-08-drift-proposer-context-strengthening.md . Master retains final authority. Honest status-only language.. Thin read-only extension inside orchestrator. See GROK_COORDINATION Section 3 and the helper audit.
 
