@@ -242,6 +242,9 @@ async def poll_dexscreener():
                     for pair in pairs:
                         pair_address = pair.get("pairAddress")
                         if pair_address:
+                            base = pair.get("baseToken", {})
+                            quote = pair.get("quoteToken", {})
+
                             # Review Agent 2026-06-08: improve change detection using last_seen (defensive: missing/invalid last_seen treated as "new")
                             # last_seen also recorded for future richer diffing; update only on detection path (no new loops / no impact on market appends)
                             # Review Agent 2026-06-09 (Phase 1 extension): use improved _is_new_or_stale() for explicit time-window policy
@@ -252,9 +255,6 @@ async def poll_dexscreener():
                                 pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
                                 _sync_seen_pairs_from_dict()
                                 save_known_pairs(seen_pairs)   # persist immediately (atomic + warns if no volume)
-
-                                base = pair.get("baseToken", {})
-                                quote = pair.get("quoteToken", {})
                             msg = (
                                 f"🚀 **New Pair Detected on Cronos**\n\n"
                                 f"**{base.get('symbol', '???')} / {quote.get('symbol', '???')}**\n"
