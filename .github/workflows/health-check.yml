@@ -55,7 +55,7 @@ jobs:
       - name: Create Awareness Issue
         if: steps.health.outputs.status != '200'
         continue-on-error: true
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const a = `${{ steps.grok.outputs.analysis || 'Check Railway logs' }}`;
