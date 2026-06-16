@@ -12,7 +12,7 @@ import json
 
 # Reuse Grok client + wallet helpers from core/ (SOT for calls, prompts, quality gates - consolidated 2026-06-04)
 # (Review Agent 2026-06-04: switch for timeout/quality support; balances/tx for live grok-analyze)
-from core.grok_client import call_grok, load_prompt, is_valid_grok_response
+from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 from core.wallet import get_wallet_balances, get_recent_transactions
 
 # Config

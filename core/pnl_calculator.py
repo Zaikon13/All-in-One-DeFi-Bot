@@ -8,7 +8,7 @@ from typing import List, Dict
 import httpx
 
 # Reuse Grok client (SOT for calls, prompts, quality gates - consolidated 2026-06-04)
-from core.grok_client import call_grok, load_prompt, is_valid_grok_response
+from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 
 # Require API keys from environment; do NOT fall back to hardcoded defaults.
 COVALENT_API_KEY = os.getenv("COVALENT_API_KEY")

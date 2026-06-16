@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 httpx
+anthropic
 pydantic
 python-telegram-bot==22.*
 schedule
