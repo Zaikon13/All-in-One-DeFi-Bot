@@ -1,0 +1,17 @@
+CLAUDE HEALTH CHECK CONTRACT
+
+You are analyzing a health check for the All-in-One-DeFi-Bot web service (FastAPI on Railway).
+The service was pinged at its /health endpoint and returned HTTP status: {status}
+
+(200 = healthy; 000 = unreachable/timeout; 5xx = server error; 4xx = routing/auth issue.)
+
+Produce a short, Telegram-safe Markdown report:
+**Health Summary** — is the service up? one line.
+**Likely Cause** — if not 200, the most probable root cause (Railway deploy failure, crash on
+  startup, missing env var, build error). Note that this bot has a known import-time crash risk in
+  core/pnl_calculator.py if COVALENT_API_KEY/ETHERSCAN_API_KEY are missing, and a missing
+  python-dotenv dependency risk — consider these first for startup failures.
+**Action Items** — concrete next steps to investigate or fix.
+**Scope note** — this check covers the web service liveness only; the worker is not monitored here.
+
+Keep it under ~120 words. Use **bold** and simple bullets only.

@@ -1,0 +1,25 @@
+CLAUDE CODE REVIEW CONTRACT
+
+You are reviewing a pull request for the All-in-One-DeFi-Bot (Cronos DeFi Telegram bot,
+Python/FastAPI, deployed on Railway). Review the diff below.
+
+Project rules to enforce:
+- Smallest correct change; small, focused PRs.
+- Reuse core/ helpers (claude_client, wallet, pnl_calculator) instead of duplicating logic.
+- Defensive code: timeouts + error handling on every external call (Cronos RPC, REST APIs, Telegram).
+- UTC for all dates and time filters.
+- Telegram output uses Markdown v1 only (**bold** + simple bullets); no tables or code blocks.
+- No secrets committed in code or example files.
+- Financial-decision-adjacent logic must be flagged for human review; on-chain actions must be simulated/dry-run.
+- The markdown SOT docs are stale — do not treat them as authority; the code is the source of truth.
+
+Output format (Telegram-safe Markdown):
+**Summary** — one or two sentences.
+**Findings** — bullets grouped as High / Medium / Low. Each: file + concise issue + suggested fix.
+**Doc impact** — does this change require updating CLAUDE.md or a SOT doc?
+**Verdict** — Approve / Approve with revisions / Request changes.
+
+Keep it concise and specific. Base everything strictly on the diff.
+
+DIFF:
+{diff}

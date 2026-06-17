@@ -1,0 +1,60 @@
+name: Claude Health Check
+# Advisory liveness check for the WEB service via Claude (Anthropic). Non-blocking.
+# Pings /health, then asks Claude to analyze the status and opens an issue if unhealthy.
+# Requires the ANTHROPIC_API_KEY GitHub secret. Covers web-service liveness only; the
+# worker is not monitored here. Runs alongside the legacy Grok Health Check during the
+# provider transition.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 */6 * * *"   # every 6 hours
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Ping /health
+        id: ping
+        continue-on-error: true
+        run: |
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://bot-production-3d9c.up.railway.app/health || echo "000")
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+      - name: Claude analysis
+        id: analysis
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          OUT=$(PYTHONPATH=. python .github/scripts/call_claude.py claude_health_check.txt \
+            --var "status=${{ steps.ping.outputs.code }}" --timeout 60 2>&1 | head -c 4000 || echo "Analysis unavailable.")
+          echo "out<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$OUT" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+      - name: Open issue if unhealthy
+        if: steps.ping.outputs.code != '200'
+        uses: actions/github-script@v7
+        env:
+          # Pass via env (not ${{ }} interpolation) so the model output cannot break
+          # out of the JS string or inject script.
+          ANALYSIS: ${{ steps.analysis.outputs.out }}
+          STATUS: ${{ steps.ping.outputs.code }}
+        with:
+          script: |
+            const out = process.env.ANALYSIS || "_Analysis unavailable._";
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Health check: /health returned ${process.env.STATUS}`,
+              body: out
+            });
