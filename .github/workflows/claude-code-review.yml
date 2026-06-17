@@ -1,0 +1,81 @@
+name: Claude Code Review
+# Advisory PR review via Claude (Anthropic). Non-blocking (continue-on-error).
+# Reuses core/claude_client.py through .github/scripts/call_claude.py and the
+# prompts/claude_code_review.txt contract. Requires the ANTHROPIC_API_KEY GitHub secret.
+# Runs alongside the legacy Grok Code Review during the provider transition.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - "**.py"
+      - ".github/workflows/**"
+      - "prompts/**"
+      - "core/**"
+      - "app/**"
+      - "worker.py"
+      - "requirements*.txt"
+      - "railway.toml"
+      - "docs/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  claude-code-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        run: git diff "origin/${{ github.base_ref }}...HEAD" > pr.diff
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Call Claude for review
+        id: claude
+        if: hashFiles('pr.diff') != ''
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Hardened diff handoff (per bundle README): read the diff from the pr.diff
+          # FILE and cap its size, rather than routing the full diff through
+          # $GITHUB_OUTPUT and interpolating it into a shell/JS context. Keeps the
+          # arg bounded and avoids escaping/injection issues on large or odd diffs.
+          DIFF=$(head -c 6000 pr.diff || true)
+          REVIEW=$(PYTHONPATH=. python .github/scripts/call_claude.py claude_code_review.txt \
+            --var "diff=$DIFF" --timeout 90 2>&1 | head -c 4000 || echo "Claude review failed")
+          echo "review<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$REVIEW" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Post Claude review on PR
+        if: steps.claude.outputs.review != ''
+        uses: actions/github-script@v7
+        env:
+          # Pass via env (not ${{ }} interpolation) so the model output cannot break
+          # out of the JS string or inject script.
+          REVIEW: ${{ steps.claude.outputs.review }}
+        with:
+          script: |
+            const review = process.env.REVIEW || "_Review unavailable this run._";
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## 🤖 Claude Code Review\n\n${review}`
+            });

@@ -10,23 +10,22 @@ import httpx
 # Reuse Grok client (SOT for calls, prompts, quality gates - consolidated 2026-06-04)
 from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 
-# Require API keys from environment; do NOT fall back to hardcoded defaults.
-COVALENT_API_KEY = os.getenv("COVALENT_API_KEY")
-if not COVALENT_API_KEY:
-    raise ValueError("COVALENT_API_KEY is missing from environment variables")
-
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 
-# Etherscan V2 (for async production /daily_pnl path only).
-# Review Agent 2026-06-06: Telegram command path (telegram/handlers.py) unified
-# to this production async path. Legacy Covalent sync calc functions deprecated
-# (no longer called from production command path; format_pnl_report retained
-# as internal fallback only).
-ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY")
-if not ETHERSCAN_API_KEY:
-    raise ValueError("ETHERSCAN_API_KEY is missing from environment variables")
-
 COVALENT_BASE = "https://api.covalenthq.com/v1"
+
+
+# API keys are read LAZILY (inside the functions that use them) so importing this
+# module never crashes when env vars are absent (worker boot, CI smoke, fresh clone).
+# Missing keys are handled defensively at call time, not raised at import time.
+def _get_covalent_api_key() -> str | None:
+    """Lazily read COVALENT_API_KEY (legacy sync Covalent path only)."""
+    return os.getenv("COVALENT_API_KEY")
+
+
+def _get_etherscan_api_key() -> str | None:
+    """Lazily read ETHERSCAN_API_KEY (async production /daily_pnl path; chainid=25)."""
+    return os.getenv("ETHERSCAN_API_KEY")
 
 
 def get_today_transactions() -> List[Dict]:
@@ -39,8 +38,13 @@ def get_today_transactions() -> List[Dict]:
         print("[ERROR] Missing WALLET_ADDRESS")
         return []
 
+    covalent_api_key = _get_covalent_api_key()
+    if not covalent_api_key:
+        print("[ERROR] Missing COVALENT_API_KEY")
+        return []
+
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # UTC for tx date filter (minimal targeted fix approved by Review Agent 2026-05-28)
-    url = f"{COVALENT_BASE}/25/address/{WALLET_ADDRESS}/transactions_v3/?key={COVALENT_API_KEY}"
+    url = f"{COVALENT_BASE}/25/address/{WALLET_ADDRESS}/transactions_v3/?key={covalent_api_key}"
 
     try:
         with httpx.Client(timeout=30) as client:
@@ -459,6 +463,11 @@ async def get_today_transactions_async() -> List[Dict]:
         logging.error("[ERROR] Missing WALLET_ADDRESS")
         return []
 
+    etherscan_api_key = _get_etherscan_api_key()
+    if not etherscan_api_key:
+        logging.error("[ERROR] Missing ETHERSCAN_API_KEY")
+        return []
+
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # UTC for tx date filter (minimal targeted fix approved by Review Agent 2026-05-28)
     collected: List[Dict] = []
     base_url = "https://api.cronoscan.com/v2/api"  # CronoScan (Etherscan-powered for Cronos) V2; api.etherscan.io/v2 does not support chainid=25
@@ -470,7 +479,7 @@ async def get_today_transactions_async() -> List[Dict]:
                     url = (
                         f"{base_url}?chainid=25&module=account&action={action}"
                         f"&address={WALLET_ADDRESS}&startblock=0&endblock=99999999"
-                        f"&page={page}&offset=1000&sort=desc&apikey={ETHERSCAN_API_KEY}"
+                        f"&page={page}&offset=1000&sort=desc&apikey={etherscan_api_key}"
                     )
                     try:
                         r = await client.get(url)
