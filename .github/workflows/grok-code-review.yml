@@ -60,7 +60,7 @@ jobs:
 
       - name: Post Grok Review on PR
         if: steps.grok.outputs.review != ''
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           # Pass via env (not ${{ }} interpolation) so the model output cannot break
           # out of the JS string or inject script. Fixes SyntaxError on odd diffs.
