@@ -494,23 +494,21 @@ async def get_today_transactions_async() -> List[Dict]:
         logging.error("[ERROR] Missing WALLET_ADDRESS")
         return []
 
-    etherscan_api_key = _get_etherscan_api_key()
-    if not etherscan_api_key:
-        logging.error("[ERROR] Missing ETHERSCAN_API_KEY")
-        return []
-
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # UTC for tx date filter (minimal targeted fix approved by Review Agent 2026-05-28)
     collected: List[Dict] = []
-    base_url = "https://api.cronoscan.com/v2/api"  # CronoScan (Etherscan-powered for Cronos) V2; api.etherscan.io/v2 does not support chainid=25
+    # CronoScan (api.cronoscan.com) was sunset 2026-10-06. Cronos Explorer (BlockScout) is the
+    # Etherscan-compatible replacement: keyless, no chainid param. Same status/result shape.
+    base_url = "https://cronos.org/explorer/api"
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        # Cronos Explorer (BlockScout) is materially slower than CronoScan; allow more time.
+        async with httpx.AsyncClient(timeout=60) as client:
             for action in ("txlist", "tokentx"):
-                for page in range(1, 6):  # page 1 to 5, offset=1000 per approved plan + Etherscan V2 spec
+                for page in range(1, 6):  # page 1..5; offset=100 keeps each BlockScout query light
                     url = (
-                        f"{base_url}?chainid=25&module=account&action={action}"
+                        f"{base_url}?module=account&action={action}"
                         f"&address={WALLET_ADDRESS}&startblock=0&endblock=99999999"
-                        f"&page={page}&offset=1000&sort=desc&apikey={etherscan_api_key}"
+                        f"&page={page}&offset=100&sort=desc"
                     )
                     try:
                         r = await client.get(url)
