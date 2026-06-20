@@ -5,11 +5,17 @@
 import unittest
 from unittest.mock import patch, MagicMock
 import time
+import os
 
 from core.price_service import PriceService
 
+# Network/integration guard: these tests make real CoinGecko calls.
+# Skipped by default (including CI) for determinism; set RUN_NETWORK_TESTS=1 to run them.
+RUN_NETWORK_TESTS = os.getenv("RUN_NETWORK_TESTS") == "1"
+
 
 class TestPriceService(unittest.TestCase):
+    @unittest.skipUnless(RUN_NETWORK_TESTS, "network test; set RUN_NETWORK_TESTS=1 to run")
     def test_graceful_fallback_for_invalid_symbol(self):
         """Invalid/unknown symbols should return None without raising."""
         service = PriceService()
@@ -62,6 +68,7 @@ class TestPriceService(unittest.TestCase):
 
         service.close()
 
+    @unittest.skipUnless(RUN_NETWORK_TESTS, "network test; set RUN_NETWORK_TESTS=1 to run")
     def test_timeout_simulation_does_not_raise(self):
         """Simulate timeout: the call should fallback gracefully instead of propagating exception."""
         service = PriceService(timeout=0.0001)  # extremely short to encourage timeout path
