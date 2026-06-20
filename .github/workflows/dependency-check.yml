@@ -44,7 +44,7 @@ jobs:
 
       - name: Create GitHub Issue if security issues found
         if: steps.audit.outputs.no_vulns == 'false'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
