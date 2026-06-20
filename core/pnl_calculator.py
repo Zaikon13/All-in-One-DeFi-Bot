@@ -10,6 +10,9 @@ import httpx
 # Reuse Grok client (SOT for calls, prompts, quality gates - consolidated 2026-06-04)
 from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 
+# Review Agent 2026-06-09: Import for Phase 1 current price enrichment (best-effort, isolated).
+from core.price_service import PriceService
+
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 
 COVALENT_BASE = "https://api.covalenthq.com/v1"
@@ -127,6 +130,18 @@ def format_pnl_report(data: Dict) -> str:
         for t in token["trades_list"]:
             lines.append(f"{t['time']} | {t['type']} {t['amount']} {token['symbol']}")
         lines.append(f"**Net:** {token['net']:+.4f} {token['symbol']}")
+
+        # Review Agent 2026-06-09: Phase 1 current price enrichment display (additive, optional).
+        # Only show USD fields if present (i.e., price data was successfully fetched for this token).
+        if "position_value_usd" in token:
+            lines.append(f"**Position Value (USD):** ${token['position_value_usd']:+.4f}")
+        if "avg_cost_usd" in token:
+            lines.append(f"**Avg Cost (USD):** ${token['avg_cost_usd']:.4f}")
+        lines.append("")
+
+    # Review Agent 2026-06-09: Optional total portfolio value at end (additive only).
+    if "total_portfolio_value_usd" in data:
+        lines.append(f"**Total Portfolio Value (USD):** ${data['total_portfolio_value_usd']:+.4f}")
         lines.append("")
 
     return "\n".join(lines)
@@ -177,6 +192,22 @@ def format_daily_pnl_report(data: Dict, grok_insight: str | None = None) -> str:
         lines.append("**Top Movers** (by |net delta|)")
         for t in top_movers:
             lines.append(f"• {t['symbol']} — net {t['net']:+.4f} ({t['trades']} trades)")
+        lines.append("")
+
+    # Review Agent 2026-06-09: Phase 1 current price enrichment display (additive and optional).
+    # Only show for tokens that have price data from the enrichment layer.
+    # This complements the legacy formatter and makes the new fields visible in the main report path.
+    enriched = [t for t in tokens if "position_value_usd" in t]
+    if enriched:
+        lines.append("**Enriched Positions (USD)**")
+        for t in enriched:
+            lines.append(f"• {t['symbol']}: ${t['position_value_usd']:+.4f}")
+            if "avg_cost_usd" in t:
+                lines.append(f"  Avg Cost: ${t['avg_cost_usd']:.4f}")
+        lines.append("")
+
+    if "total_portfolio_value_usd" in data:
+        lines.append(f"**Total Portfolio Value (USD):** ${data['total_portfolio_value_usd']:+.4f}")
         lines.append("")
 
     if grok_insight:
@@ -531,6 +562,98 @@ async def calculate_daily_pnl_async() -> Dict:
     return _aggregate_pnl(transactions)
 
 
+# Review Agent 2026-06-09: Private best-effort enrichment for Phase 1.
+# Implements current price valuation + simple average cost (using current price for buys in the day).
+# This is additive only: new fields are added to token dicts; the original net-delta shape
+# from _aggregate_pnl is never modified.
+# The function must remain best-effort and non-blocking (Condition 3).
+def _enrich_with_current_prices(data: dict) -> dict:
+    """Best-effort enrichment with current prices (Phase 1 scope only).
+
+    For each token that has a current price:
+    - position_value_usd = current_price * net_amount
+    - If the day's trades_list contains BUY trades:
+        - avg_cost_usd = (sum of buy quantities valued at current price) / total bought quantity
+          (simple average cost approximation; see comment below)
+
+    New fields are stored directly in the token dicts (additive).
+    A root-level total_portfolio_value_usd may also be added.
+
+    Returns the (possibly augmented) data. On any error, returns the original data unchanged.
+    """
+    # Review Agent 2026-06-09: Early exit for invalid data; preserve original.
+    if not data or "error" in data or not data.get("tokens"):
+        return data
+
+    try:
+        # Review Agent 2026-06-09: Obtain current prices via the isolated helper (from Βήμα 2.1).
+        # This call is best-effort; failure here falls through to return original data.
+        service = PriceService()
+        symbols = [t.get("symbol") for t in data.get("tokens", []) if t.get("symbol")]
+        prices = service.get_current_prices(symbols)
+
+        if not prices:
+            service.close()
+            return data
+
+        # shallow copy of top level to avoid mutating caller's dict in some execution paths
+        data = dict(data)
+        enriched_tokens = []
+        total_portfolio_usd = 0.0
+
+        for token in data.get("tokens", []):
+            # per-token copy so we can add fields without affecting the original list items
+            token = dict(token)
+            symbol = token.get("symbol")
+            price = prices.get(symbol)
+
+            if price is not None:
+                net = token.get("net", 0.0)
+                position_value_usd = price * net
+                token["position_value_usd"] = round(position_value_usd, 4)
+                token["has_price_data"] = True
+
+                # Review Agent 2026-06-09: Simple Average Cost calculation (Phase 1 limitation).
+                # We only consider BUY trades that occurred *within this day's data*.
+                # Cost is approximated by valuing those buy quantities at *today's current price*.
+                # This is NOT a true historical cost basis (no historical prices in Phase 1).
+                # It is deliberately simple (not FIFO, not weighted by time, etc.).
+                # Only tokens that actually have BUY activity in the day's trades_list will get avg_cost_usd.
+                trades = token.get("trades_list", [])
+                buys = [t for t in trades if t.get("type") == "BUY"]
+                if buys:
+                    total_bought_qty = sum(t.get("amount", 0) for t in buys)
+                    if total_bought_qty > 0:
+                        # Valuing the buys at the current price gives a same-day "average cost" figure.
+                        total_buy_usd = total_bought_qty * price
+                        avg_cost_usd = total_buy_usd / total_bought_qty
+                        token["avg_cost_usd"] = round(avg_cost_usd, 4)
+
+                total_portfolio_usd += position_value_usd
+
+            enriched_tokens.append(token)
+
+        data["tokens"] = enriched_tokens
+
+        # Review Agent 2026-06-09: Optional aggregate for convenience (additive only).
+        if total_portfolio_usd > 0:
+            data["total_portfolio_value_usd"] = round(total_portfolio_usd, 4)
+
+        # Keep raw prices for potential use in later phases or debugging (private key).
+        data["_current_prices"] = prices
+
+        service.close()
+
+    except Exception as e:
+        # Review Agent 2026-06-09: All errors are swallowed. Enrichment is purely optional.
+        # The caller (get_daily_pnl_report) will continue with whatever data we return here,
+        # which in error paths is the original (or partially copied) net-delta data.
+        logging.info(f"Price enrichment (Phase 1) skipped due to error: {e}")
+        return data
+
+    return data
+
+
 # -------------------------------------------------------------------
 # Public async entrypoint for production /daily_pnl (webhook path in app/main.py)
 # -------------------------------------------------------------------
@@ -559,6 +682,12 @@ async def get_daily_pnl_report() -> str:
     except Exception as e:
         logging.exception("daily_pnl_async fetch error")
         return "Error fetching daily transactions. Please try again later."
+
+    # Review Agent 2026-06-09: Best-effort current price enrichment (Phase 1).
+    # This call is non-blocking. If the price helper fails or returns no data,
+    # we continue unchanged with the original net-delta data for full backward compatibility.
+    # The enrichment now computes position_value_usd and simple avg_cost_usd (additive fields only).
+    data = _enrich_with_current_prices(data)
 
     # No data case (clean, no Grok needed)
     if "error" in data or not data.get("tokens"):
@@ -610,5 +739,10 @@ async def get_daily_pnl_report() -> str:
         logging.exception(f"Grok daily PnL call failed (safe fallback): {e}")
         # Explicit safe fallback - never worse than pre-increment
         return base_report + "\n\n(Grok temporarily unavailable - basic report shown)"
+
+
+# Review Agent 2026-06-09: Phase 1 current price enrichment active (position_value_usd + simple avg_cost_usd)
+# The new fields are displayed conditionally in both formatters when present in the enriched data.
+# This completes the display part of Phase 1 without altering calculation logic.
 
 
