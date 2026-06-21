@@ -1,0 +1,15 @@
+# Enforce LF line endings across the repository.
+# This project is built and deployed on Linux (Docker / Railway), where shell
+# scripts and Dockerfiles require LF. Forcing LF everywhere also prevents the
+# CRLF/LF "phantom change" churn that Windows checkouts would otherwise create.
+* text=auto eol=lf
+
+# Binary file types: never modify their bytes.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
