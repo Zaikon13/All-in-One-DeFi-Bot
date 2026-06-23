@@ -13,6 +13,9 @@ from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 # Review Agent 2026-06-09: Import for Phase 1 current price enrichment (best-effort, isolated).
 from core.price_service import PriceService
 
+# Live Cronos Explorer v1 client + data-freshness guard (replaces the frozen keyless feed).
+from core.wallet import explorer_get, check_data_freshness
+
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 
 COVALENT_BASE = "https://api.covalenthq.com/v1"
@@ -475,82 +478,119 @@ def _normalize_etherscan_item(item: Dict, action: str) -> Dict | None:
     }
 
 
-async def get_today_transactions_async() -> List[Dict]:
-    """Async-safe fetch of today's transactions using Etherscan V2 (chainid=25 via txlist + tokentx).
-    Preferred for FastAPI/webhook/async contexts. Follows patterns from
-    worker.py, core/wallet.py, core/dexscreener.py (async httpx, defensive).
+def _adapt_explorer_row(item: Dict, action: str) -> Dict:
+    """Adapt a Cronos Explorer v1 row into the legacy Etherscan-shaped dict that
+    _normalize_etherscan_item expects (timeStamp, from, to, value, isError, and for
+    tokens tokenSymbol/tokenDecimal). This keeps _normalize_etherscan_item AND
+    _aggregate_pnl completely untouched. New-API quirks handled here:
+      - from/to are {address, isContract} objects (not bare strings)
+      - fields are transactionHash / timestamp(unix) (not hash / timeStamp)
+      - token symbol + decimals live in tokenMetadata
+    """
+    f = item.get("from")
+    t = item.get("to")
+    f = f.get("address") if isinstance(f, dict) else (f or "")
+    t = t.get("address") if isinstance(t, dict) else (t or "")
+    err = item.get("error")
+    adapted = {
+        "timeStamp": str(item.get("timestamp", 0) or 0),
+        "from": f,
+        "to": t,
+        "value": str(item.get("value", "0") or "0"),
+        "isError": "0" if err in (None, "", "0", "null") else "1",
+        "hash": item.get("transactionHash", ""),
+    }
+    if action == "tokentx":
+        meta = item.get("tokenMetadata") or {}
+        adapted["tokenSymbol"] = meta.get("tokenSymbol") or "???"
+        adapted["tokenDecimal"] = str(meta.get("decimals", 18) or 18)
+    return adapted
 
-    Pagination: page=1..5, offset=1000, sort=desc (newest-first), hard cap ~5 pages per endpoint.
-    Early break on first tx older than today (using timeStamp -> UTC date).
-    Per-page error or non-OK: log + break returning partial results collected (never fails whole report).
-    Normalization to Covalent tx shape happens ONLY inside this fetcher + tiny _normalize helper.
-    Exact defensive pagination/early-exit/partial-results/logging pattern replicated from prior async Covalent impl.
-    # Review Agent 2026-06-06: Command path now uses this (unified). Sync legacy path
-    # (Covalent) no longer called from telegram/handlers.py.
-    Output: List[Dict] synthetics for _aggregate_pnl.
-    (Review Agent 2026-06-03 guardrails + UTC date per 2026-05-28 + 2026-06-06 unification)
+
+async def get_today_transactions_async() -> List[Dict]:
+    """Async-safe fetch of today's transactions from the live Cronos Explorer v1 API.
+
+    Data source: explorer-api.cronos.org/mainnet/api/v1 (keyed), replacing the
+    legacy keyless feed (cronos.org/explorer/api) that silently froze for this
+    wallet on 2026-05-22. Uses account/getTxsByAddress (native CRO) +
+    account/getCRC20TransferByAddress (CRC-20). Each row is adapted to the legacy
+    Etherscan shape and passed to the UNCHANGED _normalize_etherscan_item ->
+    _aggregate_pnl path.
+
+    Pagination: pagination.session cursor, newest-first, capped at ~10 pages per
+    endpoint; early-exit on the first tx older than today (UTC). Defensive: any
+    error returns partial results (never fails the whole report).
+
+    Freshness guard: if the newest data is far behind the live chain, log a
+    warning and fire a Telegram alert instead of silently reporting "no activity".
+
+    Output: List[Dict] synthetics for _aggregate_pnl (UTC date filter).
     """
     if not WALLET_ADDRESS:
         logging.error("[ERROR] Missing WALLET_ADDRESS")
         return []
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # UTC for tx date filter (minimal targeted fix approved by Review Agent 2026-05-28)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # UTC tx-date filter
     collected: List[Dict] = []
-    # CronoScan (api.cronoscan.com) was sunset 2026-10-06. Cronos Explorer (BlockScout) is the
-    # Etherscan-compatible replacement: keyless, no chainid param. Same status/result shape.
-    base_url = "https://cronos.org/explorer/api"
+    newest_block = None
+    newest_ts = None
 
     try:
-        # Cronos Explorer (BlockScout) is materially slower than CronoScan; allow more time.
-        async with httpx.AsyncClient(timeout=60) as client:
-            for action in ("txlist", "tokentx"):
-                for page in range(1, 6):  # page 1..5; offset=100 keeps each BlockScout query light
-                    url = (
-                        f"{base_url}?module=account&action={action}"
-                        f"&address={WALLET_ADDRESS}&startblock=0&endblock=99999999"
-                        f"&page={page}&offset=100&sort=desc"
-                    )
-                    try:
-                        r = await client.get(url)
-                        if r.status_code != 200:
-                            logging.error(f"[ERROR] Etherscan V2 {action} status {r.status_code} on page {page}")
-                            break  # defensive partial results
-                        data = r.json()
-                        if data.get("status") != "1":
-                            logging.error(f"[ERROR] Etherscan V2 {action} page {page}: {data.get('message', 'error')}")
-                            break  # rate limit / invalid / partial ok
-                        items = data.get("result", []) or []
-                        if not items:
-                            logging.info(f"Async Etherscan V2 {action} pagination: empty page {page}, stopping")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for path, action in (
+                ("account/getTxsByAddress", "txlist"),
+                ("account/getCRC20TransferByAddress", "tokentx"),
+            ):
+                session = None
+                for page in range(1, 11):  # cap ~10 pages (~200 rows) per endpoint
+                    params = {"address": WALLET_ADDRESS, "startBlock": 0, "endBlock": 99999999}
+                    if session:
+                        params["session"] = session
+                    env = await explorer_get(client, path, params, full=True)
+                    if not env:
+                        break  # auth/staleness/error already logged; partial results
+                    items = env.get("result") or []
+                    if not items:
+                        break
+                    page_added = 0
+                    hit_older = False
+                    for item in items:
+                        try:
+                            ts = int(item.get("timestamp", 0) or 0)
+                        except (ValueError, TypeError):
+                            ts = 0
+                        try:
+                            b = int(item.get("blockNumber", 0) or 0)
+                        except (ValueError, TypeError):
+                            b = 0
+                        if b:
+                            newest_block = b if newest_block is None else max(newest_block, b)
+                        if ts and (newest_ts is None or ts > newest_ts):
+                            newest_ts = ts
+                        tx_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d") if ts else ""
+                        if tx_date == today:
+                            synth = _normalize_etherscan_item(_adapt_explorer_row(item, action), action)
+                            if synth:
+                                collected.append(synth)
+                                page_added += 1
+                        elif tx_date and tx_date < today:
+                            hit_older = True  # newest-first: remaining rows are older
                             break
-                        page_added = 0
-                        hit_older = False
-                        for item in items:
-                            try:
-                                ts = int(item.get("timeStamp", 0) or 0)
-                                tx_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                            except Exception:
-                                continue
-                            if tx_date == today:
-                                synth = _normalize_etherscan_item(item, action)
-                                if synth:
-                                    collected.append(synth)
-                                    page_added += 1
-                            else:
-                                # older tx encountered (newest-first ordering)
-                                hit_older = True
-                                logging.info(f"Async Etherscan V2 {action} pagination early-exit on page {page}: encountered tx older than {today} (reason: time boundary)")
-                                break  # remaining items + later pages are older
-                        logging.info(f"Async Etherscan V2 {action} pagination: page {page} added {page_added} today's tx (total collected: {len(collected)})")
-                        if hit_older:
-                            break  # early break per guardrail
-                    except Exception as page_err:
-                        logging.error(f"[ERROR] Etherscan V2 {action} async pagination page {page} failed: {str(page_err)} - returning partial results")
-                        break  # do not fail whole report
-        logging.info(f"Async Etherscan V2 pagination complete: {len(collected)} tx for {today} (up to 5 pages per endpoint)")
+                    logging.info(f"Cronos Explorer {action}: page {page} added {page_added} today's tx (total {len(collected)})")
+                    if hit_older:
+                        break
+                    session = (env.get("pagination") or {}).get("session")
+                    if not session:
+                        break
+            # Freshness guard: alert if the DATA SOURCE is lagging the live chain.
+            try:
+                await check_data_freshness(client)
+            except Exception as fe:
+                logging.error(f"[freshness] check failed (non-fatal): {fe}")
+        logging.info(f"Cronos Explorer fetch complete: {len(collected)} tx for {today}")
         return collected
     except Exception as e:
-        logging.error(f"[ERROR] Etherscan V2 async fetch: {str(e)}")
+        logging.error(f"[ERROR] Cronos Explorer async fetch: {str(e)}")
     return collected
 
 

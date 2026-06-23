@@ -29,7 +29,17 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 - **Worker** — `worker.py`. Polls Dexscreener for new Cronos pairs, monitors the wallet, sends a
   heartbeat, runs end-of-day PnL. Persists state to a Railway volume at `/data`.
 - **core/** — shared helpers. `claude_client.py` (AI calls), `wallet.py`, `pnl_calculator.py`,
-  Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
+  `price_service.py`, Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
+- **Blockchain data source (2026-06-21).** Balances + daily PnL read from the **live, keyed Cronos
+  Explorer v1 API** (`explorer-api.cronos.org/mainnet/api/v1`; helpers in `core/wallet.py`:
+  `explorer_get`, endpoints `account/getTxsByAddress`, `account/getCRC20TransferByAddress`,
+  `account/getBalance`, `token/getAccountBalanceByContract`). This replaced the old keyless
+  `cronos.org/explorer/api` feed, which silently froze for the wallet on 2026-05-22 while still
+  returning `200 OK`. A **freshness guard** (`core/wallet.check_data_freshness`) compares the newest
+  wallet block to the live chain tip (independent RPC) and fires a Telegram alert when data is far
+  behind, so silent staleness can't recur. Requires `CRONOS_EXPLORER_API_KEY`. Response shape is
+  Cronos-v1 (nested `from`/`to`, `transactionHash`/`timestamp`, token meta in `tokenMetadata`); the
+  PnL path adapts rows to the legacy shape so `_normalize_etherscan_item`/`_aggregate_pnl` stay untouched.
 - **prompts/** — prompt templates loaded via the client.
 - **Railway** — 3 services: `bot`, `web-gpl6`, `worker`. Worker has a 5GB volume at `/data`.
 
@@ -84,8 +94,10 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `ANTHROPIC_API_KEY` | runtime | required for all AI features |
 | `GROK_API_KEY` | CI only | needed until the migration is finished |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | runtime | |
-| `WALLET_ADDRESS`, `CRONOS_RPC_URL` | runtime | |
-| `ETHERSCAN_API_KEY` | PnL fetch | rotate the exposed one |
+| `WALLET_ADDRESS`, `CRONOS_RPC_URL` | runtime | RPC also serves as the independent chain-tip reference for the freshness guard |
+| `CRONOS_EXPLORER_API_KEY` | runtime | **required** — live Cronos Explorer v1 feed for balances + daily PnL |
+| `CRONOS_STALE_BLOCK_THRESHOLD` | runtime (optional) | blocks-behind threshold for the stale-data alert (default 200000 ≈ 1 day) |
+| `ETHERSCAN_API_KEY` | legacy | no longer used by the live data path (deprecated sync Covalent helper only) |
 
 ## Working with Claude Code on this repo
 
