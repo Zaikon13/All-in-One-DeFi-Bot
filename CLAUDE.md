@@ -30,10 +30,12 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   heartbeat, runs end-of-day PnL. Persists state to a Railway volume at `/data`.
 - **core/** — shared helpers. `claude_client.py` (AI calls), `wallet.py`, `pnl_calculator.py`,
   `price_service.py`, Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
-- **Blockchain data source (2026-06-21).** Balances + daily PnL read from the **live, keyed Cronos
-  Explorer v1 API** (`explorer-api.cronos.org/mainnet/api/v1`; helpers in `core/wallet.py`:
-  `explorer_get`, endpoints `account/getTxsByAddress`, `account/getCRC20TransferByAddress`,
-  `account/getBalance`, `token/getAccountBalanceByContract`). This replaced the old keyless
+- **Blockchain data source (2026-06-21, balances rev. 2026-06-24).** Live, keyed Cronos Explorer API
+  (`explorer-api.cronos.org/mainnet/api/{v1,v2}`; helpers in `core/wallet.py`). **Daily PnL** → v1
+  (`explorer_get`: `account/getTxsByAddress` + `account/getCRC20TransferByAddress`). **`/wallet` balances**
+  → native v1 `account/getBalance` + **v2 Etherscan-style** (`_v2_get`: `tokentx` paginated over the *full*
+  history for the complete token set, then `tokenbalance` per token; needs a `User-Agent`; scam/dust
+  filtered, duplicate symbols disambiguated by contract, token set cached per wallet). This replaced the old keyless
   `cronos.org/explorer/api` feed, which silently froze for the wallet on 2026-05-22 while still
   returning `200 OK`. A **freshness guard** (`core/wallet.check_data_freshness`) compares the newest
   wallet block to the live chain tip (independent RPC) and fires a Telegram alert when data is far
