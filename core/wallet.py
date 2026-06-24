@@ -1,5 +1,7 @@
 import os
+import re
 import time
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -35,6 +37,25 @@ EXPLORER_BASE = "https://explorer-api.cronos.org/mainnet/api/v1"
 # with CRONOS_STALE_BLOCK_THRESHOLD if block time changes.
 STALE_BLOCKS_THRESHOLD = int(os.getenv("CRONOS_STALE_BLOCK_THRESHOLD", "200000"))
 _APPROX_BLOCK_SECONDS = 0.45
+
+# --- v2 Etherscan-style endpoint (full token discovery + per-token balances) ---
+# Page/offset pagination is simpler than v1's cursor for walking the full transfer
+# history. These calls can 403 without a browser User-Agent in some regions, so we
+# always send one.
+EXPLORER_V2_BASE = "https://explorer-api.cronos.org/mainnet/api/v2"
+_UA = {"User-Agent": "Mozilla/5.0"}
+# Hide dust below this token-unit amount (override via WALLET_DUST_THRESHOLD).
+_DUST_THRESHOLD = float(os.getenv("WALLET_DUST_THRESHOLD", "0.0001"))
+# Airdrop/scam tokens hide a phishing URL or "claim"/"airdrop" lure in their name/symbol.
+# Real tokens (XYO, SUI, HBAR, tWBTC, ...) do not match this.
+_SCAM_NAME_PAT = re.compile(
+    r"https?://|www\.|t\.me|\b(claim|airdrop|reward|voucher)\b|"
+    r"\.(com|xyz|live|net|org|io|app|finance|supply|promo|cc|info|win|vip|click)\b",
+    re.IGNORECASE,
+)
+# In-memory per-wallet cache of the discovered token set (refreshed incrementally, not re-walked).
+# addr_lower -> {"contracts": {contract_lower: (symbol, decimals, name)}, "newest_block": int}
+_TOKEN_SET_CACHE: dict = {}
 
 
 def _explorer_key():
@@ -183,52 +204,150 @@ async def check_data_freshness(client, send_alert=True):
     return out
 
 
-async def get_wallet_balances(wallet_address: str):
-    """Native CRO + CRC-20 token balances.
-    Returns {"cro": float, "tokens": {symbol: amount}} (shape unchanged for callers).
+def _looks_like_scam(symbol: str, name: str) -> bool:
+    """Airdrop/scam tokens put a phishing URL or 'claim'/'airdrop' lure in their name
+    or symbol. Real tokens (XYO, SUI, HBAR, tWBTC, ...) do not match."""
+    return bool(_SCAM_NAME_PAT.search(f"{symbol or ''} {name or ''}"))
 
-    Balances are read from the explorer's authoritative balance endpoints
-    (account/getBalance + token/getAccountBalanceByContract) — true current
-    balances, not a fragile transfer-sum. Robust to bad/empty responses."""
+
+async def _v2_get(client, params: dict):
+    """GET the v2 Etherscan-style endpoint with the required User-Agent + apikey.
+    Returns the 'result' payload (list / str / None). Never raises."""
+    key = _explorer_key()
+    if not key:
+        logging.error("[explorer-v2] CRONOS_EXPLORER_API_KEY is not set")
+        return None
+    p = dict(params)
+    p["apikey"] = key
+    try:
+        r = await client.get(EXPLORER_V2_BASE, params=p, headers=_UA)
+        if r.status_code != 200:
+            logging.error(f"[explorer-v2] {params.get('action')} HTTP {r.status_code}")
+            return None
+        return r.json().get("result")
+    except Exception as e:
+        logging.error(f"[explorer-v2] {params.get('action')} failed: {e}")
+        return None
+
+
+def _absorb_transfer_rows(rows, contracts) -> int:
+    """Add any new {contract: (symbol, decimals, name)} from tokentx rows; return newest block seen."""
+    newest = 0
+    for it in rows:
+        c = (it.get("contractAddress") or "").lower()
+        if c and c not in contracts:
+            contracts[c] = (
+                it.get("tokenSymbol") or "?",
+                _to_int(it.get("tokenDecimal"), 18),
+                it.get("tokenName") or "",
+            )
+        b = _to_int(it.get("blockNumber"))
+        if b > newest:
+            newest = b
+    return newest
+
+
+async def _discover_token_set(client, wallet_address: str) -> dict:
+    """Discover the wallet's FULL distinct CRC-20 token set by paginating v2 tokentx
+    (page/offset, newest-first). The contract set is cached per wallet and refreshed
+    incrementally, so /wallet does not re-walk the whole history on every call.
+    Returns {contract_lower: (symbol, decimals, name)}."""
+    w = wallet_address.lower()
+    entry = _TOKEN_SET_CACHE.get(w)
+
+    async def _page(n):
+        res = await _v2_get(client, {"module": "account", "action": "tokentx",
+                                     "address": wallet_address, "page": n,
+                                     "offset": 100, "sort": "desc"})
+        return res if isinstance(res, list) else []
+
+    if entry is None:
+        # cold: walk the full history once, in parallel batches, then cache it
+        contracts: dict = {}
+        newest_block = 0
+        MAX_PAGES = 80
+        for start in range(1, MAX_PAGES + 1, 10):
+            batch = await asyncio.gather(*[_page(n) for n in range(start, min(start + 10, MAX_PAGES + 1))])
+            if not any(batch):
+                break
+            for rows in batch:
+                newest_block = max(newest_block, _absorb_transfer_rows(rows, contracts))
+        _TOKEN_SET_CACHE[w] = {"contracts": contracts, "newest_block": newest_block}
+        logging.info(f"[wallet] cold token discovery: {len(contracts)} distinct tokens")
+        return contracts
+
+    # warm: only scan transfers newer than the cached tip (cheap — usually one page)
+    contracts = entry["contracts"]
+    cached_newest = entry["newest_block"]
+    max_new = cached_newest
+    page = 1
+    while page <= 6:
+        rows = await _page(page)
+        if not rows:
+            break
+        fresh = [it for it in rows if _to_int(it.get("blockNumber")) > cached_newest]
+        max_new = max(max_new, _absorb_transfer_rows(fresh, contracts))
+        if any(_to_int(it.get("blockNumber")) <= cached_newest for it in rows):
+            break  # caught up to the cached tip
+        page += 1
+    entry["newest_block"] = max_new
+    return contracts
+
+
+async def get_wallet_balances(wallet_address: str):
+    """Native CRO + CRC-20 token balances. Returns {"cro": float, "tokens": {symbol: amount}}.
+
+    Token discovery walks the wallet's FULL CRC-20 transfer history (v2 tokentx, page/offset)
+    so long-held positions (e.g. XYO, SUI) are not dropped; the contract set is cached per
+    wallet and refreshed incrementally so /wallet stays fast. Per-token current balances come
+    from v2 tokenbalance (raw / 10^tokenDecimal), fetched in parallel. Airdrop/scam tokens
+    (name/symbol looks like a URL or 'claim'/'airdrop') and dust below WALLET_DUST_THRESHOLD
+    are hidden. Duplicate symbols (e.g. two BOOST contracts) are disambiguated by contract."""
     if not wallet_address:
         return {"cro": 0.0, "tokens": {}}
 
-    async with httpx.AsyncClient(timeout=25.0) as client:
-        # --- native CRO ---
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # --- native CRO (v1 balance endpoint; authoritative) ---
         cro = 0.0
         bal = await explorer_get(client, "account/getBalance", {"address": wallet_address})
         if isinstance(bal, dict):
             cro = _to_int(bal.get("balance"), 0) / 10**18
 
-        # --- distinct CRC-20 tokens seen in recent transfers (drives per-contract balance) ---
-        tokens = {}
-        newest_block = None
-        seen = {}  # contract -> (symbol, decimals)
-        rows = await explorer_get(
-            client,
-            "account/getCRC20TransferByAddress",
-            {"address": wallet_address, "startBlock": 0, "endBlock": 99999999},
-        ) or []
-        for tx in rows:
-            meta = tx.get("tokenMetadata") or {}
-            contract = (meta.get("tokenAddress") or "").lower()
-            if contract and contract not in seen:
-                seen[contract] = (meta.get("tokenSymbol") or "???", _to_int(meta.get("decimals"), 18))
-            b = _to_int(tx.get("blockNumber"))
-            if b:
-                newest_block = b if newest_block is None else max(newest_block, b)
+        # --- full token discovery (cached + incremental) ---
+        contracts = await _discover_token_set(client, wallet_address)
 
-        # --- authoritative current balance per held token ---
-        for contract, (symbol, decimals) in seen.items():
-            res = await explorer_get(
-                client,
-                "token/getAccountBalanceByContract",
-                {"address": wallet_address, "contractAddress": contract},
-            )
-            if isinstance(res, dict):
-                raw = _to_int(res.get("tokenBalance"), 0)
-                if raw > 0:
-                    tokens[symbol] = tokens.get(symbol, 0.0) + raw / (10 ** decimals)
+        # --- current balance per token, fetched in parallel (bounded concurrency) ---
+        sem = asyncio.Semaphore(20)
+
+        async def _token_balance(contract):
+            async with sem:
+                return await _v2_get(client, {"module": "account", "action": "tokenbalance",
+                                              "contractaddress": contract,
+                                              "address": wallet_address, "tag": "latest"})
+
+        items = list(contracts.items())
+        raws = await asyncio.gather(*[_token_balance(c) for c, _ in items])
+
+        # --- filter scam + dust; disambiguate duplicate symbols by contract ---
+        by_symbol: dict = {}  # symbol -> list of (contract, amount)
+        for (contract, (symbol, decimals, name)), raw in zip(items, raws):
+            try:
+                amount = _to_int(raw, 0) / (10 ** int(decimals))
+            except (ValueError, TypeError, ZeroDivisionError):
+                amount = 0.0
+            if amount < _DUST_THRESHOLD:
+                continue
+            if _looks_like_scam(symbol, name):
+                continue
+            by_symbol.setdefault(symbol, []).append((contract, amount))
+
+        tokens: dict = {}
+        for symbol, entries in by_symbol.items():
+            if len(entries) == 1:
+                tokens[symbol] = entries[0][1]
+            else:  # same symbol, different contracts -> disambiguate
+                for contract, amount in entries:
+                    tokens[f"{symbol} (0x{contract[2:6]})"] = amount
 
         # --- freshness guard: warn if the DATA SOURCE is lagging (not wallet inactivity) ---
         try:
