@@ -20,7 +20,7 @@ jobs:
     # High-risk change followed Mandatory Review Gate (Approved with Conditions).
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Railway Health
         id: health
