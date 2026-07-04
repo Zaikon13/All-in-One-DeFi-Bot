@@ -57,16 +57,15 @@ in CI or the running bot calls them automatically.
 ## 6. Environment variables
 
 - `ANTHROPIC_API_KEY` — required for all Claude features (runtime + CI).
-- `GROK_API_KEY` — still required while the Grok CI workflows are kept (see §7); also read by
-  `core/grok_client.py` for the gated worker market-analysis and the manual orchestrator.
+- `GROK_API_KEY` — **no longer required by CI** (the Grok workflows were removed 2026-07-04); only
+  read by the gated leftovers (`core/grok_client.py` via `core/market_analysis.py`, default off).
 
-## 7. Migration status (as of 2026-06-24)
+## 7. Migration status (as of 2026-07-04)
 
-Runtime is fully on Claude. **CI is not yet migrated — it runs both providers in parallel:** the two
-Claude workflows (`claude-code-review.yml`, `claude-health-check.yml`) were *added*, but the Grok
-workflows (`grok-code-review.yml`, `health-check.yml`) were never removed, so every PR gets both reviews
-and the schedule fires both health checks (all advisory / `continue-on-error`). `core/grok_client.py`
-(real Grok, `api.x.ai`) is still imported by `call_grok.py` (CI), `core/market_analysis.py` (worker EOD,
-gated off by default), and `agents/orchestrator.py` (manual tool). Per standing decision both providers
-stay until you explicitly approve retiring Grok; finishing the migration (repoint `call_grok.py`, drop the
-Grok workflows + `GROK_API_KEY`, delete `grok_client.py`) is tracked in `IMPLEMENTATION_PLAN.md`.
+Runtime is fully on Claude, and **CI is now Claude-only**: the Grok workflows
+(`grok-code-review.yml`, `health-check.yml`) were removed on 2026-07-04; `claude-code-review.yml` and
+`claude-health-check.yml` remain (advisory / `continue-on-error`), with `ci.yml` as the only gate.
+The Grok-era `agents/` folder and stale SOT docs were archived to `archive/`. Remaining gated leftovers —
+`core/grok_client.py` (`api.x.ai`), `.github/scripts/call_grok.py` (no longer called by any workflow),
+`core/market_analysis.py` (worker EOD, `MARKET_ANALYSIS_ENABLED` default false), `prompts/grok_*.txt` —
+stay in-tree; deleting them is a separate later step tracked in `IMPLEMENTATION_PLAN.md`.

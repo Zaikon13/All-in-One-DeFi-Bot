@@ -2,8 +2,8 @@ name: Claude Health Check
 # Advisory liveness check for the WEB service via Claude (Anthropic). Non-blocking.
 # Pings /health, then asks Claude to analyze the status and opens an issue if unhealthy.
 # Requires the ANTHROPIC_API_KEY GitHub secret. Covers web-service liveness only; the
-# worker is not monitored here. Runs alongside the legacy Grok Health Check during the
-# provider transition.
+# worker is not monitored here. The legacy Grok Health Check workflow was removed
+# 2026-07 — scheduled health checks are Claude-only.
 
 on:
   workflow_dispatch: {}

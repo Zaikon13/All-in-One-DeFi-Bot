@@ -2,7 +2,7 @@ name: Claude Code Review
 # Advisory PR review via Claude (Anthropic). Non-blocking (continue-on-error).
 # Reuses core/claude_client.py through .github/scripts/call_claude.py and the
 # prompts/claude_code_review.txt contract. Requires the ANTHROPIC_API_KEY GitHub secret.
-# Runs alongside the legacy Grok Code Review during the provider transition.
+# The legacy Grok Code Review workflow was removed 2026-07 — PR review is Claude-only.
 
 on:
   pull_request:

@@ -31,7 +31,7 @@
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 - `WALLET_ADDRESS`
-- `GROK_API_KEY`
+- `ANTHROPIC_API_KEY` (Grok's `GROK_API_KEY` was retired with the Grok CI workflows, 2026-07-04)
 - `APP_URL` = `https://bot-production-3d9c.up.railway.app`
 
-**Single Source of Truth**: `docs/project-status.md`
+**Single Source of Truth**: `CLAUDE.md` (the old `docs/project-status.md` is archived in `archive/docs/`)
