@@ -18,3 +18,6 @@ build/
 .DS_Store
 .vscode/
 .idea/
+
+# --- Claude Code (local, per-machine) ---
+.claude/settings.local.json
