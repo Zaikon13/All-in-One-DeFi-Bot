@@ -141,9 +141,9 @@ async def health():
 
 @app.post("/grok/analyze")
 async def grok_analyze(req: Request):
-    """Grok-powered wallet analysis (live data).
+    """Claude-powered wallet analysis (live data); route kept at /grok/analyze for compatibility.
     Updated for live balances + recent txs (Review Agent 2026-06-04).
-    Uses core.grok_client with timeout + quality gate. Supports custom wallet in payload.
+    Uses core.claude_client (via the call_grok alias) with timeout + quality gate. Supports custom wallet in payload.
     """
     try:
         data = await req.json()

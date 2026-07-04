@@ -339,7 +339,7 @@ async def scheduled_eod_pnl():
                 # Pre-compute compact snapshot here (after await, inside existing scheduled_eod_pnl task).
                 # Uses proven inline dexscreener fetch pattern (from poll_dexscreener in same file) for minimal change.
                 # Env-gated via MARKET_ANALYSIS_ENABLED (default false), 25s timeout, is_valid_grok_response gate + fallback.
-                # Appends clearly labeled **Market Context:** section *after* the untouched report (incl. any internal Grok Daily Insight).
+                # Appends clearly labeled **Market Context:** section *after* the untouched report (incl. any internal Claude Daily Insight).
                 # Lazy import + try/except: base EOD report never degraded. Logged. Continue-on-error.
                 # No decision/execution language (enforced by prompt CONTRACT). No new loops. Runtime analysis only.
                 # See 12 mandatory conditions in new reviews/ file + prior 2026-06-XX-grok-market-analysis.md.
