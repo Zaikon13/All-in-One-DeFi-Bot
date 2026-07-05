@@ -41,7 +41,11 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   (`explorer_get`: `account/getTxsByAddress` + `account/getCRC20TransferByAddress`). **`/wallet` balances**
   → native v1 `account/getBalance` + **v2 Etherscan-style** (`_v2_get`: `tokentx` paginated over the *full*
   history for the complete token set, then `tokenbalance` per token; needs a `User-Agent`; scam/dust
-  filtered, duplicate symbols disambiguated by contract, token set cached per wallet). This replaced the old keyless
+  filtered, duplicate symbols disambiguated by contract, token set cached per wallet). **USD values (2026-07-05):** `core/wallet.get_token_prices` batches Dexscreener
+  `latest/dex/tokens/{addrs}` (30/call, cronos pairs only, best-liquidity pool wins; CRO via the
+  WCRO contract); `/wallet` shows a portfolio total, sorts by USD desc, collapses holdings under
+  `WALLET_MIN_USD_DISPLAY` (default $1), marks unpriced tokens 'price unknown', and falls back to
+  the plain amounts-only output if pricing fails entirely (renderer: `app/commands/balances.py`). This replaced the old keyless
   `cronos.org/explorer/api` feed, which silently froze for the wallet on 2026-05-22 while still
   returning `200 OK`. A **freshness guard** (`core/wallet.check_data_freshness`) compares the newest
   wallet block to the live chain tip (independent RPC) and fires a Telegram alert when data is far
@@ -125,6 +129,7 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `WALLET_ADDRESS`, `CRONOS_RPC_URL` | runtime | RPC also serves as the independent chain-tip reference for the freshness guard |
 | `CRONOS_EXPLORER_API_KEY` | runtime | **required** — live Cronos Explorer v1 feed for balances + daily PnL |
 | `CRONOS_STALE_BLOCK_THRESHOLD` | runtime (optional) | blocks-behind threshold for the stale-data alert (default 200000 ≈ 1 day) |
+| `WALLET_MIN_USD_DISPLAY` | web (optional) | /wallet holdings under this USD value collapse into one line (default 1) |
 | `PAIR_NEWNESS_WINDOW_HOURS` | worker (optional) | new-pair alert window vs `pairCreatedAt` (default 24) |
 | `PAIR_MIN_LIQUIDITY_USD` | worker (optional) | minimum pool liquidity for a new-pair alert (default 10000) |
 | `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |

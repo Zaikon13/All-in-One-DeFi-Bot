@@ -57,6 +57,13 @@ _SCAM_NAME_PAT = re.compile(
 # addr_lower -> {"contracts": {contract_lower: (symbol, decimals, name)}, "newest_block": int}
 _TOKEN_SET_CACHE: dict = {}
 
+# --- USD pricing via Dexscreener (2026-07-05) ---
+# Dexscreener's token endpoint knows Cronos micro-caps that CoinGecko doesn't.
+# Batched (30 addresses/call, comma-separated), same defensive _UA pattern as v2.
+# Native CRO is priced via the canonical WCRO contract.
+DEXSCREENER_TOKENS_BASE = "https://api.dexscreener.com/latest/dex/tokens/"
+_WCRO_CONTRACT = "0x5c7f8a570d578ed84e63fdfa7b1ee72deae1ae23"  # wrapped CRO (Cronos mainnet)
+
 
 def _explorer_key():
     return os.getenv("CRONOS_EXPLORER_API_KEY")
@@ -294,8 +301,54 @@ async def _discover_token_set(client, wallet_address: str) -> dict:
     return contracts
 
 
+async def get_token_prices(client, contracts: list) -> dict:
+    """Current USD prices for CRC-20 contracts from Dexscreener, batched 30/call.
+
+    Only pairs with chainId == "cronos" are considered; when a token trades in
+    several pools, the highest-liquidity pool wins. Returns
+    {contract_lower: price_usd_float} — tokens Dexscreener doesn't know are simply
+    absent. Defensive: per-batch timeout + try/except; never raises, worst case {}.
+    """
+    prices: dict = {}
+    best_liq: dict = {}
+    uniq = list(dict.fromkeys(c.lower() for c in contracts if c))
+    for i in range(0, len(uniq), 30):
+        chunk = uniq[i:i + 30]
+        wanted = set(chunk)
+        try:
+            r = await client.get(DEXSCREENER_TOKENS_BASE + ",".join(chunk),
+                                 headers=_UA, timeout=15.0)
+            if r.status_code != 200:
+                logging.warning(f"[prices] dexscreener HTTP {r.status_code}")
+                continue
+            for p in ((r.json() or {}).get("pairs") or []):
+                if str(p.get("chainId") or "").lower() != "cronos":
+                    continue
+                addr = ((p.get("baseToken") or {}).get("address") or "").lower()
+                if addr not in wanted:
+                    continue
+                try:
+                    price = float(p.get("priceUsd") or 0)
+                    liq = float(((p.get("liquidity") or {}).get("usd")) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if price <= 0:
+                    continue
+                if liq > best_liq.get(addr, -1.0):  # ties keep the first (Dexscreener ranks best-first)
+                    best_liq[addr] = liq
+                    prices[addr] = price
+        except Exception as e:
+            logging.error(f"[prices] dexscreener batch failed: {e}")
+    return prices
+
+
 async def get_wallet_balances(wallet_address: str):
-    """Native CRO + CRC-20 token balances. Returns {"cro": float, "tokens": {symbol: amount}}.
+    """Native CRO + CRC-20 token balances, enriched with USD values when available.
+
+    Returns {"cro", "tokens" (unchanged {symbol: amount}), "cro_usd", "usd_total",
+    "token_details" ([{symbol, contract, amount, usd|None}]), "priced" (bool —
+    False when Dexscreener pricing failed entirely; callers then fall back to the
+    plain amounts-only rendering)}.
 
     Token discovery walks the wallet's FULL CRC-20 transfer history (v2 tokentx, page/offset)
     so long-held positions (e.g. XYO, SUI) are not dropped; the contract set is cached per
@@ -304,7 +357,8 @@ async def get_wallet_balances(wallet_address: str):
     (name/symbol looks like a URL or 'claim'/'airdrop') and dust below WALLET_DUST_THRESHOLD
     are hidden. Duplicate symbols (e.g. two BOOST contracts) are disambiguated by contract."""
     if not wallet_address:
-        return {"cro": 0.0, "tokens": {}}
+        return {"cro": 0.0, "tokens": {}, "cro_usd": None, "usd_total": None,
+                "token_details": [], "priced": False}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         # --- native CRO (v1 balance endpoint; authoritative) ---
@@ -342,12 +396,41 @@ async def get_wallet_balances(wallet_address: str):
             by_symbol.setdefault(symbol, []).append((contract, amount))
 
         tokens: dict = {}
+        token_details: list = []  # additive: [{symbol, contract, amount, usd|None}]
         for symbol, entries in by_symbol.items():
             if len(entries) == 1:
                 tokens[symbol] = entries[0][1]
+                token_details.append({"symbol": symbol, "contract": entries[0][0],
+                                      "amount": entries[0][1], "usd": None})
             else:  # same symbol, different contracts -> disambiguate
                 for contract, amount in entries:
-                    tokens[f"{symbol} (0x{contract[2:6]})"] = amount
+                    disp = f"{symbol} (0x{contract[2:6]})"
+                    tokens[disp] = amount
+                    token_details.append({"symbol": disp, "contract": contract,
+                                          "amount": amount, "usd": None})
+
+        # --- USD enrichment (2026-07-05): best-effort, never blocks /wallet ---
+        # If pricing fails entirely, priced=False and callers fall back to the
+        # pre-existing amounts-only output.
+        cro_usd = None
+        usd_total = None
+        priced = False
+        try:
+            prices = await get_token_prices(
+                client, [d["contract"] for d in token_details] + [_WCRO_CONTRACT]
+            )
+            if prices:
+                priced = True
+                cro_price = prices.get(_WCRO_CONTRACT)
+                if cro_price:
+                    cro_usd = cro * cro_price
+                for d in token_details:
+                    p = prices.get(d["contract"])
+                    if p:
+                        d["usd"] = d["amount"] * p
+                usd_total = (cro_usd or 0.0) + sum(d["usd"] for d in token_details if d["usd"])
+        except Exception as e:
+            logging.error(f"[wallet] USD enrichment failed (amounts-only fallback): {e}")
 
         # --- freshness guard: warn if the DATA SOURCE is lagging (not wallet inactivity) ---
         try:
@@ -355,7 +438,14 @@ async def get_wallet_balances(wallet_address: str):
         except Exception:
             pass
 
-        return {"cro": cro, "tokens": tokens}
+        return {
+            "cro": cro,
+            "tokens": tokens,  # unchanged shape: {symbol: amount} (app/main.py relies on it)
+            "cro_usd": cro_usd,
+            "usd_total": usd_total,
+            "token_details": token_details,
+            "priced": priced,
+        }
 
 
 async def get_recent_transactions(wallet_address: str, limit: int = 20) -> list[str]:
