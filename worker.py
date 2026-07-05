@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import math
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -27,6 +28,30 @@ RESTART_DEDUP_WINDOW_SECONDS = 3600
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("worker")
+
+
+def _env_float(name: str, default: float) -> float:
+    """Defensive env-var float parse: bad values log a warning and fall back."""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        v = float(raw)
+        if not math.isfinite(v) or v < 0:
+            raise ValueError("must be finite and >= 0")
+        return v
+    except (TypeError, ValueError):
+        logger.warning(f"Invalid {name}={raw!r}; using default {default}")
+        return default
+
+
+# New-pair alert filters (2026-07-05). The Dexscreener call is a TEXT search across
+# every chain, so results must be filtered to chainId == "cronos"; "new" means
+# pairCreatedAt within PAIR_NEWNESS_WINDOW_HOURS; dust pools below
+# PAIR_MIN_LIQUIDITY_USD are skipped. All alerts in one cycle go out as ONE message.
+PAIR_NEWNESS_WINDOW_HOURS = _env_float("PAIR_NEWNESS_WINDOW_HOURS", 24.0)
+PAIR_MIN_LIQUIDITY_USD = _env_float("PAIR_MIN_LIQUIDITY_USD", 10000.0)
+MAX_PAIRS_PER_ALERT = 10  # Telegram 4096-char safety; extras summarized as a count
 
 seen_pairs = set()
 pair_last_seen = {}  # addr -> ISO-UTC last_seen (or None for migrated legacy entries)
@@ -231,6 +256,19 @@ async def heartbeat():
 
 
 async def poll_dexscreener():
+    """Poll Dexscreener and alert on genuinely new Cronos pairs.
+
+    Fixes (2026-07-05):
+    - search?q=cronos is a text search across ALL chains (Solana results were being
+      announced as "on Cronos") -> only pairs with chainId == "cronos" are processed.
+    - "New" now means pairCreatedAt within PAIR_NEWNESS_WINDOW_HOURS (default 24h);
+      pairs without a valid pairCreatedAt are skipped (newness unverifiable).
+    - Pairs with liquidity.usd below PAIR_MIN_LIQUIDITY_USD (default $10k) are skipped.
+    - All new pairs found in one polling cycle are sent as ONE combined Telegram
+      message (this also fixes the prior bug where the alert send sat OUTSIDE the
+      newness check, re-announcing the top search results every cycle).
+    Known-pairs dedup/persistence (seen_pairs + _is_new_or_stale) is unchanged.
+    """
     while True:
         try:
             url = "https://api.dexscreener.com/latest/dex/search?q=cronos"
@@ -238,53 +276,93 @@ async def poll_dexscreener():
                 r = await client.get(url)
                 if r.status_code == 200:
                     data = r.json()
-                    pairs = data.get("pairs", [])[:5]
-                    for pair in pairs:
+                    now_utc = datetime.now(timezone.utc)
+                    fresh = []  # (pair, liquidity_usd, age_hours)
+                    for pair in (data.get("pairs") or []):
+                        if str(pair.get("chainId") or "").lower() != "cronos":
+                            continue  # text search returns pairs from every chain
                         pair_address = pair.get("pairAddress")
-                        if pair_address:
-                            base = pair.get("baseToken", {})
-                            quote = pair.get("quoteToken", {})
+                        if not pair_address:
+                            continue
+                        # genuine newness: pairCreatedAt (ms epoch) within the window
+                        try:
+                            created_dt = datetime.fromtimestamp(
+                                int(pair.get("pairCreatedAt")) / 1000, tz=timezone.utc
+                            )
+                        except (TypeError, ValueError, OSError, OverflowError):
+                            continue  # missing/invalid creation time -> can't verify newness
+                        age_h = (now_utc - created_dt).total_seconds() / 3600.0
+                        if age_h < 0 or age_h > PAIR_NEWNESS_WINDOW_HOURS:
+                            continue
+                        # liquidity floor: skip dust pools
+                        try:
+                            liq = float((pair.get("liquidity") or {}).get("usd") or 0)
+                        except (TypeError, ValueError):
+                            liq = 0.0
+                        if liq < PAIR_MIN_LIQUIDITY_USD:
+                            continue
+                        # known-pairs dedup (last_seen + restart window, persistence unchanged).
+                        # 2026-07-05: last_seen is now ALSO refreshed in-memory on the skip path;
+                        # otherwise a pair inside the 24h window re-alerts every RESTART_DEDUP_WINDOW
+                        # (~hourly, up to ~24 dup alerts/pair/day). Disk write stays alert-path-only,
+                        # so restart behavior (one possible re-alert after a gap) is preserved.
+                        if pair_address not in seen_pairs or _is_new_or_stale(pair_address):
+                            seen_pairs.add(pair_address)
+                            pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
+                            _sync_seen_pairs_from_dict()
+                            save_known_pairs(seen_pairs)  # persist immediately (atomic + warns if no volume)
+                            fresh.append((pair, liq, age_h))
+                        else:
+                            pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
 
-                            # Review Agent 2026-06-08: improve change detection using last_seen (defensive: missing/invalid last_seen treated as "new")
-                            # last_seen also recorded for future richer diffing; update only on detection path (no new loops / no impact on market appends)
-                            # Review Agent 2026-06-09 (Phase 1 extension): use improved _is_new_or_stale() for explicit time-window policy
-                            # + centralized _sync_seen_pairs_from_dict() to keep dict as single source of truth.
-                            last = pair_last_seen.get(pair_address)
-                            if pair_address not in seen_pairs or _is_new_or_stale(pair_address):
-                                seen_pairs.add(pair_address)
-                                pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
-                                _sync_seen_pairs_from_dict()
-                                save_known_pairs(seen_pairs)   # persist immediately (atomic + warns if no volume)
-                            msg = (
-                                f"🚀 **New Pair Detected on Cronos**\n\n"
+                    if fresh:
+                        market_enabled = os.getenv("MARKET_ANALYSIS_ENABLED", "false").lower() == "true"
+                        sections = []
+                        for pair, liq, age_h in fresh[:MAX_PAIRS_PER_ALERT]:
+                            base = pair.get("baseToken") or {}
+                            quote = pair.get("quoteToken") or {}
+                            section = (
                                 f"**{base.get('symbol', '???')} / {quote.get('symbol', '???')}**\n"
-                                f"**Price:** ${pair.get('priceUsd', 'N/A')}\n"
-                                f"**Liquidity:** ${pair.get('liquidity', {}).get('usd', 0):,.0f}\n"
+                                f"- Price: ${pair.get('priceUsd', 'N/A')}\n"
+                                f"- Liquidity: ${liq:,.0f}\n"
+                                f"- Age: {age_h:.1f}h\n"
                                 f"[View on DexScreener]({pair.get('url', '#')})"
                             )
-
-                            # Review Agent 2026-06: Optional market/token analysis enhancement for new-pair alerts (first inc, analysis-only).
-                            # Pre-compute pair summary here; call thin core helper (reuses grok_client exclusively).
-                            # Env-gated (MARKET_ANALYSIS_ENABLED, default false), 25s timeout, is_valid gate + fallback, logged, continue-on-error.
-                            # Output: qualitative insight only (no trading/execution language per contract).
-                            # Lazy import protects startup (like EOD PnL pattern).
-                            market_enabled = os.getenv("MARKET_ANALYSIS_ENABLED", "false").lower() == "true"
+                            # Optional env-gated market insight per pair (semantics unchanged;
+                            # appended inside the combined message instead of its own send).
                             if market_enabled:
                                 try:
                                     from core.market_analysis import get_market_insight_with_fallback
-                                    pair_sum = f"{base.get('symbol', '???')} / {quote.get('symbol', '???')} (pair {pair_address})"
-                                    mkt_sum = f"Liquidity ${pair.get('liquidity', {}).get('usd', 0):,.0f}, price ${pair.get('priceUsd', 'N/A')}"
+                                    pair_sum = f"{base.get('symbol', '???')} / {quote.get('symbol', '???')} (pair {pair.get('pairAddress')})"
+                                    mkt_sum = f"Liquidity ${liq:,.0f}, price ${pair.get('priceUsd', 'N/A')}"
                                     insight = await get_market_insight_with_fallback(
                                         pair_sum, mkt_sum, raw_fallback="", timeout=25.0
                                     )
                                     if insight:
-                                        msg = f"{msg}\n\n{insight.strip()}"
+                                        ins = insight.strip()
+                                        if len(ins) > 300:
+                                            ins = ins[:300].rstrip() + "..."
+                                        section = f"{section}\n{ins}"
                                 except Exception as e:
                                     logger.error(f"Market analysis error (new pair): {e}")
                                     # continue - no insight appended
-
-                            await send_telegram(msg)
-                            logger.info(f"New pair alert sent: {base.get('symbol')}")
+                            sections.append(section)
+                        if len(fresh) > MAX_PAIRS_PER_ALERT:
+                            sections.append(f"...plus {len(fresh) - MAX_PAIRS_PER_ALERT} more new pairs this cycle.")
+                        header = (
+                            "🚀 **New Pair Detected on Cronos**"
+                            if len(fresh) == 1
+                            else f"🚀 **{len(fresh)} New Pairs Detected on Cronos**"
+                        )
+                        combined = "\n\n".join([header] + sections)
+                        if len(combined) > 4000:  # Telegram hard limit is 4096
+                            combined = combined[:4000].rstrip() + "\n\n(truncated)"
+                        await send_telegram(combined)
+                        logger.info(
+                            "New pair alert sent (1 message, %d pair(s)): %s",
+                            len(fresh),
+                            ", ".join((p.get("baseToken") or {}).get("symbol", "?") for p, _, _ in fresh),
+                        )
         except Exception as e:
             logger.error(f"Dexscreener error: {e}")
         await asyncio.sleep(DEXSCREENER_INTERVAL)

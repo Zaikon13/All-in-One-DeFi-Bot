@@ -28,7 +28,12 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 - **Web service** — `app/main.py` (FastAPI + uvicorn). Telegram webhook at `/telegram/webhook`,
   wallet analysis at `/grok/analyze`, daily PnL, health at `/` and `/health`.
 - **Worker** — `worker.py`. Polls Dexscreener for new Cronos pairs, monitors the wallet, sends a
-  heartbeat, runs end-of-day PnL. Persists state to a Railway volume at `/data`.
+  heartbeat, runs end-of-day PnL. Persists state to a Railway volume at `/data`. **New-pair alerts
+  (fixed 2026-07-05):** Dexscreener `search?q=cronos` is a cross-chain text search, so the detector
+  filters `chainId == "cronos"`, requires `pairCreatedAt` within `PAIR_NEWNESS_WINDOW_HOURS`
+  (default 24h), skips pools under `PAIR_MIN_LIQUIDITY_USD` (default $10k), and batches all new
+  pairs from one polling cycle into ONE Telegram message (detail for the first 10, rest counted;
+  message capped at 4000 chars).
 - **core/** — shared helpers. `claude_client.py` (AI calls), `wallet.py`, `pnl_calculator.py`,
   `price_service.py`, Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
 - **Blockchain data source (2026-06-21, balances rev. 2026-06-24).** Live, keyed Cronos Explorer API
@@ -120,6 +125,8 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `WALLET_ADDRESS`, `CRONOS_RPC_URL` | runtime | RPC also serves as the independent chain-tip reference for the freshness guard |
 | `CRONOS_EXPLORER_API_KEY` | runtime | **required** — live Cronos Explorer v1 feed for balances + daily PnL |
 | `CRONOS_STALE_BLOCK_THRESHOLD` | runtime (optional) | blocks-behind threshold for the stale-data alert (default 200000 ≈ 1 day) |
+| `PAIR_NEWNESS_WINDOW_HOURS` | worker (optional) | new-pair alert window vs `pairCreatedAt` (default 24) |
+| `PAIR_MIN_LIQUIDITY_USD` | worker (optional) | minimum pool liquidity for a new-pair alert (default 10000) |
 | `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |
 | `ETHERSCAN_API_KEY` | legacy | no longer used by the live data path (deprecated sync Covalent helper only) |
 
