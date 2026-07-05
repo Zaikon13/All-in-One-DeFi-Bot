@@ -52,7 +52,10 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   behind, so silent staleness can't recur. Requires `CRONOS_EXPLORER_API_KEY`. Response shape is
   Cronos-v1 (nested `from`/`to`, `transactionHash`/`timestamp`, token meta in `tokenMetadata`); the
   PnL path adapts rows to the legacy shape so `_normalize_etherscan_item`/`_aggregate_pnl` stay untouched.
-- **prompts/** — prompt templates loaded via the client.
+- **prompts/** — Claude-native runtime templates (2026-07-05): `claude_daily_pnl.txt`,
+  `claude_wallet_analysis.txt` (+ CI's `claude_code_review.txt`, `claude_health_check.txt`).
+  Grok-era prompts were archived to `archive/prompts/` — except `grok_market_analysis.txt`,
+  which stays because gated `core/market_analysis.py` (default off) still loads it.
 - **Railway** — 3 services: `bot`, `web-gpl6`, `worker`. Worker has a 5GB volume at `/data`.
 
 ## Current AI-provider state (Claude-only as of 2026-07-04)
@@ -105,7 +108,8 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 - Orphaned / dead code: `telegram/handlers.py`, `app/health.py`, `app/github_webhook.py`, a dead `main.py`
   stub, and a local `telegram/` package that shadows the pip `telegram` package.
 - Leftover gated Grok code: `core/grok_client.py`, `core/market_analysis.py`, `.github/scripts/call_grok.py`,
-  `prompts/grok_*.txt` — retiring these is a separate approved-later step.
+  `prompts/grok_market_analysis.txt` (other grok prompts archived 2026-07-05) — retiring these is a
+  separate approved-later step.
 - No tagged releases; stale open PRs/branches.
 
 ## Commands

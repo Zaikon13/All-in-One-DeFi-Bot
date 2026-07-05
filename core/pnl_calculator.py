@@ -710,7 +710,7 @@ async def get_daily_pnl_report() -> str:
     - Fetch via async Etherscan V2 (production path; command path unified 2026-06-06).
     - If no meaningful txs: clean message.
     - Attempt Grok via core.grok_client.call_grok with HARD TIMEOUT (addresses prior High review feedback on timeout control).
-    - Use compact prompt from prompts/grok_daily_pnl.txt + summarized data.
+    - Use compact prompt from prompts/claude_daily_pnl.txt + summarized data.
     - On success/good content: return base report + Grok insights.
     - On any failure (timeout, API error, low quality): clean fallback using format_pnl_report() style.
     - Never degrades UX below previous fallback quality.
@@ -758,7 +758,7 @@ async def get_daily_pnl_report() -> str:
         top_movers_summary = "\n".join(top_movers_lines) if top_movers_lines else "No activity."
 
         prompt = load_prompt(
-            "grok_daily_pnl.txt",
+            "claude_daily_pnl.txt",
             date=data.get("date", "today"),
             wallet_preview=f"{WALLET_ADDRESS[:6]}...{WALLET_ADDRESS[-4:]}" if WALLET_ADDRESS else "unknown",
             total_trades=total_trades,

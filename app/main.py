@@ -109,7 +109,7 @@ async def process_grok_analyze(chat_id: str):
     try:
         ctx = await _get_grok_live_context(WALLET_ADDRESS)
         prompt = load_prompt(
-            "grok_wallet_analysis.txt",
+            "claude_wallet_analysis.txt",
             wallet_preview=ctx["preview"],
             balances_summary=ctx["balances"],
             recent_txs_summary=ctx["txs"],
@@ -150,7 +150,7 @@ async def grok_analyze(req: Request):
         wallet = data.get("wallet", WALLET_ADDRESS)
         ctx = await _get_grok_live_context(wallet)
         prompt = load_prompt(
-            "grok_wallet_analysis.txt",
+            "claude_wallet_analysis.txt",
             wallet_preview=ctx["preview"],
             balances_summary=ctx["balances"],
             recent_txs_summary=ctx["txs"],
