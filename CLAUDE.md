@@ -23,6 +23,14 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 - **It monitors and reports only. It does NOT execute trades.** (Trading is a future goal, not built.)
 - Repo: https://github.com/Zaikon13/All-in-One-DeFi-Bot
 
+## Active roadmap
+
+- **Trading execution — future, not built.** When (and only when) real trading steps land, the AI's
+  "actionable trading insights" / recommendation language may return to the system prompt and the
+  runtime prompts. It was removed on 2026-07-05 so the AI's claimed identity matches actual
+  capabilities (Cronos-only monitoring analyst; observations are information, not financial advice).
+  Any such step is financial-decision-adjacent: human review + simulate/dry-run first (golden rules).
+
 ## Architecture
 
 - **Web service** — `app/main.py` (FastAPI + uvicorn). Telegram webhook at `/telegram/webhook`,
@@ -60,7 +68,8 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 
 ## Current AI-provider state (Claude-only as of 2026-07-04)
 
-- **Runtime → Claude.** `core/claude_client.py` calls Anthropic, model `claude-sonnet-4-6`.
+- **Runtime → Claude.** `core/claude_client.py` calls Anthropic, model `claude-sonnet-4-6`,
+  `max_tokens=2048`; `DEFI_SYSTEM_PROMPT` = Cronos-only monitoring analyst (2026-07-05).
   `app/main.py` and `core/pnl_calculator.py` import from it. Note: `claude_client.py` ends with
   `call_grok = call_claude`, so call sites still *read* "grok" but actually run Claude.
 - **CI → Claude-only.** `claude-code-review.yml` (on PR) + `claude-health-check.yml` (scheduled) use
