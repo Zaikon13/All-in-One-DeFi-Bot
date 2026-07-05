@@ -14,7 +14,7 @@ Check every change against the project rules in CLAUDE.md:
 - Smallest correct change; small focused PRs.
 - Reuse core/ helpers; no duplicated logic.
 - Defensive: timeouts + error handling on all external calls (Cronos RPC, REST, Telegram).
-- UTC for all dates.
+- UTC for all internal timestamps (exception: daily PnL reporting day boundary is Europe/Athens, REPORT_TZ in core/pnl_calculator.py).
 - Telegram output is Markdown v1 only (**bold** + simple bullets), never tables/code blocks.
 - No secrets in code or example files.
 - Financial-decision-adjacent logic flagged for human review; on-chain actions simulated/dry-run.

@@ -68,7 +68,9 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 - **Smallest correct change.** Small PRs. Keep CI green.
 - **Reuse `core/` helpers** instead of duplicating logic.
 - **Defensive code** — timeouts + error handling on every external call (Cronos RPC, REST APIs, Telegram).
-- **UTC** for all dates and time filters.
+- **UTC** for all internal timestamps and time filters. One deliberate exception: the **daily PnL
+  reporting day boundary is Europe/Athens** (`REPORT_TZ` in `core/pnl_calculator.py`), matching the
+  worker's Athens-scheduled EOD send, so the report covers the owner's local day. (2026-07-05)
 - **Telegram formatting** — Markdown v1 only: `**bold**` and simple `-`/`•` bullets. No tables, no code blocks (they break Telegram rendering).
 - **Never hardcode or commit secrets.** Secrets live in Railway variables and GitHub secrets only.
 - **Financial-decision-adjacent logic → flag for human review before shipping.** Simulate / dry-run any future on-chain action.
@@ -118,6 +120,7 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `WALLET_ADDRESS`, `CRONOS_RPC_URL` | runtime | RPC also serves as the independent chain-tip reference for the freshness guard |
 | `CRONOS_EXPLORER_API_KEY` | runtime | **required** — live Cronos Explorer v1 feed for balances + daily PnL |
 | `CRONOS_STALE_BLOCK_THRESHOLD` | runtime (optional) | blocks-behind threshold for the stale-data alert (default 200000 ≈ 1 day) |
+| `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |
 | `ETHERSCAN_API_KEY` | legacy | no longer used by the live data path (deprecated sync Covalent helper only) |
 
 ## Working with Claude Code on this repo

@@ -4,8 +4,14 @@ import os
 import logging
 from datetime import datetime, timezone
 from typing import List, Dict
+from zoneinfo import ZoneInfo
 
 import httpx
+
+# Reporting-day boundary for the DAILY PnL report. Internal timestamps stay UTC,
+# but "today" for the report matches the owner's local day (and the worker's EOD
+# scheduler, which already runs on Europe/Athens).
+REPORT_TZ = ZoneInfo("Europe/Athens")
 
 # Reuse Grok client (SOT for calls, prompts, quality gates - consolidated 2026-06-04)
 from core.claude_client import call_grok, load_prompt, is_valid_grok_response
@@ -114,7 +120,7 @@ def calculate_daily_pnl() -> Dict:
         })
 
     return {
-        "date": datetime.now().strftime("%Y-%m-%d"),
+        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),  # legacy sync path: UTC end-to-end (filter above is UTC)
         "tokens": result
     }
 
@@ -391,7 +397,7 @@ def _aggregate_pnl(transactions: List[Dict]) -> Dict:
         })
 
     return {
-        "date": datetime.now().strftime("%Y-%m-%d"),
+        "date": datetime.now(REPORT_TZ).strftime("%Y-%m-%d"),  # reporting day = Europe/Athens
         "tokens": result
     }
 
@@ -518,19 +524,21 @@ async def get_today_transactions_async() -> List[Dict]:
     _aggregate_pnl path.
 
     Pagination: pagination.session cursor, newest-first, capped at ~10 pages per
-    endpoint; early-exit on the first tx older than today (UTC). Defensive: any
+    endpoint; early-exit on the first tx older than today. Defensive: any
     error returns partial results (never fails the whole report).
 
     Freshness guard: if the newest data is far behind the live chain, log a
     warning and fire a Telegram alert instead of silently reporting "no activity".
 
-    Output: List[Dict] synthetics for _aggregate_pnl (UTC date filter).
+    Output: List[Dict] synthetics for _aggregate_pnl. The "today" day boundary is
+    Europe/Athens (REPORT_TZ) so the report covers the owner's local day and lines
+    up with the Athens-scheduled EOD send; tx timestamps themselves remain UTC.
     """
     if not WALLET_ADDRESS:
         logging.error("[ERROR] Missing WALLET_ADDRESS")
         return []
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")  # UTC tx-date filter
+    today = datetime.now(REPORT_TZ).strftime("%Y-%m-%d")  # reporting-day filter (Europe/Athens)
     collected: List[Dict] = []
     newest_block = None
     newest_ts = None
@@ -567,7 +575,7 @@ async def get_today_transactions_async() -> List[Dict]:
                             newest_block = b if newest_block is None else max(newest_block, b)
                         if ts and (newest_ts is None or ts > newest_ts):
                             newest_ts = ts
-                        tx_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d") if ts else ""
+                        tx_date = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(REPORT_TZ).strftime("%Y-%m-%d") if ts else ""
                         if tx_date == today:
                             synth = _normalize_etherscan_item(_adapt_explorer_row(item, action), action)
                             if synth:
