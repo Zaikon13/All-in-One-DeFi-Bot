@@ -51,6 +51,24 @@ def _env_float(name: str, default: float) -> float:
 # PAIR_MIN_LIQUIDITY_USD are skipped. All alerts in one cycle go out as ONE message.
 PAIR_NEWNESS_WINDOW_HOURS = _env_float("PAIR_NEWNESS_WINDOW_HOURS", 24.0)
 PAIR_MIN_LIQUIDITY_USD = _env_float("PAIR_MIN_LIQUIDITY_USD", 10000.0)
+
+# Quality scoring for new-pair alerts (2026-07-06, Part A). Each ingredient is worth
+# 0-25 points (total 0-100): 1h volume (full marks at PAIR_SCORE_VOL1H_FULL),
+# 1h buy pressure (0 pts at <=50% buys, full at >=PAIR_SCORE_BUY_RATIO_FULL),
+# 1h price momentum (0 pts at <=0%, full at >=PAIR_SCORE_MOM1H_FULL %), and
+# liquidity depth (full at PAIR_SCORE_LIQ_FULL). Only pairs scoring at least
+# PAIR_MIN_SCORE are alerted; the rest are counted in the log line only.
+PAIR_MIN_SCORE = _env_float("PAIR_MIN_SCORE", 35.0)
+PAIR_SCORE_VOL1H_FULL = _env_float("PAIR_SCORE_VOL1H_FULL", 25000.0)
+PAIR_SCORE_BUY_RATIO_FULL = _env_float("PAIR_SCORE_BUY_RATIO_FULL", 0.85)
+PAIR_SCORE_MOM1H_FULL = _env_float("PAIR_SCORE_MOM1H_FULL", 30.0)
+PAIR_SCORE_LIQ_FULL = _env_float("PAIR_SCORE_LIQ_FULL", 50000.0)
+PAIR_SCORE_STRONG = 70.0  # tier label only: >= -> "strong", else "notable"
+if not (0.5 < PAIR_SCORE_BUY_RATIO_FULL <= 1.0):
+    logger.warning(
+        f"PAIR_SCORE_BUY_RATIO_FULL={PAIR_SCORE_BUY_RATIO_FULL} is outside (0.5, 1.0] — "
+        "it is a FRACTION (e.g. 0.85), not a percent; buy-pressure points are disabled/skewed."
+    )
 MAX_PAIRS_PER_ALERT = 10  # Telegram 4096-char safety; extras summarized as a count
 
 seen_pairs = set()
@@ -255,6 +273,55 @@ async def heartbeat():
         await asyncio.sleep(HEARTBEAT_INTERVAL)
 
 
+def _clamp01(x: float) -> float:
+    if not math.isfinite(x):
+        return 0.0  # nan/inf from the API must count as 0 points, never pass the gate
+    return 0.0 if x < 0 else (1.0 if x > 1 else x)
+
+
+def score_pair(pair: dict, liq: float) -> dict:
+    """Transparent 0-100 quality score for a new pair, from fields Dexscreener
+    already returns. Pure + defensive (bad/missing fields count as 0 points, never
+    raise). Returns the ingredients alongside the score so alerts can show the
+    'why', not just a verdict:
+    {score, vol1h, buys, sells, buy_ratio, chg1h, pts_volume, pts_buys, pts_momentum, pts_liquidity}
+    """
+    def _sub(key):  # tolerate wrong shapes ("volume": "nope") — treat as empty
+        v = pair.get(key) if isinstance(pair, dict) else None
+        return v if isinstance(v, dict) else {}
+
+    try:
+        vol1h = float(_sub("volume").get("h1") or 0)
+    except (TypeError, ValueError):
+        vol1h = 0.0
+    tx1h = _sub("txns").get("h1")
+    tx1h = tx1h if isinstance(tx1h, dict) else {}
+    try:
+        buys = int(tx1h.get("buys") or 0)
+        sells = int(tx1h.get("sells") or 0)
+    except (TypeError, ValueError):
+        buys = sells = 0
+    try:
+        chg1h = float(_sub("priceChange").get("h1") or 0)
+    except (TypeError, ValueError):
+        chg1h = 0.0
+
+    pts_volume = 25.0 * _clamp01(vol1h / PAIR_SCORE_VOL1H_FULL) if PAIR_SCORE_VOL1H_FULL > 0 else 0.0
+    buy_ratio = (buys / (buys + sells)) if (buys + sells) > 0 else 0.0
+    denom = PAIR_SCORE_BUY_RATIO_FULL - 0.5
+    pts_buys = 25.0 * _clamp01((buy_ratio - 0.5) / denom) if denom > 0 else 0.0
+    pts_momentum = 25.0 * _clamp01(chg1h / PAIR_SCORE_MOM1H_FULL) if PAIR_SCORE_MOM1H_FULL > 0 else 0.0
+    pts_liquidity = 25.0 * _clamp01(liq / PAIR_SCORE_LIQ_FULL) if PAIR_SCORE_LIQ_FULL > 0 else 0.0
+
+    return {
+        "score": round(pts_volume + pts_buys + pts_momentum + pts_liquidity, 1),
+        "vol1h": vol1h, "buys": buys, "sells": sells,
+        "buy_ratio": round(buy_ratio, 3), "chg1h": chg1h,
+        "pts_volume": round(pts_volume, 1), "pts_buys": round(pts_buys, 1),
+        "pts_momentum": round(pts_momentum, 1), "pts_liquidity": round(pts_liquidity, 1),
+    }
+
+
 async def poll_dexscreener():
     """Poll Dexscreener and alert on genuinely new Cronos pairs.
 
@@ -277,7 +344,8 @@ async def poll_dexscreener():
                 if r.status_code == 200:
                     data = r.json()
                     now_utc = datetime.now(timezone.utc)
-                    fresh = []  # (pair, liquidity_usd, age_hours)
+                    fresh = []  # (pair, liquidity_usd, age_hours, score_dict)
+                    below_score = 0
                     for pair in (data.get("pairs") or []):
                         if str(pair.get("chainId") or "").lower() != "cronos":
                             continue  # text search returns pairs from every chain
@@ -301,6 +369,19 @@ async def poll_dexscreener():
                             liq = 0.0
                         if liq < PAIR_MIN_LIQUIDITY_USD:
                             continue
+                        # quality score gate (2026-07-06, Part A): below-bar pairs are
+                        # skipped WITHOUT being marked seen, so they can re-qualify on a
+                        # later cycle if volume/buys/momentum pick up within the window.
+                        sc = score_pair(pair, liq)
+                        if sc["score"] < PAIR_MIN_SCORE:
+                            below_score += 1
+                            if pair_address in seen_pairs:
+                                # already announced once: keep its last_seen fresh so a
+                                # dip-below-bar + recovery doesn't re-alert (~hourly) via
+                                # _is_new_or_stale. Never-alerted pairs stay unmarked and
+                                # can still qualify later in their window.
+                                pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
+                            continue
                         # known-pairs dedup (last_seen + restart window, persistence unchanged).
                         # 2026-07-05: last_seen is now ALSO refreshed in-memory on the skip path;
                         # otherwise a pair inside the 24h window re-alerts every RESTART_DEDUP_WINDOW
@@ -311,20 +392,22 @@ async def poll_dexscreener():
                             pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
                             _sync_seen_pairs_from_dict()
                             save_known_pairs(seen_pairs)  # persist immediately (atomic + warns if no volume)
-                            fresh.append((pair, liq, age_h))
+                            fresh.append((pair, liq, age_h, sc))
                         else:
                             pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
 
                     if fresh:
                         market_enabled = os.getenv("MARKET_ANALYSIS_ENABLED", "false").lower() == "true"
                         sections = []
-                        for pair, liq, age_h in fresh[:MAX_PAIRS_PER_ALERT]:
+                        for pair, liq, age_h, sc in fresh[:MAX_PAIRS_PER_ALERT]:
                             base = pair.get("baseToken") or {}
                             quote = pair.get("quoteToken") or {}
+                            tier = "🔥 strong" if sc["score"] >= PAIR_SCORE_STRONG else "👀 notable"
                             section = (
-                                f"**{base.get('symbol', '???')} / {quote.get('symbol', '???')}**\n"
-                                f"- Price: ${pair.get('priceUsd', 'N/A')}\n"
-                                f"- Liquidity: ${liq:,.0f}\n"
+                                f"**{base.get('symbol', '???')} / {quote.get('symbol', '???')}** — score {sc['score']:.0f}/100 ({tier})\n"
+                                f"- Price: ${pair.get('priceUsd', 'N/A')} ({sc['chg1h']:+.1f}% 1h)\n"
+                                f"- Liquidity: ${liq:,.0f} | Vol 1h: ${sc['vol1h']:,.0f}\n"
+                                f"- Buys/Sells 1h: {sc['buys']}/{sc['sells']}\n"
                                 f"- Age: {age_h:.1f}h\n"
                                 f"[View on DexScreener]({pair.get('url', '#')})"
                             )
@@ -359,9 +442,14 @@ async def poll_dexscreener():
                             combined = combined[:4000].rstrip() + "\n\n(truncated)"
                         await send_telegram(combined)
                         logger.info(
-                            "New pair alert sent (1 message, %d pair(s)): %s",
-                            len(fresh),
-                            ", ".join((p.get("baseToken") or {}).get("symbol", "?") for p, _, _ in fresh),
+                            "New pair alert sent (1 message, %d pair(s), %d below score bar %.0f): %s",
+                            len(fresh), below_score, PAIR_MIN_SCORE,
+                            ", ".join((p.get("baseToken") or {}).get("symbol", "?") for p, _, _, _ in fresh),
+                        )
+                    elif below_score:
+                        logger.info(
+                            "New-pair scan: 0 alerted, %d pair(s) passed filters but scored below %.0f",
+                            below_score, PAIR_MIN_SCORE,
                         )
         except Exception as e:
             logger.error(f"Dexscreener error: {e}")

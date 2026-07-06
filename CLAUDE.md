@@ -41,7 +41,21 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   filters `chainId == "cronos"`, requires `pairCreatedAt` within `PAIR_NEWNESS_WINDOW_HOURS`
   (default 24h), skips pools under `PAIR_MIN_LIQUIDITY_USD` (default $10k), and batches all new
   pairs from one polling cycle into ONE Telegram message (detail for the first 10, rest counted;
-  message capped at 4000 chars).
+  message capped at 4000 chars). **Quality score (2026-07-06):** each passing pair gets a
+  transparent 0-100 score (`worker.score_pair`, unit-tested offline) — four ingredients worth
+  0-25 points each. What raises the score: 1h volume (full 25 pts at `PAIR_SCORE_VOL1H_FULL`,
+  default $25k), buy pressure above 50% buys in the last hour (full at
+  `PAIR_SCORE_BUY_RATIO_FULL`, a FRACTION, default 0.85), positive 1h price momentum (full at
+  `PAIR_SCORE_MOM1H_FULL` percent, default +30), and liquidity depth (full 25 pts at
+  `PAIR_SCORE_LIQ_FULL`, default $50k). What lowers it: thin volume, sell-heavy or dead
+  transaction flow (a no-transactions hour scores 0 buy-pressure points), flat or negative
+  price action, and shallow liquidity — each simply earns fewer of its 25 points; nan/inf
+  from the API count as 0. Only pairs at or above `PAIR_MIN_SCORE` (default 35) are alerted,
+  labeled 🔥 strong (>=70) or 👀 notable; the alert shows the ingredients (1h volume,
+  buys/sells, 1h change, liquidity, age), not just the verdict. Below-bar pairs are skipped
+  silently and counted in the log; if never alerted they are NOT marked seen (so they can
+  still qualify later in their 24h window), while an already-alerted pair that dips below the
+  bar keeps its last_seen fresh so a recovery does not re-alert it.
 - **core/** — shared helpers. `claude_client.py` (AI calls), `wallet.py`, `pnl_calculator.py`,
   `price_service.py`, Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
 - **Blockchain data source (2026-06-21, balances rev. 2026-06-24).** Live, keyed Cronos Explorer API
@@ -145,6 +159,8 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `WALLET_MIN_USD_DISPLAY` | web (optional) | /wallet holdings under this USD value collapse into one line (default 1) |
 | `PAIR_NEWNESS_WINDOW_HOURS` | worker (optional) | new-pair alert window vs `pairCreatedAt` (default 24) |
 | `PAIR_MIN_LIQUIDITY_USD` | worker (optional) | minimum pool liquidity for a new-pair alert (default 10000) |
+| `PAIR_MIN_SCORE` | worker (optional) | minimum 0-100 quality score for a new-pair alert (default 35) |
+| `PAIR_SCORE_VOL1H_FULL`, `PAIR_SCORE_BUY_RATIO_FULL`, `PAIR_SCORE_MOM1H_FULL`, `PAIR_SCORE_LIQ_FULL` | worker (optional) | level at which each ingredient earns its full 25 pts: 1h volume USD / buy ratio as a fraction in (0.5, 1] / 1h change percent / liquidity USD (defaults 25000 / 0.85 / 30 / 50000) |
 | `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |
 | `ETHERSCAN_API_KEY` | legacy | no longer used by the live data path (deprecated sync Covalent helper only) |
 
