@@ -55,7 +55,22 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   buys/sells, 1h change, liquidity, age), not just the verdict. Below-bar pairs are skipped
   silently and counted in the log; if never alerted they are NOT marked seen (so they can
   still qualify later in their 24h window), while an already-alerted pair that dips below the
-  bar keeps its last_seen fresh so a recovery does not re-alert it.
+  bar keeps its last_seen fresh so a recovery does not re-alert it. **Portfolio-watch
+  (2026-07-06):** `worker.portfolio_watch` (gated by `PORTFOLIO_WATCH_ENABLED`, default on)
+  checks the owner's holdings every `PORTFOLIO_WATCH_INTERVAL_MIN` (default 5 min) by reusing
+  `core.wallet.get_wallet_balances` (balances + Dexscreener pricing — no duplicated logic;
+  note this also runs the freshness guard each cycle — its Telegram alert is therefore
+  throttled to one per `CRONOS_STALE_ALERT_COOLDOWN_SECONDS`, default 6h; the log line still
+  fires every check). Priced holdings worth >= `PORTFOLIO_MIN_USD` (default $5, CRO included;
+  the bar is an ENTRY criterion — a holding that crashes below it stays watched so dumps
+  still alert) are tracked against a rolling baseline;
+  a move of >= `PORTFOLIO_MOVE_THRESHOLD_PCT` (default 10%) alerts with direction, %, price
+  then->now, and the holding's USD value then->now — all movers in one cycle in ONE message,
+  max one alert per token per `PORTFOLIO_ALERT_COOLDOWN_MIN` (default 60). The baseline
+  rebases on alert and lives IN MEMORY ONLY: without the Railway Volume caveat changing,
+  a redeploy/restart quietly re-seeds it (first cycle seeds, alerts from the second cycle
+  onward — never a false alert on restart). State machine is pure
+  (`worker.detect_portfolio_moves` / `worker.watch_holdings`) and unit-tested offline.
 - **core/** — shared helpers. `claude_client.py` (AI calls), `wallet.py`, `pnl_calculator.py`,
   `price_service.py`, Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
 - **Blockchain data source (2026-06-21, balances rev. 2026-06-24).** Live, keyed Cronos Explorer API
@@ -156,11 +171,14 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `WALLET_ADDRESS`, `CRONOS_RPC_URL` | runtime | RPC also serves as the independent chain-tip reference for the freshness guard |
 | `CRONOS_EXPLORER_API_KEY` | runtime | **required** — live Cronos Explorer v1 feed for balances + daily PnL |
 | `CRONOS_STALE_BLOCK_THRESHOLD` | runtime (optional) | blocks-behind threshold for the stale-data alert (default 200000 ≈ 1 day) |
+| `CRONOS_STALE_ALERT_COOLDOWN_SECONDS` | runtime (optional) | min seconds between stale-data Telegram alerts (default 21600 = 6h; logs are not throttled) |
 | `WALLET_MIN_USD_DISPLAY` | web (optional) | /wallet holdings under this USD value collapse into one line (default 1) |
 | `PAIR_NEWNESS_WINDOW_HOURS` | worker (optional) | new-pair alert window vs `pairCreatedAt` (default 24) |
 | `PAIR_MIN_LIQUIDITY_USD` | worker (optional) | minimum pool liquidity for a new-pair alert (default 10000) |
 | `PAIR_MIN_SCORE` | worker (optional) | minimum 0-100 quality score for a new-pair alert (default 35) |
 | `PAIR_SCORE_VOL1H_FULL`, `PAIR_SCORE_BUY_RATIO_FULL`, `PAIR_SCORE_MOM1H_FULL`, `PAIR_SCORE_LIQ_FULL` | worker (optional) | level at which each ingredient earns its full 25 pts: 1h volume USD / buy ratio as a fraction in (0.5, 1] / 1h change percent / liquidity USD (defaults 25000 / 0.85 / 30 / 50000) |
+| `PORTFOLIO_WATCH_ENABLED` | worker (optional) | portfolio price-move alerts on held tokens (default true) |
+| `PORTFOLIO_WATCH_INTERVAL_MIN`, `PORTFOLIO_MOVE_THRESHOLD_PCT`, `PORTFOLIO_MIN_USD`, `PORTFOLIO_ALERT_COOLDOWN_MIN` | worker (optional) | check cadence min / alert threshold % vs rolling baseline / min holding USD watched / per-token alert cooldown min (defaults 5 / 10 / 5 / 60) |
 | `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |
 | `ETHERSCAN_API_KEY` | legacy | no longer used by the live data path (deprecated sync Covalent helper only) |
 

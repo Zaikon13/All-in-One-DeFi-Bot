@@ -69,6 +69,22 @@ if not (0.5 < PAIR_SCORE_BUY_RATIO_FULL <= 1.0):
         f"PAIR_SCORE_BUY_RATIO_FULL={PAIR_SCORE_BUY_RATIO_FULL} is outside (0.5, 1.0] — "
         "it is a FRACTION (e.g. 0.85), not a percent; buy-pressure points are disabled/skewed."
     )
+
+# Portfolio-watch (2026-07-06, Part B): price-move alerts on tokens the owner holds.
+# Reuses core.wallet.get_wallet_balances (balances + Dexscreener pricing) — no duplicated
+# logic. Baseline is IN-MEMORY ONLY: a restart quietly re-seeds it (first cycle seeds,
+# alerts possible from the second cycle onward — never a false alert on restart).
+PORTFOLIO_WATCH_ENABLED = os.getenv("PORTFOLIO_WATCH_ENABLED", "true").lower() == "true"
+PORTFOLIO_WATCH_INTERVAL_MIN = _env_float("PORTFOLIO_WATCH_INTERVAL_MIN", 5.0)
+PORTFOLIO_MOVE_THRESHOLD_PCT = _env_float("PORTFOLIO_MOVE_THRESHOLD_PCT", 10.0)
+PORTFOLIO_MIN_USD = _env_float("PORTFOLIO_MIN_USD", 5.0)
+PORTFOLIO_ALERT_COOLDOWN_MIN = _env_float("PORTFOLIO_ALERT_COOLDOWN_MIN", 60.0)
+if PORTFOLIO_MOVE_THRESHOLD_PCT <= 0:
+    logger.warning(
+        f"PORTFOLIO_MOVE_THRESHOLD_PCT={PORTFOLIO_MOVE_THRESHOLD_PCT} <= 0 — every watched "
+        "holding would alert once per cooldown window; using default 10.0 instead."
+    )
+    PORTFOLIO_MOVE_THRESHOLD_PCT = 10.0
 MAX_PAIRS_PER_ALERT = 10  # Telegram 4096-char safety; extras summarized as a count
 
 seen_pairs = set()
@@ -456,6 +472,143 @@ async def poll_dexscreener():
         await asyncio.sleep(DEXSCREENER_INTERVAL)
 
 
+def _fmt_price(p: float) -> str:
+    """Compact price string for both normal and micro-cap prices."""
+    if p >= 1:
+        return f"${p:,.4f}"
+    if p >= 0.01:
+        return f"${p:.4f}"
+    return f"${p:.8f}"
+
+
+def watch_holdings(balances: dict, min_usd: float, baseline: dict | None = None) -> list:
+    """Extract the watch list from a core.wallet.get_wallet_balances result:
+    priced holdings worth at least min_usd, native CRO included. min_usd is an
+    ENTRY criterion only — a holding already in the baseline stays watched even
+    if its value crashes below the bar (a -95% dump is exactly what must alert).
+    Returns [{key, symbol, amount, usd, price}]; I/O-free, never raises."""
+    out = []
+    known = baseline or {}
+    try:
+        cro = float(balances.get("cro") or 0)
+        cro_usd = balances.get("cro_usd")
+        if cro_usd is not None and cro > 0 and (cro_usd >= min_usd or "native:CRO" in known):
+            out.append({"key": "native:CRO", "symbol": "CRO", "amount": cro,
+                        "usd": float(cro_usd), "price": float(cro_usd) / cro})
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+    for d in (balances.get("token_details") or []) if isinstance(balances.get("token_details"), list) else []:
+        try:
+            usd = d.get("usd")
+            amount = d.get("amount") or 0
+            key = d.get("contract") or d.get("symbol")
+            if usd is None or amount <= 0:
+                continue
+            if usd < min_usd and key not in known:
+                continue
+            out.append({"key": key, "symbol": d.get("symbol", "?"),
+                        "amount": float(amount), "usd": float(usd), "price": float(usd) / float(amount)})
+        except (TypeError, ValueError, ZeroDivisionError, AttributeError):
+            continue  # one bad row never drops the rest
+    return out
+
+
+def detect_portfolio_moves(holdings: list, baseline: dict, last_alert: dict,
+                           now_utc, threshold_pct: float, cooldown_min: float) -> list:
+    """Compare holdings against the rolling baseline; return alert-worthy moves.
+
+    Deterministic, I/O-free state step (unit-tested offline; mutates its two
+    state dicts): first sighting of a holding only
+    SEEDS its baseline (no alert — this is what makes restarts quiet); afterwards
+    a move of at least threshold_pct vs baseline alerts, subject to one alert per
+    holding per cooldown_min. The baseline REBASES on alert (the next alert needs
+    another threshold move from the alerted price), and small drift accumulates
+    against the old baseline until it trips. Mutates baseline/last_alert.
+    """
+    moves = []
+    for h in holdings:
+        key = h["key"]
+        base = baseline.get(key)
+        if base is None or not base.get("price") or base["price"] <= 0:
+            baseline[key] = {"price": h["price"], "ts": now_utc.isoformat()}
+            continue
+        move_pct = (h["price"] - base["price"]) / base["price"] * 100.0
+        if abs(move_pct) < threshold_pct:
+            continue
+        la = last_alert.get(key)
+        if la is not None and (now_utc - la).total_seconds() < cooldown_min * 60:
+            continue
+        moves.append({
+            "symbol": h["symbol"], "move_pct": move_pct,
+            "old_price": base["price"], "new_price": h["price"],
+            "amount": h["amount"],
+            "old_usd": h["amount"] * base["price"], "new_usd": h["usd"],
+        })
+        baseline[key] = {"price": h["price"], "ts": now_utc.isoformat()}
+        last_alert[key] = now_utc
+    return moves
+
+
+async def portfolio_watch():
+    """Periodic price-move alerts on held tokens (information only, no trading).
+
+    Reuses core.wallet.get_wallet_balances (lazy import protects worker startup).
+    Any fetch/pricing failure skips the cycle with a log line — this loop must
+    never crash the worker. Gated by PORTFOLIO_WATCH_ENABLED (default on).
+    """
+    if not PORTFOLIO_WATCH_ENABLED:
+        logger.info("portfolio-watch: disabled (PORTFOLIO_WATCH_ENABLED=false)")
+        return
+    if not WALLET_ADDRESS:
+        logger.info("portfolio-watch: no WALLET_ADDRESS; not watching")
+        return
+    interval_s = max(60.0, PORTFOLIO_WATCH_INTERVAL_MIN * 60.0)
+    baseline: dict = {}
+    last_alert: dict = {}
+    logger.info(
+        f"portfolio-watch: on — every {PORTFOLIO_WATCH_INTERVAL_MIN:g} min, move >= "
+        f"{PORTFOLIO_MOVE_THRESHOLD_PCT:g}%, holdings >= ${PORTFOLIO_MIN_USD:g}, "
+        f"cooldown {PORTFOLIO_ALERT_COOLDOWN_MIN:g} min (baseline in-memory; restarts re-seed quietly)"
+    )
+    while True:
+        try:
+            from core.wallet import get_wallet_balances
+            balances = await get_wallet_balances(WALLET_ADDRESS)
+            if not balances.get("priced"):
+                logger.info("portfolio-watch: pricing unavailable this cycle; skipped")
+            else:
+                now_utc = datetime.now(timezone.utc)
+                holdings = watch_holdings(balances, PORTFOLIO_MIN_USD, baseline)
+                seeding = not baseline
+                moves = detect_portfolio_moves(
+                    holdings, baseline, last_alert, now_utc,
+                    PORTFOLIO_MOVE_THRESHOLD_PCT, PORTFOLIO_ALERT_COOLDOWN_MIN,
+                )
+                if seeding:
+                    logger.info(f"portfolio-watch: baseline seeded for {len(baseline)} holding(s)")
+                if moves:
+                    lines = []
+                    for mv in moves:
+                        arrow = "📈" if mv["move_pct"] >= 0 else "📉"
+                        lines.append(
+                            f"{arrow} **{mv['symbol']}** {mv['move_pct']:+.1f}% — "
+                            f"{_fmt_price(mv['old_price'])} → {_fmt_price(mv['new_price'])} | "
+                            f"your {mv['amount']:,.4f}".rstrip("0").rstrip(".") + f" {mv['symbol']}: "
+                            f"${mv['old_usd']:,.2f} → ${mv['new_usd']:,.2f}"
+                        )
+                    msg = "\n\n".join(["📊 **Portfolio movers**"] + lines)
+                    if len(msg) > 4000:
+                        msg = msg[:4000].rstrip() + "\n\n(truncated)"
+                    await send_telegram(msg)
+                    logger.info(
+                        "portfolio-watch: alert sent (1 message, %d mover(s)): %s",
+                        len(moves), ", ".join(mv["symbol"] for mv in moves),
+                    )
+        except Exception as e:
+            logger.error(f"portfolio-watch error (cycle skipped): {e}")
+        await asyncio.sleep(interval_s)
+
+
 async def monitor_wallet():
     if not WALLET_ADDRESS:
         await asyncio.sleep(WALLET_CHECK_INTERVAL)
@@ -642,7 +795,8 @@ async def main():
         heartbeat(),
         poll_dexscreener(),
         monitor_wallet(),
-        scheduled_eod_pnl()
+        scheduled_eod_pnl(),
+        portfolio_watch()
     )
 
 

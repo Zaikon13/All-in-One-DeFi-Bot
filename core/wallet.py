@@ -36,6 +36,11 @@ EXPLORER_BASE = "https://explorer-api.cronos.org/mainnet/api/v1"
 # live chain tip. Cronos runs ~0.45 s/block, so ~200k blocks ~= 1 day. Override
 # with CRONOS_STALE_BLOCK_THRESHOLD if block time changes.
 STALE_BLOCKS_THRESHOLD = int(os.getenv("CRONOS_STALE_BLOCK_THRESHOLD", "200000"))
+# Stale-data Telegram alerts are throttled: portfolio-watch (2026-07-06) calls the
+# balances path every few minutes, so an unthrottled guard would alert ~288x/day
+# during a real staleness incident. Logging still happens every check.
+STALE_ALERT_COOLDOWN_SECONDS = float(os.getenv("CRONOS_STALE_ALERT_COOLDOWN_SECONDS", str(6 * 3600)))
+_last_stale_alert_ts = 0.0
 _APPROX_BLOCK_SECONDS = 0.45
 
 # --- v2 Etherscan-style endpoint (full token discovery + per-token balances) ---
@@ -203,11 +208,14 @@ async def check_data_freshness(client, send_alert=True):
     out["blocks_behind"] = blocks_behind
     out["days_behind"] = days_behind
     if blocks_behind > STALE_BLOCKS_THRESHOLD:
+        global _last_stale_alert_ts
         out["stale"] = True
         msg = build_stale_alert(blocks_behind, days_behind)
         logging.warning(f"[freshness] STALE DATA SOURCE: {msg}")
-        if send_alert:
+        if send_alert and (time.time() - _last_stale_alert_ts) >= STALE_ALERT_COOLDOWN_SECONDS:
             out["alerted"] = await send_telegram_alert(msg, client)
+            if out["alerted"]:
+                _last_stale_alert_ts = time.time()
     return out
 
 
