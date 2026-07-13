@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from core.log_redaction import install_log_redaction
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
@@ -28,6 +30,7 @@ RESTART_DEDUP_WINDOW_SECONDS = 3600
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("worker")
+install_log_redaction()  # Part D: strip apikey= from logs (log-only)
 
 
 def _env_float(name: str, default: float) -> float:

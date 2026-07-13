@@ -14,6 +14,7 @@ import json
 # (Review Agent 2026-06-04: switch for timeout/quality support; balances/tx for live grok-analyze)
 from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 from core.wallet import get_wallet_balances, get_recent_transactions
+from core.log_redaction import install_log_redaction
 
 # Config
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -21,6 +22,8 @@ CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
 WEBHOOK_BASE_URL = os.getenv('WEBHOOK_URL') or os.getenv('APP_URL') or "https://web-gpl6-production.up.railway.app"
 RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
+
+install_log_redaction()  # Part D: strip apikey= from logs (log-only)
 
 app = FastAPI(title="All-in-One-DeFi-Bot")
 
