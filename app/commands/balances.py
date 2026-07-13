@@ -95,6 +95,14 @@ async def get_all_balances(chat_id: str):
     try:
         balances = await get_wallet_balances(WALLET_ADDRESS)
 
+        # Honesty gate (2026-07-13): a failed/429/rejected fetch must NOT render as
+        # "$0 / no tokens found". get_wallet_balances signals ok=False when the data
+        # source is unavailable; say so plainly. Serves /wallet, /bal, /balances alike.
+        if not balances.get("ok", True):
+            await send_telegram_message(
+                "⚠️ Couldn't fetch balances right now — data source unavailable.", chat_id)
+            return
+
         # USD-enriched view when pricing worked; otherwise the exact legacy output.
         try:
             if balances.get("priced") and balances.get("token_details") is not None:

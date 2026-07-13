@@ -139,6 +139,26 @@ def build_stale_alert(blocks_behind, days_behind):
     )
 
 
+def build_unavailable_alert():
+    return (
+        "⚠️ *Cronos data source unavailable* — the explorer feed did not respond "
+        "(rate-limited or down). Wallet balances/PnL are temporarily unreadable; "
+        "this will recover automatically."
+    )
+
+
+async def note_fetch_failure(client=None):
+    """A failed balance fetch counts as STALE for the freshness guard (2026-07-13):
+    always log it, and fire a Telegram alert throttled by the SAME cooldown the
+    stale-source guard uses (so a rate-limit storm can't spam). Never raises."""
+    global _last_stale_alert_ts
+    msg = build_unavailable_alert()
+    logging.warning(f"[freshness] BALANCE FETCH FAILED (treated as stale): {msg}")
+    if (time.time() - _last_stale_alert_ts) >= STALE_ALERT_COOLDOWN_SECONDS:
+        if await send_telegram_alert(msg, client):
+            _last_stale_alert_ts = time.time()
+
+
 async def send_telegram_alert(text, client=None):
     """Defensive system-alert send (mirrors worker.send_telegram). Never raises."""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -365,13 +385,21 @@ async def get_wallet_balances(wallet_address: str):
     (name/symbol looks like a URL or 'claim'/'airdrop') and dust below WALLET_DUST_THRESHOLD
     are hidden. Duplicate symbols (e.g. two BOOST contracts) are disambiguated by contract."""
     if not wallet_address:
-        return {"cro": 0.0, "tokens": {}, "cro_usd": None, "usd_total": None,
+        return {"ok": True, "cro": 0.0, "tokens": {}, "cro_usd": None, "usd_total": None,
                 "token_details": [], "priced": False}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        # --- native CRO (v1 balance endpoint; authoritative) ---
-        cro = 0.0
+        # --- native CRO (v1 balance endpoint; authoritative + our data-source health probe) ---
+        # explorer_get returns None on ANY failure (HTTP error, 429, rejected key, status!=1).
+        # The native balance call shares the key/host with every other Explorer call, so if it
+        # fails the whole source is unavailable -> report failure honestly instead of "$0"
+        # (2026-07-13). A failed fetch also counts as stale for the freshness guard.
         bal = await explorer_get(client, "account/getBalance", {"address": wallet_address})
+        if bal is None:
+            await note_fetch_failure(client)
+            return {"ok": False, "cro": 0.0, "tokens": {}, "cro_usd": None,
+                    "usd_total": None, "token_details": [], "priced": False}
+        cro = 0.0
         if isinstance(bal, dict):
             cro = _to_int(bal.get("balance"), 0) / 10**18
 
@@ -447,6 +475,7 @@ async def get_wallet_balances(wallet_address: str):
             pass
 
         return {
+            "ok": True,
             "cro": cro,
             "tokens": tokens,  # unchanged shape: {symbol: amount} (app/main.py relies on it)
             "cro_usd": cro_usd,
