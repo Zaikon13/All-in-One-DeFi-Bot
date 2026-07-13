@@ -135,13 +135,20 @@ last_wallet_state = None
 # get_daily_pnl_report() never modified/wrapped). Startup block is logging-only decision (no immediate/auto send, no behavior change).
 # Phase 2 hardens in-process / local-restart behavior only. Still 'Partially Functional'. Volume still REQUIRED for production durability.
 # See reviews/2026-06-08-worker-persistence-first-inc.md + reviews/2026-06-09-worker-persistence-phase1.md + reviews/2026-06-09-worker-persistence-phase2.md. No over-claims.
-PERSISTENCE_BASE = os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or "data"
+# Persistence path resolution (verified 2026-07-13): explicit WORKER_DATA_DIR wins
+# (single documented config point, also for future paper-trading state); else
+# Railway's auto-injected RAILWAY_VOLUME_MOUNT_PATH — in production the 5GB volume
+# "worker-persistence-GNKn" is mounted at /data, so this resolves to /data and
+# known_pairs.json genuinely survives redeploys; else a local ./data for dev.
+PERSISTENCE_BASE = (os.getenv("WORKER_DATA_DIR")
+                    or os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+                    or "data")
 KNOWN_PAIRS_FILE = os.path.join(PERSISTENCE_BASE, "known_pairs.json")
 
 
 def _warn_if_no_volume():
     """Emit loud WARNING on every load/save and at startup if no volume (per Review)."""
-    if not os.getenv("RAILWAY_VOLUME_MOUNT_PATH"):
+    if not (os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or os.getenv("WORKER_DATA_DIR")):
         logger.warning(
             f"RAILWAY VOLUME NOT DETECTED: persistence at {KNOWN_PAIRS_FILE} uses ephemeral 'data/' (or base). "
             "pairs/last_seen/last_eod_run are NOT durable across redeploys or container replacements. "

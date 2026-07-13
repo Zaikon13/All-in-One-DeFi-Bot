@@ -36,7 +36,7 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 - **Web service** — `app/main.py` (FastAPI + uvicorn). Telegram webhook at `/telegram/webhook`,
   wallet analysis at `/grok/analyze`, daily PnL, health at `/` and `/health`.
 - **Worker** — `worker.py`. Polls Dexscreener for new Cronos pairs, monitors the wallet, sends a
-  heartbeat, runs end-of-day PnL. Persists state to a Railway volume at `/data`. **New-pair alerts
+  heartbeat, runs end-of-day PnL. **Persistence (verified 2026-07-13):** the 5GB volume `worker-persistence-GNKn` is mounted at `/data`; the path resolves via `WORKER_DATA_DIR` (explicit override) → `RAILWAY_VOLUME_MOUNT_PATH` (auto-set by Railway to `/data`) → `./data` (local dev). Production writes `/data/known_pairs.json`, so known-pairs (and future paper-trading state) genuinely survive redeploys; a loud log warning fires only if neither env var is set (ephemeral). **New-pair alerts
   (fixed 2026-07-05):** Dexscreener `search?q=cronos` is a cross-chain text search, so the detector
   filters `chainId == "cronos"`, requires `pairCreatedAt` within `PAIR_NEWNESS_WINDOW_HOURS`
   (default 24h), skips pools under `PAIR_MIN_LIQUIDITY_USD` (default $10k), and batches all new
@@ -188,6 +188,7 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `PAIR_MIN_LIQUIDITY_USD` | worker (optional) | minimum pool liquidity for a new-pair alert (default 10000) |
 | `PAIR_MIN_SCORE` | worker (optional) | minimum 0-100 quality score for a new-pair alert (default 35) |
 | `PAIR_SCORE_VOL1H_FULL`, `PAIR_SCORE_BUY_RATIO_FULL`, `PAIR_SCORE_MOM1H_FULL`, `PAIR_SCORE_LIQ_FULL` | worker (optional) | level at which each ingredient earns its full 25 pts: 1h volume USD / buy ratio as a fraction in (0.5, 1] / 1h change percent / liquidity USD (defaults 25000 / 0.85 / 30 / 50000) |
+| `WORKER_DATA_DIR` | worker (optional) | explicit persistence dir; else `RAILWAY_VOLUME_MOUNT_PATH` (=/data in prod) else `./data` |
 | `PORTFOLIO_WATCH_ENABLED` | worker (optional) | portfolio price-move alerts on held tokens (default true) |
 | `PORTFOLIO_WATCH_INTERVAL_MIN`, `PORTFOLIO_MOVE_THRESHOLD_PCT`, `PORTFOLIO_MIN_USD`, `PORTFOLIO_ALERT_COOLDOWN_MIN` | worker (optional) | check cadence min / alert threshold % vs rolling baseline / min holding USD watched / per-token alert cooldown min (defaults 5 / 10 / 5 / 60) |
 | `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |
