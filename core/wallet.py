@@ -62,6 +62,51 @@ _SCAM_NAME_PAT = re.compile(
 # addr_lower -> {"contracts": {contract_lower: (symbol, decimals, name)}, "newest_block": int}
 _TOKEN_SET_CACHE: dict = {}
 
+# --- Balance-fetch efficiency (2026-07-13) -------------------------------------
+# The Cronos Explorer v2 API has NO all-balances-in-one-call endpoint (verified:
+# addresstokenbalance/tokenlist/addresstokens all return "Unsupported action").
+# So instead of one tokenbalance call per historical contract every cycle (~197,
+# which caused the 429s), we: (1) cache token discovery for WALLET_DISCOVERY_TTL_HOURS;
+# (2) pre-filter scam-by-name with NO API call; (3) keep a per-wallet "held set" and
+# only balance-check real holdings each cycle, full-sweeping all candidates every
+# WALLET_BALANCE_REFRESH_HOURS; (4) exponential backoff on 429. The _TOKEN_SET_CACHE
+# entry gains: held_set (set|None), balance_seen (set), last_full_ts, last_amounts,
+# discovered_ts.
+WALLET_DISCOVERY_TTL_HOURS = float(os.getenv("WALLET_DISCOVERY_TTL_HOURS", "6"))
+WALLET_BALANCE_REFRESH_HOURS = float(os.getenv("WALLET_BALANCE_REFRESH_HOURS", "6"))
+WALLET_BALANCE_CONCURRENCY = int(os.getenv("WALLET_BALANCE_CONCURRENCY", "8"))
+_V2_MAX_RETRIES = int(os.getenv("WALLET_V2_MAX_RETRIES", "3"))
+
+
+def _select_balance_contracts(candidates, entry, now, refresh_seconds):
+    """Pure: decide which contracts to balance-check this cycle.
+    Returns (sorted to_check list, is_full bool). Full sweep (all candidates) when
+    there is no held set yet or the last full sweep is older than refresh_seconds;
+    otherwise incremental: current holdings that are still candidates, plus any
+    candidate never balance-checked before."""
+    cand = set(candidates)
+    held = entry.get("held_set")
+    last_full = entry.get("last_full_ts", 0.0)
+    if held is None or (now - last_full) >= refresh_seconds:
+        return sorted(cand), True
+    seen = entry.get("balance_seen") or set()
+    return sorted((held & cand) | (cand - seen)), False
+
+
+def _update_held(entry, to_check, amount_by_contract, dust, is_full, now):
+    """Pure-ish: fold this cycle's balances into the cache's held_set / balance_seen /
+    last_full_ts. On a full sweep held_set is recomputed from scratch; on an
+    incremental cycle only the re-checked contracts are updated."""
+    checked = set(to_check)
+    nonzero = {c for c in checked if amount_by_contract.get(c, 0.0) >= dust}
+    if is_full:
+        entry["held_set"] = nonzero
+        entry["last_full_ts"] = now
+    else:
+        held = set(entry.get("held_set") or set())
+        entry["held_set"] = (held - checked) | nonzero
+    entry["balance_seen"] = (entry.get("balance_seen") or set()) | checked
+
 # --- USD pricing via Dexscreener (2026-07-05) ---
 # Dexscreener's token endpoint knows Cronos micro-caps that CoinGecko doesn't.
 # Batched (30 addresses/call, comma-separated), same defensive _UA pattern as v2.
@@ -254,15 +299,26 @@ async def _v2_get(client, params: dict):
         return None
     p = dict(params)
     p["apikey"] = key
-    try:
-        r = await client.get(EXPLORER_V2_BASE, params=p, headers=_UA)
-        if r.status_code != 200:
-            logging.error(f"[explorer-v2] {params.get('action')} HTTP {r.status_code}")
+    for attempt in range(_V2_MAX_RETRIES + 1):
+        try:
+            r = await client.get(EXPLORER_V2_BASE, params=p, headers=_UA)
+            if r.status_code == 429:
+                if attempt < _V2_MAX_RETRIES:
+                    await asyncio.sleep(0.5 * (2 ** attempt))  # 0.5s, 1s, 2s backoff
+                    continue
+                logging.warning(f"[explorer-v2] {params.get('action')} 429 after {_V2_MAX_RETRIES} retries")
+                return None
+            if r.status_code != 200:
+                logging.error(f"[explorer-v2] {params.get('action')} HTTP {r.status_code}")
+                return None
+            return r.json().get("result")
+        except Exception as e:
+            if attempt < _V2_MAX_RETRIES:
+                await asyncio.sleep(0.5 * (2 ** attempt))
+                continue
+            logging.error(f"[explorer-v2] {params.get('action')} failed: {e}")
             return None
-        return r.json().get("result")
-    except Exception as e:
-        logging.error(f"[explorer-v2] {params.get('action')} failed: {e}")
-        return None
+    return None
 
 
 def _absorb_transfer_rows(rows, contracts) -> int:
@@ -307,9 +363,15 @@ async def _discover_token_set(client, wallet_address: str) -> dict:
                 break
             for rows in batch:
                 newest_block = max(newest_block, _absorb_transfer_rows(rows, contracts))
-        _TOKEN_SET_CACHE[w] = {"contracts": contracts, "newest_block": newest_block}
+        _TOKEN_SET_CACHE[w] = {"contracts": contracts, "newest_block": newest_block,
+                               "discovered_ts": time.time()}
         logging.info(f"[wallet] cold token discovery: {len(contracts)} distinct tokens")
         return contracts
+
+    # TTL: which-tokens-held changes rarely; skip the warm re-scan while the
+    # discovery cache is fresh (2026-07-13) — saves a tokentx call every cycle.
+    if (time.time() - entry.get("discovered_ts", 0.0)) < WALLET_DISCOVERY_TTL_HOURS * 3600:
+        return entry["contracts"]
 
     # warm: only scan transfers newer than the cached tip (cheap — usually one page)
     contracts = entry["contracts"]
@@ -326,6 +388,7 @@ async def _discover_token_set(client, wallet_address: str) -> dict:
             break  # caught up to the cached tip
         page += 1
     entry["newest_block"] = max_new
+    entry["discovered_ts"] = time.time()
     return contracts
 
 
@@ -403,31 +466,63 @@ async def get_wallet_balances(wallet_address: str):
         if isinstance(bal, dict):
             cro = _to_int(bal.get("balance"), 0) / 10**18
 
-        # --- full token discovery (cached + incremental) ---
+        # --- full token discovery (cached, TTL-refreshed) ---
         contracts = await _discover_token_set(client, wallet_address)
+        entry = _TOKEN_SET_CACHE.get(wallet_address.lower(), {})
 
-        # --- current balance per token, fetched in parallel (bounded concurrency) ---
-        sem = asyncio.Semaphore(20)
+        # Pre-filter scam-by-name with NO API call: only non-scam contracts are ever
+        # candidates for a balance read (2026-07-13 efficiency).
+        candidates = {c: meta for c, meta in contracts.items()
+                      if not _looks_like_scam(meta[0], meta[2])}
+
+        # Decide this cycle's read set: full sweep every WALLET_BALANCE_REFRESH_HOURS,
+        # otherwise only real holdings (+ never-checked candidates).
+        now = time.time()
+        to_check, is_full = _select_balance_contracts(
+            candidates, entry, now, WALLET_BALANCE_REFRESH_HOURS * 3600)
+        logging.info(f"[wallet] balance read: {len(to_check)} token(s) "
+                     f"({'full sweep' if is_full else 'incremental'}) of {len(candidates)} candidates")
+
+        sem = asyncio.Semaphore(WALLET_BALANCE_CONCURRENCY)
 
         async def _token_balance(contract):
             async with sem:
-                return await _v2_get(client, {"module": "account", "action": "tokenbalance",
-                                              "contractaddress": contract,
-                                              "address": wallet_address, "tag": "latest"})
+                raw = await _v2_get(client, {"module": "account", "action": "tokenbalance",
+                                             "contractaddress": contract,
+                                             "address": wallet_address, "tag": "latest"})
+                return contract, raw
 
-        items = list(contracts.items())
-        raws = await asyncio.gather(*[_token_balance(c) for c, _ in items])
+        results = await asyncio.gather(*[_token_balance(c) for c in to_check])
 
-        # --- filter scam + dust; disambiguate duplicate symbols by contract ---
+        # Resolve amounts; a failed read (None, after 429 backoff) keeps the last known
+        # amount so a held token never flickers to 0 on a transient rate-limit.
+        last_amounts = entry.setdefault("last_amounts", {})
+        amount_by_contract: dict = {}
+        for contract, raw in results:
+            _sym, decimals, _name = candidates[contract]
+            if raw is None:
+                amt = last_amounts.get(contract)
+                if amt is None:
+                    continue
+            else:
+                try:
+                    amt = _to_int(raw, 0) / (10 ** int(decimals))
+                except (ValueError, TypeError, ZeroDivisionError):
+                    amt = 0.0
+                last_amounts[contract] = amt
+            amount_by_contract[contract] = amt
+
+        _update_held(entry, to_check, amount_by_contract, _DUST_THRESHOLD, is_full, now)
+
+        # --- build display from the held set; disambiguate duplicate symbols by contract ---
         by_symbol: dict = {}  # symbol -> list of (contract, amount)
-        for (contract, (symbol, decimals, name)), raw in zip(items, raws):
-            try:
-                amount = _to_int(raw, 0) / (10 ** int(decimals))
-            except (ValueError, TypeError, ZeroDivisionError):
-                amount = 0.0
-            if amount < _DUST_THRESHOLD:
+        for contract in (entry.get("held_set") or set()):
+            meta = candidates.get(contract) or contracts.get(contract)
+            if not meta:
                 continue
-            if _looks_like_scam(symbol, name):
+            symbol, decimals, name = meta
+            amount = amount_by_contract.get(contract, last_amounts.get(contract, 0.0))
+            if amount < _DUST_THRESHOLD:
                 continue
             by_symbol.setdefault(symbol, []).append((contract, amount))
 

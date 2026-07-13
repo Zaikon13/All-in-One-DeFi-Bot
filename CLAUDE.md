@@ -82,7 +82,16 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   `latest/dex/tokens/{addrs}` (30/call, cronos pairs only, best-liquidity pool wins; CRO via the
   WCRO contract); `/wallet` shows a portfolio total, sorts by USD desc, collapses holdings under
   `WALLET_MIN_USD_DISPLAY` (default $1), marks unpriced tokens 'price unknown', and falls back to
-  the plain amounts-only output if pricing fails entirely (renderer: `app/commands/balances.py`). This replaced the old keyless
+  the plain amounts-only output if pricing fails entirely (renderer: `app/commands/balances.py`). **Efficiency
+  (2026-07-13):** the Explorer v2 API has no all-balances endpoint, so the balance path no
+  longer fires one `tokenbalance` per historical contract every cycle (~197, which caused the
+  429s). It now caches discovery for `WALLET_DISCOVERY_TTL_HOURS`, pre-filters scam-by-name
+  with no API call, keeps a per-wallet held-set and only balance-checks real holdings each
+  cycle (full sweep of all candidates every `WALLET_BALANCE_REFRESH_HOURS`), and backs off on
+  429 (`WALLET_V2_MAX_RETRIES`). A held token keeps its last known amount on a transient
+  failure instead of flickering to 0. A failed native `getBalance` now returns `ok=False` so
+  `/wallet /bal /balances` reply 'data source unavailable' instead of '$0 / no tokens'
+  (2026-07-13). This replaced the old keyless
   `cronos.org/explorer/api` feed, which silently froze for the wallet on 2026-05-22 while still
   returning `200 OK`. A **freshness guard** (`core/wallet.check_data_freshness`) compares the newest
   wallet block to the live chain tip (independent RPC) and fires a Telegram alert when data is far
@@ -173,6 +182,8 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `CRONOS_STALE_BLOCK_THRESHOLD` | runtime (optional) | blocks-behind threshold for the stale-data alert (default 200000 ≈ 1 day) |
 | `CRONOS_STALE_ALERT_COOLDOWN_SECONDS` | runtime (optional) | min seconds between stale-data Telegram alerts (default 21600 = 6h; logs are not throttled) |
 | `WALLET_MIN_USD_DISPLAY` | web (optional) | /wallet holdings under this USD value collapse into one line (default 1) |
+| `WALLET_DISCOVERY_TTL_HOURS`, `WALLET_BALANCE_REFRESH_HOURS` | runtime (optional) | hours between token re-discovery / full balance sweeps (default 6 / 6) |
+| `WALLET_BALANCE_CONCURRENCY`, `WALLET_V2_MAX_RETRIES` | runtime (optional) | concurrent tokenbalance reads / 429 backoff retries (default 8 / 3) |
 | `PAIR_NEWNESS_WINDOW_HOURS` | worker (optional) | new-pair alert window vs `pairCreatedAt` (default 24) |
 | `PAIR_MIN_LIQUIDITY_USD` | worker (optional) | minimum pool liquidity for a new-pair alert (default 10000) |
 | `PAIR_MIN_SCORE` | worker (optional) | minimum 0-100 quality score for a new-pair alert (default 35) |
