@@ -70,7 +70,13 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   rebases on alert and lives IN MEMORY ONLY: without the Railway Volume caveat changing,
   a redeploy/restart quietly re-seeds it (first cycle seeds, alerts from the second cycle
   onward — never a false alert on restart). State machine is pure
-  (`worker.detect_portfolio_moves` / `worker.watch_holdings`) and unit-tested offline.
+  (`worker.detect_portfolio_moves` / `worker.watch_holdings`) and unit-tested offline. **Scanner
+  digest (2026-07-16):** `worker.scheduled_scan_digest` (gated by `SCAN_DIGEST_ENABLED`,
+  default on) sends ONE summary per day at `SCAN_DIGEST_HOUR` (default 21, Europe/Athens):
+  pairs seen / passed Cronos / passed newness / passed liquidity / best score today (symbol)
+  / sent — so the scanner's judgment is visible even on quiet days. Counters are in-memory
+  (restart restarts the counting window); no quality threshold is changed. Fold + formatter
+  are pure (`worker.record_pair_funnel` / `worker.format_scan_digest`), unit-tested offline.
 - **core/** — shared helpers. `claude_client.py` (AI calls), `wallet.py`, `pnl_calculator.py`,
   `price_service.py`, Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
 - **Blockchain data source (2026-06-21, balances rev. 2026-06-24).** Live, keyed Cronos Explorer API
@@ -191,6 +197,7 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `WORKER_DATA_DIR` | worker (optional) | explicit persistence dir; else `RAILWAY_VOLUME_MOUNT_PATH` (=/data in prod) else `./data` |
 | `PORTFOLIO_WATCH_ENABLED` | worker (optional) | portfolio price-move alerts on held tokens (default true) |
 | `PORTFOLIO_WATCH_INTERVAL_MIN`, `PORTFOLIO_MOVE_THRESHOLD_PCT`, `PORTFOLIO_MIN_USD`, `PORTFOLIO_ALERT_COOLDOWN_MIN` | worker (optional) | check cadence min / alert threshold % vs rolling baseline / min holding USD watched / per-token alert cooldown min (defaults 5 / 10 / 5 / 60) |
+| `SCAN_DIGEST_ENABLED`, `SCAN_DIGEST_HOUR` | worker (optional) | daily scanner-funnel digest on/off + Athens hour (default true / 21) |
 | `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |
 | `ETHERSCAN_API_KEY` | legacy | no longer used by the live data path (deprecated sync Covalent helper only) |
 

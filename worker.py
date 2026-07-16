@@ -5,6 +5,7 @@ import json
 import math
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -82,6 +83,59 @@ PORTFOLIO_WATCH_INTERVAL_MIN = _env_float("PORTFOLIO_WATCH_INTERVAL_MIN", 5.0)
 PORTFOLIO_MOVE_THRESHOLD_PCT = _env_float("PORTFOLIO_MOVE_THRESHOLD_PCT", 10.0)
 PORTFOLIO_MIN_USD = _env_float("PORTFOLIO_MIN_USD", 5.0)
 PORTFOLIO_ALERT_COOLDOWN_MIN = _env_float("PORTFOLIO_ALERT_COOLDOWN_MIN", 60.0)
+# Daily scanner digest (2026-07-16, visibility without noise): once a day the worker
+# sends ONE summary of the new-pair funnel — how many pairs the search returned, how
+# many survived each filter, the best score seen, and how many were alerted — so the
+# scanner's judgment is visible every evening even when nothing clears the bar.
+# No quality threshold is changed by this feature.
+SCAN_DIGEST_ENABLED = os.getenv("SCAN_DIGEST_ENABLED", "true").lower() == "true"
+SCAN_DIGEST_HOUR = int(_env_float("SCAN_DIGEST_HOUR", 21.0)) % 24  # Athens hour
+
+
+def _new_scan_stats() -> dict:
+    return {"seen": 0, "cronos": 0, "newness": 0, "liquidity": 0,
+            "below_score": 0, "sent": 0, "best_score": None, "best_symbol": None}
+
+
+scan_stats = _new_scan_stats()
+
+
+def record_pair_funnel(stats: dict, seen=0, cronos=0, newness=0, liquidity=0,
+                       below_score=0, sent=0, best=None) -> dict:
+    """Fold one polling cycle's funnel counts into stats (pure; unit-tested).
+    best = (score, symbol) of the best-scoring pair this cycle, alerted or not."""
+    stats["seen"] += seen
+    stats["cronos"] += cronos
+    stats["newness"] += newness
+    stats["liquidity"] += liquidity
+    stats["below_score"] += below_score
+    stats["sent"] += sent
+    if best is not None:
+        try:
+            score = float(best[0])
+            # strip Markdown v1 entity chars from the symbol — scam tokens carry
+            # *_[]` and one unpaired entity would 400 the day's single digest
+            symbol = re.sub(r"[*_\[\]`]", "", str(best[1])).strip() or "?"
+            if math.isfinite(score) and (stats["best_score"] is None or score > stats["best_score"]):
+                stats["best_score"], stats["best_symbol"] = score, symbol
+        except (TypeError, ValueError, IndexError):
+            pass  # malformed best never breaks the counters
+    return stats
+
+
+def format_scan_digest(stats: dict) -> str:
+    """One-line Telegram digest (Markdown v1 safe; pure; unit-tested)."""
+    if stats["best_score"] is None:
+        best = "—"
+    else:
+        best = f"{stats['best_score']:.0f} ({stats['best_symbol']})"
+    return (f"🔎 **Scanner digest** — pairs seen: {stats['seen']}, "
+            f"passed Cronos filter: {stats['cronos']}, "
+            f"passed newness: {stats['newness']}, "
+            f"passed liquidity: {stats['liquidity']}, "
+            f"best score today: {best} — sent: {stats['sent']}")
+
+
 if PORTFOLIO_MOVE_THRESHOLD_PCT <= 0:
     logger.warning(
         f"PORTFOLIO_MOVE_THRESHOLD_PCT={PORTFOLIO_MOVE_THRESHOLD_PCT} <= 0 — every watched "
@@ -372,9 +426,13 @@ async def poll_dexscreener():
                     now_utc = datetime.now(timezone.utc)
                     fresh = []  # (pair, liquidity_usd, age_hours, score_dict)
                     below_score = 0
+                    cy_seen = cy_cronos = cy_new = cy_liq = 0
+                    cy_best = None  # (score, symbol) best this cycle, alerted or not
                     for pair in (data.get("pairs") or []):
+                        cy_seen += 1
                         if str(pair.get("chainId") or "").lower() != "cronos":
                             continue  # text search returns pairs from every chain
+                        cy_cronos += 1
                         pair_address = pair.get("pairAddress")
                         if not pair_address:
                             continue
@@ -388,6 +446,7 @@ async def poll_dexscreener():
                         age_h = (now_utc - created_dt).total_seconds() / 3600.0
                         if age_h < 0 or age_h > PAIR_NEWNESS_WINDOW_HOURS:
                             continue
+                        cy_new += 1
                         # liquidity floor: skip dust pools
                         try:
                             liq = float((pair.get("liquidity") or {}).get("usd") or 0)
@@ -395,10 +454,14 @@ async def poll_dexscreener():
                             liq = 0.0
                         if liq < PAIR_MIN_LIQUIDITY_USD:
                             continue
+                        cy_liq += 1
                         # quality score gate (2026-07-06, Part A): below-bar pairs are
                         # skipped WITHOUT being marked seen, so they can re-qualify on a
                         # later cycle if volume/buys/momentum pick up within the window.
                         sc = score_pair(pair, liq)
+                        _sym = (pair.get("baseToken") or {}).get("symbol", "?")
+                        if cy_best is None or sc["score"] > cy_best[0]:
+                            cy_best = (sc["score"], _sym)
                         if sc["score"] < PAIR_MIN_SCORE:
                             below_score += 1
                             if pair_address in seen_pairs:
@@ -421,6 +484,11 @@ async def poll_dexscreener():
                             fresh.append((pair, liq, age_h, sc))
                         else:
                             pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
+
+                    record_pair_funnel(scan_stats, seen=cy_seen, cronos=cy_cronos,
+                                       newness=cy_new, liquidity=cy_liq,
+                                       below_score=below_score, sent=len(fresh),
+                                       best=cy_best)
 
                     if fresh:
                         market_enabled = os.getenv("MARKET_ANALYSIS_ENABLED", "false").lower() == "true"
@@ -619,6 +687,34 @@ async def portfolio_watch():
         await asyncio.sleep(interval_s)
 
 
+async def scheduled_scan_digest():
+    """Send ONE scanner-funnel summary per day at SCAN_DIGEST_HOUR Europe/Athens
+    (default 21:00) and reset the counters. In-memory only: a restart restarts the
+    counting window (the digest then covers time since restart). DST-safe target
+    recomputation each loop, same pattern as scheduled_eod_pnl. Never crashes."""
+    global scan_stats
+    if not SCAN_DIGEST_ENABLED:
+        logger.info("scanner digest: disabled (SCAN_DIGEST_ENABLED=false)")
+        return
+    athens = ZoneInfo("Europe/Athens")
+    logger.info(f"scanner digest: on — daily at {SCAN_DIGEST_HOUR:02d}:00 Europe/Athens")
+    while True:
+        now = datetime.now(athens)
+        target = now.replace(hour=SCAN_DIGEST_HOUR, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        await asyncio.sleep(max(60.0, (target - datetime.now(athens)).total_seconds()))
+        try:
+            # snapshot-and-reset first: counts folded while the send awaits belong
+            # to the NEXT window, and a mid-send failure can't double-report.
+            snap, scan_stats = scan_stats, _new_scan_stats()
+            msg = format_scan_digest(snap)
+            await send_telegram(msg)
+            logger.info(f"scanner digest: {msg}")
+        except Exception as e:
+            logger.error(f"scanner digest error (window already rolled): {e}")
+
+
 async def monitor_wallet():
     if not WALLET_ADDRESS:
         await asyncio.sleep(WALLET_CHECK_INTERVAL)
@@ -806,7 +902,8 @@ async def main():
         poll_dexscreener(),
         monitor_wallet(),
         scheduled_eod_pnl(),
-        portfolio_watch()
+        portfolio_watch(),
+        scheduled_scan_digest()
     )
 
 
