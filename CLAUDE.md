@@ -97,7 +97,13 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   429 (`WALLET_V2_MAX_RETRIES`). A held token keeps its last known amount on a transient
   failure instead of flickering to 0. A failed native `getBalance` now returns `ok=False` so
   `/wallet /bal /balances` reply 'data source unavailable' instead of '$0 / no tokens'
-  (2026-07-13). This replaced the old keyless
+  (2026-07-13). **PnL honesty (2026-07-17):** `get_today_transactions_async` returns
+  `(txs, fetch_ok)`; any Explorer failure (HTTP error / 429 / rejected key / exception —
+  partial failures included) sets `fetch_ok=False` and counts as stale for the freshness
+  guard (`note_fetch_failure`, same throttle), so `get_daily_pnl_report` — the string
+  /daily_pnl replies AND the automatic EOD send wraps with its header — answers
+  "⚠️ Couldn't fetch transaction data right now" instead of "No meaningful transactions
+  found today". A successful fetch on a genuinely empty day still gets the classic line. This replaced the old keyless
   `cronos.org/explorer/api` feed, which silently froze for the wallet on 2026-05-22 while still
   returning `200 OK`. A **freshness guard** (`core/wallet.check_data_freshness`) compares the newest
   wallet block to the live chain tip (independent RPC) and fires a Telegram alert when data is far

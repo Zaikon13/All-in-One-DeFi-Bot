@@ -3,7 +3,7 @@
 import os
 import logging
 from datetime import datetime, timezone
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -20,7 +20,7 @@ from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 from core.price_service import PriceService
 
 # Live Cronos Explorer v1 client + data-freshness guard (replaces the frozen keyless feed).
-from core.wallet import explorer_get, check_data_freshness
+from core.wallet import explorer_get, check_data_freshness, note_fetch_failure
 
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 
@@ -513,7 +513,7 @@ def _adapt_explorer_row(item: Dict, action: str) -> Dict:
     return adapted
 
 
-async def get_today_transactions_async() -> List[Dict]:
+async def get_today_transactions_async() -> Tuple[List[Dict], bool]:
     """Async-safe fetch of today's transactions from the live Cronos Explorer v1 API.
 
     Data source: explorer-api.cronos.org/mainnet/api/v1 (keyed), replacing the
@@ -524,22 +524,28 @@ async def get_today_transactions_async() -> List[Dict]:
     _aggregate_pnl path.
 
     Pagination: pagination.session cursor, newest-first, capped at ~10 pages per
-    endpoint; early-exit on the first tx older than today. Defensive: any
-    error returns partial results (never fails the whole report).
+    endpoint; early-exit on the first tx older than today. Defensive: errors
+    return (partial results, fetch_ok=False) — the report layer surfaces the
+    failure honestly instead of a quiet-day message.
 
     Freshness guard: if the newest data is far behind the live chain, log a
     warning and fire a Telegram alert instead of silently reporting "no activity".
 
-    Output: List[Dict] synthetics for _aggregate_pnl. The "today" day boundary is
-    Europe/Athens (REPORT_TZ) so the report covers the owner's local day and lines
-    up with the Athens-scheduled EOD send; tx timestamps themselves remain UTC.
+    Output (2026-07-17): (List[Dict] synthetics for _aggregate_pnl, fetch_ok bool).
+    fetch_ok=False means at least one Explorer request FAILED (HTTP error / 429 /
+    rejected key / exception) — the day's data is unavailable or incomplete, which
+    is NOT the same as "no transactions today"; callers must say so honestly. A
+    failure also counts as stale for the freshness guard (note_fetch_failure,
+    throttled). The "today" day boundary is Europe/Athens (REPORT_TZ) so the report
+    covers the owner's local day; tx timestamps themselves remain UTC.
     """
     if not WALLET_ADDRESS:
         logging.error("[ERROR] Missing WALLET_ADDRESS")
-        return []
+        return [], True
 
     today = datetime.now(REPORT_TZ).strftime("%Y-%m-%d")  # reporting-day filter (Europe/Athens)
     collected: List[Dict] = []
+    fetch_ok = True
     newest_block = None
     newest_ts = None
 
@@ -556,7 +562,11 @@ async def get_today_transactions_async() -> List[Dict]:
                         params["session"] = session
                     env = await explorer_get(client, path, params, full=True)
                     if not env:
-                        break  # auth/staleness/error already logged; partial results
+                        # explorer_get returns None on ANY failure (HTTP error, 429,
+                        # rejected key, exception). This wallet has history, so a None
+                        # here is a fetch FAILURE, not an empty day (2026-07-17).
+                        fetch_ok = False
+                        break
                     items = env.get("result") or []
                     if not items:
                         break
@@ -595,16 +605,31 @@ async def get_today_transactions_async() -> List[Dict]:
                 await check_data_freshness(client)
             except Exception as fe:
                 logging.error(f"[freshness] check failed (non-fatal): {fe}")
-        logging.info(f"Cronos Explorer fetch complete: {len(collected)} tx for {today}")
-        return collected
+            if not fetch_ok:
+                # a failed fetch counts as stale (throttled Telegram alert + log)
+                try:
+                    await note_fetch_failure(client)
+                except Exception:
+                    pass
+        logging.info(f"Cronos Explorer fetch complete: {len(collected)} tx for {today} (fetch_ok={fetch_ok})")
+        return collected, fetch_ok
     except Exception as e:
         logging.error(f"[ERROR] Cronos Explorer async fetch: {str(e)}")
-    return collected
+        try:
+            await note_fetch_failure(None)
+        except Exception:
+            pass
+    return collected, False
 
 
 async def calculate_daily_pnl_async() -> Dict:
-    """Async version of daily PnL calculation. Reuses _aggregate_pnl."""
-    transactions = await get_today_transactions_async()
+    """Async version of daily PnL calculation. Reuses _aggregate_pnl.
+    2026-07-17: a failed fetch returns {"error", "unavailable": True} so report
+    layers can distinguish 'source down' from 'genuinely no transactions'."""
+    transactions, fetch_ok = await get_today_transactions_async()
+    if not fetch_ok:
+        return {"error": "data source unavailable", "unavailable": True,
+                "date": datetime.now(REPORT_TZ).strftime("%Y-%m-%d"), "tokens": []}
     return _aggregate_pnl(transactions)
 
 
@@ -734,6 +759,14 @@ async def get_daily_pnl_report() -> str:
     # we continue unchanged with the original net-delta data for full backward compatibility.
     # The enrichment now computes position_value_usd and simple avg_cost_usd (additive fields only).
     data = _enrich_with_current_prices(data)
+
+    # Fetch-failure case (2026-07-17): never dress a source outage up as a quiet
+    # day. This string is what /daily_pnl replies AND what the automatic EOD path
+    # sends (with its header) — both stay honest.
+    if data.get("unavailable"):
+        return ("⚠️ Couldn't fetch transaction data right now — data source "
+                "unavailable. This is a fetch failure, not an empty trading day; "
+                "it should recover on its own.")
 
     # No data case (clean, no Grok needed)
     if "error" in data or not data.get("tokens"):
