@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from core.log_redaction import install_log_redaction
+from core import paper_trading as paper
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -402,6 +403,86 @@ def score_pair(pair: dict, liq: float) -> dict:
     }
 
 
+# --- Paper trading (2026-07-17, SIMULATION ONLY — no real transactions, no keys,
+# no spending capability; see core/paper_trading.py + CLAUDE.md roadmap gate). The
+# worker owns the engine: entries come from the scanner's alerted pairs, exits are
+# checked each polling cycle via ONE batched Dexscreener price call for open
+# positions (zero new Explorer API calls). State on the /data volume.
+paper_state: dict | None = None
+
+
+async def _paper_step(client, fresh, now_utc):
+    """One engine step per polling cycle: entries from this cycle's alerted pairs,
+    then exit checks for open positions. Own try/except — a paper bug must never
+    break the scanner. Sends 🧪-marked Telegram notes on entry/exit only."""
+    global paper_state
+    if not paper.PAPER_TRADING_ENABLED:
+        return
+    try:
+        if paper_state is None:
+            paper_state = paper.load_state()
+            logger.info(f"paper: state loaded — {paper.paper_summary_line(paper_state)}")
+
+        # --- entries: alerted pairs at/above the entry bar ---
+        open_ids = {p.get("pair_address") for p in paper_state["open"]}
+        for pair, liq, age_h, sc in fresh:
+            addr = (pair.get("pairAddress") or "").lower()
+            base = pair.get("baseToken") or {}
+            token_addr = (base.get("address") or "").lower()
+            try:
+                price = float(pair.get("priceUsd") or 0)
+            except (TypeError, ValueError):
+                price = 0.0
+            ok, reason = paper.should_enter(
+                sc["score"], price, len(paper_state["open"]),
+                paper_state["balance_usd"], already_open=addr in open_ids)
+            if not ok:
+                if sc["score"] >= paper.PAPER_ENTRY_SCORE:
+                    logger.info(f"paper: entry skipped for {base.get('symbol','?')}: {reason}")
+                continue
+            sym = paper.sanitize_symbol(f"{base.get('symbol','?')}/{(pair.get('quoteToken') or {}).get('symbol','?')}")
+            pos = paper.open_position(paper_state, addr, sym, token_addr, price,
+                                      sc["score"], now_utc.isoformat())
+            open_ids.add(addr)
+            paper.save_state(paper_state)
+            await send_telegram(
+                f"🧪 **PAPER BUY** — {sym}\n"
+                f"- Entry: {_fmt_price(pos['entry_price'])} · size ${pos['usd_in']:,.0f}\n"
+                f"- Reason: score {sc['score']:.0f} >= {paper.PAPER_ENTRY_SCORE:.0f} (🔥 entry bar)\n"
+                f"- Simulated balance: ${paper_state['balance_usd']:,.2f}"
+            )
+            logger.info(f"paper: BUY {sym} @ {pos['entry_price']} (score {sc['score']:.0f})")
+
+        # --- exits: one batched Dexscreener call for all open positions ---
+        if paper_state["open"]:
+            from core.wallet import get_token_prices  # lazy: protects worker boot
+            addrs = [p["token_address"] for p in paper_state["open"] if p.get("token_address")]
+            prices = await get_token_prices(client, addrs) if addrs else {}
+            for pos in list(paper_state["open"]):
+                cp = prices.get(pos.get("token_address"))
+                res = paper.check_exit(pos, cp, now_utc)
+                if res is None:
+                    if cp is None:
+                        # spec: never exit on missing data; say so in the LOG only
+                        logger.info(f"paper: no price for {pos['symbol']} this cycle; holding")
+                    continue
+                reason, exit_price = res
+                closed = paper.close_position(paper_state, pos, exit_price, reason,
+                                              now_utc.isoformat())
+                paper.save_state(paper_state)
+                arrow = "📈" if closed["pnl_usd"] >= 0 else "📉"
+                await send_telegram(
+                    f"🧪 **PAPER SELL** — {closed['symbol']} ({reason})\n"
+                    f"- {_fmt_price(closed['entry_price'])} → {_fmt_price(closed['exit_price'])} "
+                    f"({closed['pnl_pct']:+.1f}%) {arrow}\n"
+                    f"- Realized: {closed['pnl_usd']:+,.2f} USD on ${closed['usd_in']:,.0f}\n"
+                    f"- Simulated balance: ${paper_state['balance_usd']:,.2f}"
+                )
+                logger.info(f"paper: SELL {closed['symbol']} {reason} pnl {closed['pnl_usd']:+.2f}")
+    except Exception as e:
+        logger.error(f"paper step error (scanner unaffected): {e}", exc_info=True)
+
+
 async def poll_dexscreener():
     """Poll Dexscreener and alert on genuinely new Cronos pairs.
 
@@ -489,6 +570,9 @@ async def poll_dexscreener():
                                        newness=cy_new, liquidity=cy_liq,
                                        below_score=below_score, sent=len(fresh),
                                        best=cy_best)
+
+                    # paper engine step (simulation only; own try/except inside)
+                    await _paper_step(client, fresh, now_utc)
 
                     if fresh:
                         market_enabled = os.getenv("MARKET_ANALYSIS_ENABLED", "false").lower() == "true"
@@ -896,6 +980,25 @@ async def main():
     # Uses core/market_analysis (thin over grok_client SOT).
     market_enabled = os.getenv("MARKET_ANALYSIS_ENABLED", "false").lower() == "true"
     logger.info(f"Market analysis enabled={market_enabled} (for token/pair context in alerts)")
+
+    # Paper trading (simulation only) startup visibility (2026-07-17 review L1)
+    if paper.PAPER_TRADING_ENABLED:
+        logger.info(
+            f"paper: on — entry bar {paper.PAPER_ENTRY_SCORE:g} (effective "
+            f"{max(paper.PAPER_ENTRY_SCORE, PAIR_MIN_SCORE):g}: entries come from ALERTED pairs), "
+            f"size ${paper.PAPER_POSITION_USD:g}, max open {paper.PAPER_MAX_OPEN}, "
+            f"TP +{paper.PAPER_TP_PCT:g}% / SL -{paper.PAPER_SL_PCT:g}% / "
+            f"time {paper.PAPER_MAX_HOLD_HOURS:g}h, state {paper.state_path()}"
+        )
+        if paper.PAPER_ENTRY_SCORE > 100:
+            logger.warning("PAPER_ENTRY_SCORE > 100 — scores cap at 100; no entry can ever fire")
+        elif paper.PAPER_ENTRY_SCORE < PAIR_MIN_SCORE:
+            logger.warning(
+                f"PAPER_ENTRY_SCORE ({paper.PAPER_ENTRY_SCORE:g}) is below PAIR_MIN_SCORE "
+                f"({PAIR_MIN_SCORE:g}); entries only come from alerted pairs, so the effective bar is {PAIR_MIN_SCORE:g}"
+            )
+    else:
+        logger.info("paper: disabled (PAPER_TRADING_ENABLED=false)")
 
     await asyncio.gather(
         heartbeat(),

@@ -25,11 +25,17 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 
 ## Active roadmap
 
+- **Strategy engine (simulation) — ACTIVE (2026-07-17).** `core/paper_trading.py` + the worker
+  simulate entries/exits with imaginary money to produce evidence about the scanner's judgment.
+  See the Paper-trading block under Worker for the rules.
+- **STANDING GATE — real-fund execution does not exist in this codebase.** No private keys, no
+  signing, no spending capability anywhere. Real execution only becomes DISCUSSABLE after the
+  simulation produces evidence AND explicit risk controls exist; any such step is
+  financial-decision-adjacent: human review + simulate/dry-run first (golden rules).
 - **Trading execution — future, not built.** When (and only when) real trading steps land, the AI's
   "actionable trading insights" / recommendation language may return to the system prompt and the
   runtime prompts. It was removed on 2026-07-05 so the AI's claimed identity matches actual
   capabilities (Cronos-only monitoring analyst; observations are information, not financial advice).
-  Any such step is financial-decision-adjacent: human review + simulate/dry-run first (golden rules).
 
 ## Architecture
 
@@ -76,7 +82,21 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   pairs seen / passed Cronos / passed newness / passed liquidity / best score today (symbol)
   / sent — so the scanner's judgment is visible even on quiet days. Counters are in-memory
   (restart restarts the counting window); no quality threshold is changed. Fold + formatter
-  are pure (`worker.record_pair_funnel` / `worker.format_scan_digest`), unit-tested offline.
+  are pure (`worker.record_pair_funnel` / `worker.format_scan_digest`), unit-tested offline. **Paper
+  trading (2026-07-17, SIMULATION ONLY):** `core/paper_trading.py` + `worker._paper_step`,
+  gated by `PAPER_TRADING_ENABLED` (default on — it risks nothing; no keys, no real orders).
+  Starts with `PAPER_STARTING_USD` (default $1000) of simulated money. Entry: an ALERTED pair
+  scoring >= `PAPER_ENTRY_SCORE` (default 70, the 🔥 tier) opens a `PAPER_POSITION_USD`
+  (default $50) position at the alert's price — max `PAPER_MAX_OPEN` (5) concurrent, skip when
+  full/broke/duplicate. Exits checked every polling cycle via ONE batched Dexscreener call for
+  open positions (zero extra Explorer calls): take-profit +`PAPER_TP_PCT`% (25), stop-loss
+  -`PAPER_SL_PCT`% (15), time-stop `PAPER_MAX_HOLD_HOURS` (24) — first hit wins; a missing
+  price NEVER exits (hold + log only). Every entry/exit sends ONE 🧪-marked Telegram note with
+  pair, price, size, reason, and running simulated balance. State (balance/open/closed) lives
+  in `paper_state.json` on the /data volume (atomic writes, corrupt-file-safe loads, survives
+  redeploys). Decision logic is pure (`should_enter`/`check_exit`/close math) and unit-tested
+  offline. Expectation: with the 🔥-tier entry bar, days may pass before the first simulated
+  trade — patience IS the strategy.
 - **core/** — shared helpers. `claude_client.py` (AI calls), `wallet.py`, `pnl_calculator.py`,
   `price_service.py`, Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
 - **Blockchain data source (2026-06-21, balances rev. 2026-06-24).** Live, keyed Cronos Explorer API
@@ -210,6 +230,8 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `WORKER_DATA_DIR` | worker (optional) | explicit persistence dir; else `RAILWAY_VOLUME_MOUNT_PATH` (=/data in prod) else `./data` |
 | `PORTFOLIO_WATCH_ENABLED` | worker (optional) | portfolio price-move alerts on held tokens (default true) |
 | `PORTFOLIO_WATCH_INTERVAL_MIN`, `PORTFOLIO_MOVE_THRESHOLD_PCT`, `PORTFOLIO_MIN_USD`, `PORTFOLIO_ALERT_COOLDOWN_MIN` | worker (optional) | check cadence min / alert threshold % vs rolling baseline / min holding USD watched / per-token alert cooldown min (defaults 5 / 10 / 5 / 60) |
+| `PAPER_TRADING_ENABLED` | worker (optional) | paper-trading simulation on/off (default true; simulation only, no real orders possible) |
+| `PAPER_STARTING_USD`, `PAPER_ENTRY_SCORE`, `PAPER_POSITION_USD`, `PAPER_MAX_OPEN`, `PAPER_TP_PCT`, `PAPER_SL_PCT`, `PAPER_MAX_HOLD_HOURS` | worker (optional) | simulated capital / entry score bar / position size / max concurrent / take-profit % / stop-loss % / time-stop hours (defaults 1000 / 70 / 50 / 5 / 25 / 15 / 24) |
 | `SCAN_DIGEST_ENABLED`, `SCAN_DIGEST_HOUR` | worker (optional) | daily scanner-funnel digest on/off + Athens hour (default true / 21) |
 | `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |
 | `ETHERSCAN_API_KEY` | legacy | no longer used by the live data path (deprecated sync Covalent helper only) |
