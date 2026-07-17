@@ -63,6 +63,13 @@ Railway usually redeploys automatically when a variable changes. If not: each
 service → ⋮ menu → **Redeploy**. Wait until all show SUCCESS. (The services only
 READ the token; no code change is needed and none should be made.)
 
+**Note on `/paper` during rotation:** the worker authenticates its paper-state
+mirror push to the bot with a hash of this same token. Between the revoke (Step 1)
+and BOTH services finishing their redeploy (Step 3), the worker and bot briefly hold
+different tokens, so `/paper` will show stale/"syncing" data and the worker logs
+`mirror push rejected HTTP 403`. This self-heals within one scan cycle (~5 min) once
+both services run the new token — no action needed.
+
 **Step 4 — Re-register the webhook (the step that was missed in 2023).**
 One line in the terminal, with the NEW token and the URL from "Before you start":
 

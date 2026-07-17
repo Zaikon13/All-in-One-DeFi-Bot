@@ -96,7 +96,16 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   in `paper_state.json` on the /data volume (atomic writes, corrupt-file-safe loads, survives
   redeploys). Decision logic is pure (`should_enter`/`check_exit`/close math) and unit-tested
   offline. Expectation: with the 🔥-tier entry bar, days may pass before the first simulated
-  trade — patience IS the strategy.
+  trade — patience IS the strategy. **/paper + mirror (2026-07-17):** the /data volume attaches
+  ONLY to the worker, so the bot cannot read `paper_state.json`; after every engine step the
+  worker POSTs a compact state mirror to the bot's `POST /internal/paper-state` (auth =
+  sha256 of the shared `TELEGRAM_BOT_TOKEN`, token never sent; in-memory, refills ≤1 cycle
+  after a bot restart; override target via `PAPER_MIRROR_URL`). `/paper` renders from the
+  mirror (renderer `app/commands/paper.py`, pure + unit-tested): balance + realized PnL since
+  start, open positions with entry/current/unrealized (current prices via one keyless
+  Dexscreener batch; 'price unknown' if unavailable), last 10 closed with win/loss + reason,
+  win rate; stale mirror (>30 min) is flagged. The daily EOD report gains one line:
+  `🧪 Paper: balance $X · open Y · closed Z · win rate W%`.
 - **core/** — shared helpers. `claude_client.py` (AI calls), `wallet.py`, `pnl_calculator.py`,
   `price_service.py`, Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
 - **Blockchain data source (2026-06-21, balances rev. 2026-06-24).** Live, keyed Cronos Explorer API
@@ -231,6 +240,7 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `PORTFOLIO_WATCH_ENABLED` | worker (optional) | portfolio price-move alerts on held tokens (default true) |
 | `PORTFOLIO_WATCH_INTERVAL_MIN`, `PORTFOLIO_MOVE_THRESHOLD_PCT`, `PORTFOLIO_MIN_USD`, `PORTFOLIO_ALERT_COOLDOWN_MIN` | worker (optional) | check cadence min / alert threshold % vs rolling baseline / min holding USD watched / per-token alert cooldown min (defaults 5 / 10 / 5 / 60) |
 | `PAPER_TRADING_ENABLED` | worker (optional) | paper-trading simulation on/off (default true; simulation only, no real orders possible) |
+| `PAPER_MIRROR_URL` | worker (optional) | where the worker pushes the /paper state mirror (default the bot's public /internal/paper-state) |
 | `PAPER_STARTING_USD`, `PAPER_ENTRY_SCORE`, `PAPER_POSITION_USD`, `PAPER_MAX_OPEN`, `PAPER_TP_PCT`, `PAPER_SL_PCT`, `PAPER_MAX_HOLD_HOURS` | worker (optional) | simulated capital / entry score bar / position size / max concurrent / take-profit % / stop-loss % / time-stop hours (defaults 1000 / 70 / 50 / 5 / 25 / 15 / 24) |
 | `SCAN_DIGEST_ENABLED`, `SCAN_DIGEST_HOUR` | worker (optional) | daily scanner-funnel digest on/off + Athens hour (default true / 21) |
 | `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |

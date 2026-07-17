@@ -403,6 +403,41 @@ def score_pair(pair: dict, liq: float) -> dict:
     }
 
 
+# Mirror push (2026-07-17): the /data volume attaches ONLY to the worker, so the
+# bot cannot read paper_state.json. After each engine step the worker POSTs a
+# compact state mirror to the bot's /internal/paper-state endpoint (auth: sha256
+# of the shared TELEGRAM_BOT_TOKEN — the token itself is never sent). /paper then
+# renders from that in-memory mirror. Failures are logged only; never fatal.
+PAPER_MIRROR_URL = os.getenv(
+    "PAPER_MIRROR_URL",
+    "https://bot-production-3d9c.up.railway.app/internal/paper-state",
+)
+
+
+def _paper_mirror_auth() -> str:
+    import hashlib
+    return hashlib.sha256((TELEGRAM_BOT_TOKEN or "").encode()).hexdigest()[:32]
+
+
+async def _push_paper_mirror(client, state: dict):
+    """Best-effort POST of the paper state to the bot service. Never raises."""
+    if not (PAPER_MIRROR_URL and TELEGRAM_BOT_TOKEN):
+        return
+    try:
+        resp = await client.post(
+            PAPER_MIRROR_URL,
+            json={"state": state, "as_of": datetime.now(timezone.utc).isoformat()},
+            headers={"X-Paper-Auth": _paper_mirror_auth()},
+            timeout=10.0,
+        )
+        if resp.status_code != 200:
+            # httpx does not raise on 4xx/5xx; a 403 (token mismatch mid-rotation)
+            # or 413 (payload cap) would otherwise be a silent stale /paper.
+            logger.info(f"paper: mirror push rejected HTTP {resp.status_code}")
+    except Exception as e:
+        logger.info(f"paper: mirror push failed (non-fatal): {e}")
+
+
 # --- Paper trading (2026-07-17, SIMULATION ONLY — no real transactions, no keys,
 # no spending capability; see core/paper_trading.py + CLAUDE.md roadmap gate). The
 # worker owns the engine: entries come from the scanner's alerted pairs, exits are
@@ -479,6 +514,7 @@ async def _paper_step(client, fresh, now_utc):
                     f"- Simulated balance: ${paper_state['balance_usd']:,.2f}"
                 )
                 logger.info(f"paper: SELL {closed['symbol']} {reason} pnl {closed['pnl_usd']:+.2f}")
+        await _push_paper_mirror(client, paper_state)
     except Exception as e:
         logger.error(f"paper step error (scanner unaffected): {e}", exc_info=True)
 
@@ -907,6 +943,13 @@ async def scheduled_eod_pnl():
                         logger.info("EOD PnL: malformed last_eod_run ts; treating as send (defensive, continue-on-error per Review 2026-06-08 cond. 3)")
                         pass  # malformed ts -> treat as send (defensive, continue-on-error)
                 if do_send:
+                    if paper.PAPER_TRADING_ENABLED:
+                        # one 🧪 line appended to the daily EOD report (2026-07-17)
+                        try:
+                            st = paper_state if paper_state is not None else paper.load_state()
+                            report = f"{report}\n\n{paper.paper_summary_line(st)}"
+                        except Exception as pe:
+                            logger.error(f"paper: EOD line failed (report unchanged): {pe}")
                     await send_telegram(f"📊 **Automatic EOD PnL Report**\n\n{report}")
                     last_eod_run = now_utc.isoformat()
                     save_known_pairs(seen_pairs)  # persist EOD state (atomic + volume warn)

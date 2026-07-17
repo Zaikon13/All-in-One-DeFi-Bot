@@ -27,6 +27,23 @@ install_log_redaction()  # Part D: strip apikey= from logs (log-only)
 
 app = FastAPI(title="All-in-One-DeFi-Bot")
 
+# --- Paper-state mirror (2026-07-17, simulation only) ---------------------------
+# The /data volume attaches only to the worker, so the bot cannot read
+# paper_state.json. The worker POSTs a compact mirror here after every engine
+# step; /paper renders from it. Auth: sha256 of the shared TELEGRAM_BOT_TOKEN
+# (the token itself never travels). In-memory only — after a bot restart the
+# mirror refills on the worker's next cycle (~5 min).
+_paper_mirror: dict | None = None
+
+
+def _paper_mirror_auth() -> str:
+    import hashlib
+    return hashlib.sha256((BOT_TOKEN or "").encode()).hexdigest()[:32]
+
+
+def get_paper_mirror() -> dict | None:
+    return _paper_mirror
+
 
 async def send_telegram_message(text: str, chat_id: str = None, reply_markup=None):
     cid = chat_id or CHAT_ID
@@ -142,6 +159,30 @@ async def health():
     return {"ok": True, "service": RAILWAY_SERVICE_NAME, "status": "running"}
 
 
+@app.post("/internal/paper-state")
+async def paper_state_mirror(req: Request):
+    """Worker-only push of the paper-trading state mirror (simulation data, no
+    secrets). Rejects without the shared-secret hash; caps payload size."""
+    global _paper_mirror
+    import hmac
+    if not BOT_TOKEN:  # empty token -> auth would be a public constant; refuse
+        return JSONResponse({"ok": False}, status_code=403)
+    if not hmac.compare_digest(req.headers.get("X-Paper-Auth") or "", _paper_mirror_auth()):
+        return JSONResponse({"ok": False}, status_code=403)
+    body = await req.body()
+    if len(body) > 200_000:
+        return JSONResponse({"ok": False, "error": "too large"}, status_code=413)
+    try:
+        payload = json.loads(body)
+        if isinstance(payload, dict) and isinstance(payload.get("state"), dict):
+            _paper_mirror = {"state": payload["state"],
+                             "as_of": payload.get("as_of")}
+            return {"ok": True}
+    except Exception:
+        pass
+    return JSONResponse({"ok": False}, status_code=400)
+
+
 @app.post("/grok/analyze")
 async def grok_analyze(req: Request):
     """Claude-powered wallet analysis (live data); route kept at /grok/analyze for compatibility.
@@ -198,7 +239,8 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
 • /balances — Full wallet balances with USD
 • /wallet — Same as /balances
 • /bal — Quick balance check
-• /grok-analyze — AI-powered analysis"""
+• /grok-analyze — AI-powered analysis
+• /paper — 🧪 simulated trading status"""
         reply_markup = {
             "keyboard": ["/daily_pnl", "/balances", "/grok-analyze"],
             "resize_keyboard": True,
@@ -208,6 +250,10 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
 
     elif text in ("/balances", "/wallet", "/bal", "/balance"):
         background_tasks.add_task(get_all_balances, chat_id)
+
+    elif text == "/paper":
+        from app.commands import get_paper_status
+        background_tasks.add_task(get_paper_status, chat_id)
 
     elif text in ("/daily_pnl", "/dailypnl"):
         background_tasks.add_task(process_daily_pnl, chat_id)

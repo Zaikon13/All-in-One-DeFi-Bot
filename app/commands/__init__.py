@@ -4,5 +4,6 @@
 # reference to a non-existent module and has been cleaned (per Review feedback + task).
 
 from .balances import get_all_balances
+from .paper import get_paper_status
 
-__all__ = ["get_all_balances"]
+__all__ = ["get_all_balances", "get_paper_status"]
