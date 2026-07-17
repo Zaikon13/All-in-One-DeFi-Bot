@@ -206,3 +206,8 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 - **Use Plan Mode** for any multi-step change. Present the plan and get approval before editing.
 - Follow `IMPLEMENTATION_PLAN.md` for the current stabilization work.
 - After changes: confirm the app imports without env vars set, and that CI stays green.
+- **Railway MCP server** — `.mcp.json` registers the `railway` server (HTTP,
+  `https://mcp.railway.com`) at project scope, so Claude Code sessions can manage the Railway
+  deployment directly. The file stores **no credentials**: authentication is per-session OAuth
+  (run `/mcp` to connect), consistent with the golden rule that the Railway token is never
+  stored. (2026-07-17)
