@@ -171,6 +171,13 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   separate approved-later step.
 - No tagged releases; stale open PRs/branches.
 
+## Token rotation
+
+- `docs/TOKEN_ROTATION_RUNBOOK.md` (2026-07-17) is the prepared, NOT-yet-executed procedure for
+  rotating the Telegram bot token (the move that silences the ghost). Key fact it encodes: the
+  bot does NOT set its own webhook on startup, so rotation = BotFather revoke → update
+  `TELEGRAM_BOT_TOKEN` in Railway → redeploy → ONE manual `setWebhook` call → checklist.
+
 ## Commands
 
 ```bash
