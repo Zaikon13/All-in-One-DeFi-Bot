@@ -8,7 +8,6 @@
 | Service      | Type   | Status              | Start Command                                      | Purpose                                      | Notes |
 |--------------|--------|---------------------|----------------------------------------------------|----------------------------------------------|-------|
 | **bot**      | Web    |  Online (Primary) | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` | Telegram Webhook + Commands                  | **Active Webhook** |
-| **web-gpl6** | Web    | Disabled            | `uvicorn app.main:app`                             | Redundant                                    | Disabled in `railway.toml` |
 | **worker**   | Worker |  Online           | `python -u worker.py`                              | Background jobs (Dexscreener, alerts)        | - |
 
 **Primary Service:** `bot`  
@@ -48,7 +47,6 @@
 | Issue                              | Severity | Recommendation |
 |------------------------------------|----------|----------------|
 | No persistent volume               | Medium   | Add Railway Volume at `/app/data` |
-| `web-gpl6` still exists (disabled) | Low      | Remove from `railway.toml` |
 | `monitor_wallet()` is minimal      | Medium   | Improve in `worker.py` |
 | Legacy `telegram/handlers.py`      | Low      | Can be archived later |
 

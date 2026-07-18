@@ -10,13 +10,6 @@ name = "bot"
 type = "web"
 startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 
-# Temporarily disabled redundant web service that was overwriting webhook
-[[services]]
-name = "web-gpl6"
-type = "web"
-startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
-deployment = { disabled = true }
-
 [[services]]
 name = "worker"
 type = "worker"
