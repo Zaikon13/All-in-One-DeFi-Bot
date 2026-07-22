@@ -14,14 +14,15 @@ a verification you can see with your own eyes.
 
 ## The one fact that makes this safe
 
-**This bot does NOT set its own Telegram webhook on startup.** (Verified in code
-2026-07-17: no `set_webhook` / `setWebhook` call exists in `app/`, `core/`, or
-`worker.py`.) The webhook was configured manually once, long ago. That means:
+**UPDATE 2026-07-18: the bot NOW sets its own webhook on startup** (webhook
+self-heal, `app/main.py` + hourly worker guard). That changes this runbook for
+the better:
 
-- Redeploying with a new token does **not** fix the webhook by itself.
-- After rotating, there is exactly **one manual call** to make (Step 4).
-- If the bot is ever "deaf" after a rotation, it is ALWAYS this: the webhook is
-  still bound to the old token's URL. Step 4 cures it in one line.
+- Redeploying with the new token **auto-registers the webhook** — Step 4 below
+  is now a VERIFICATION step, not a requirement (run it anyway; read-back is law).
+- The worker's hourly guard also restores the webhook within ≤60 min if anything
+  drifts, and alerts "🛡 Webhook drift detected and auto-restored".
+- If the bot is ever "deaf" after rotation, Step 4 still cures it in one line.
 
 The webhook URL is tied to the TOKEN, not the domain: Telegram routes updates for
 YOUR bot to whatever URL was registered *with that token*. A new token starts with

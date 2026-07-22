@@ -13,6 +13,7 @@ import httpx
 
 from core.log_redaction import install_log_redaction
 from core import paper_trading as paper
+from core.telegram_webhook import ensure_webhook, CANONICAL_WEBHOOK_URL
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -835,6 +836,42 @@ async def scheduled_scan_digest():
             logger.error(f"scanner digest error (window already rolled): {e}")
 
 
+# Webhook self-heal, part (b) (2026-07-18): hourly drift guard. If the webhook
+# URL differs from the expected one (env WEBHOOK_EXPECTED_URL, default the
+# canonical bot domain), restore it and send ONE alert. Never crashes the loop.
+WEBHOOK_GUARD_ENABLED = os.getenv("WEBHOOK_GUARD_ENABLED", "true").lower() == "true"
+WEBHOOK_GUARD_INTERVAL_MIN = _env_float("WEBHOOK_GUARD_INTERVAL_MIN", 60.0)
+WEBHOOK_EXPECTED_URL = os.getenv("WEBHOOK_EXPECTED_URL", CANONICAL_WEBHOOK_URL)
+
+
+async def webhook_guard():
+    """Hourly getWebhookInfo; on drift, re-set + read-back + one Telegram alert:
+    '🛡 Webhook drift detected and auto-restored'. First check ~90s after boot
+    (catches deploy-time drift fast), then every WEBHOOK_GUARD_INTERVAL_MIN."""
+    if not WEBHOOK_GUARD_ENABLED:
+        logger.info("webhook guard: disabled (WEBHOOK_GUARD_ENABLED=false)")
+        return
+    if not TELEGRAM_BOT_TOKEN:
+        logger.info("webhook guard: no TELEGRAM_BOT_TOKEN; not guarding")
+        return
+    logger.info(f"webhook guard: on — every {WEBHOOK_GUARD_INTERVAL_MIN:g} min, expecting {WEBHOOK_EXPECTED_URL}")
+    await asyncio.sleep(90)
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                outcome = await ensure_webhook(client, TELEGRAM_BOT_TOKEN, WEBHOOK_EXPECTED_URL)
+            if outcome == "restored":
+                await send_telegram("🛡 Webhook drift detected and auto-restored")
+                logger.warning("webhook guard: drift RESTORED (read-back confirmed)")
+            elif outcome == "failed":
+                logger.error("webhook guard: restore unconfirmed (set may have succeeded); retrying next cycle")
+            elif outcome == "skipped":
+                logger.info("webhook guard: could not read webhook state; skipping cycle")
+        except Exception as e:
+            logger.error(f"webhook guard error (loop continues): {e}")
+        await asyncio.sleep(max(60.0, WEBHOOK_GUARD_INTERVAL_MIN * 60.0))
+
+
 async def monitor_wallet():
     if not WALLET_ADDRESS:
         await asyncio.sleep(WALLET_CHECK_INTERVAL)
@@ -1049,7 +1086,8 @@ async def main():
         monitor_wallet(),
         scheduled_eod_pnl(),
         portfolio_watch(),
-        scheduled_scan_digest()
+        scheduled_scan_digest(),
+        webhook_guard()
     )
 
 

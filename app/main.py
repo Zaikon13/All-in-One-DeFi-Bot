@@ -15,6 +15,7 @@ import json
 from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 from core.wallet import get_wallet_balances, get_recent_transactions
 from core.log_redaction import install_log_redaction
+from core.telegram_webhook import resolve_webhook_url, ensure_webhook
 
 # Config
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -26,6 +27,29 @@ RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
 install_log_redaction()  # Part D: strip apikey= from logs (log-only)
 
 app = FastAPI(title="All-in-One-DeFi-Bot")
+
+# Webhook self-heal, part (a) (2026-07-18): the bot claims its own webhook on
+# every startup, so a deploy/restart can never leave commands pointed at a dead
+# service. Target precedence: WEBHOOK_URL > APP_URL > RAILWAY_PUBLIC_DOMAIN
+# (auto-set by Railway on web services) > canonical bot domain. Env-gated;
+# defensive; read-back confirmed (a write isn't DONE until read back).
+WEBHOOK_AUTOSET_ENABLED = os.getenv("WEBHOOK_AUTOSET_ENABLED", "true").lower() == "true"
+
+
+@app.on_event("startup")
+async def _autoset_webhook():
+    if not (WEBHOOK_AUTOSET_ENABLED and BOT_TOKEN):
+        logging.info("[webhook] startup autoset disabled or no token; skipping")
+        return
+    target = resolve_webhook_url(os.getenv("WEBHOOK_URL"), os.getenv("APP_URL"),
+                                 os.getenv("RAILWAY_PUBLIC_DOMAIN"))
+    try:
+        async with httpx.AsyncClient() as client:
+            outcome = await ensure_webhook(client, BOT_TOKEN, target)
+        logging.info(f"[webhook] startup autoset outcome: {outcome}"
+                     + (" (restored + confirmed by read-back)" if outcome == "restored" else ""))
+    except Exception as e:
+        logging.error(f"[webhook] startup autoset error (non-fatal): {e}")
 
 # --- Paper-state mirror (2026-07-17, simulation only) ---------------------------
 # The /data volume attaches only to the worker, so the bot cannot read

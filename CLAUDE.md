@@ -96,7 +96,20 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   in `paper_state.json` on the /data volume (atomic writes, corrupt-file-safe loads, survives
   redeploys). Decision logic is pure (`should_enter`/`check_exit`/close math) and unit-tested
   offline. Expectation: with the 🔥-tier entry bar, days may pass before the first simulated
-  trade — patience IS the strategy. **/paper + mirror (2026-07-17):** the /data volume attaches
+  trade — patience IS the strategy. **Webhook self-heal (2026-07-18):** after the webhook was
+  found pointing at the deleted web-gpl6 (404, pending updates stuck), two defenses ship:
+  (a) the bot sets its OWN webhook on startup (`app/main.py` startup hook, gated by
+  `WEBHOOK_AUTOSET_ENABLED`, default on; target = `WEBHOOK_URL` > `APP_URL` >
+  `RAILWAY_PUBLIC_DOMAIN` > canonical bot domain); (b) the worker runs `webhook_guard`
+  (gated by `WEBHOOK_GUARD_ENABLED`, default on) every `WEBHOOK_GUARD_INTERVAL_MIN`
+  (default 60): on drift vs `WEBHOOK_EXPECTED_URL` (default canonical) it re-sets, READS
+  BACK to confirm, and sends one alert '🛡 Webhook drift detected and auto-restored'.
+  Logic is pure + offline-tested (`core/telegram_webhook.py`); a set without a confirming
+  read-back reports 'failed', never success. Caveats: any SECOND web service running this
+  codebase must set `WEBHOOK_AUTOSET_ENABLED=false` (or an explicit `WEBHOOK_URL`), else it
+  re-claims the webhook on each of its restarts until the guard heals it (≤1h); and
+  `WEBHOOK_EXPECTED_URL` (worker) must equal the bot's resolved target, or the pair will trade
+  the webhook once per bot restart (alerting each time). Defaults converge today. **/paper + mirror (2026-07-17):** the /data volume attaches
   ONLY to the worker, so the bot cannot read `paper_state.json`; after every engine step the
   worker POSTs a compact state mirror to the bot's `POST /internal/paper-state` (auth =
   sha256 of the shared `TELEGRAM_BOT_TOKEN`, token never sent; in-memory, refills ≤1 cycle
@@ -176,6 +189,10 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 - **Financial-decision-adjacent logic → flag for human review before shipping.** Simulate / dry-run any future on-chain action.
 - **Never store the Railway token.** It is pasted per session.
 - **Update the SOT docs in the same change as the code** so they stop drifting.
+- **No write-action (delete, deploy, settings change, webhook change) is DONE until a read-back
+  check confirms the new state. Staged ≠ applied. Reported ≠ real.** (2026-07-18)
+- **Before editing anything, verify the local clone matches origin/main (git fetch + SHA compare).
+  Never edit or commit from a stale checkout.** (2026-07-18)
 
 ## Known issues / gotchas (verify each is still present before acting)
 
@@ -202,10 +219,11 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 
 ## Token rotation
 
-- `docs/TOKEN_ROTATION_RUNBOOK.md` (2026-07-17) is the prepared, NOT-yet-executed procedure for
-  rotating the Telegram bot token (the move that silences the ghost). Key fact it encodes: the
-  bot does NOT set its own webhook on startup, so rotation = BotFather revoke → update
-  `TELEGRAM_BOT_TOKEN` in Railway → redeploy → ONE manual `setWebhook` call → checklist.
+- `docs/TOKEN_ROTATION_RUNBOOK.md` (2026-07-17, amended 2026-07-18) is the prepared,
+  NOT-yet-executed procedure for rotating the Telegram bot token. Since 2026-07-18 the bot
+  DOES set its own webhook on startup (see webhook self-heal), so rotation = BotFather revoke
+  → update `TELEGRAM_BOT_TOKEN` in Railway → redeploy (webhook auto-registers with the new
+  token) → the runbook's manual `setWebhook` step becomes a verification, not a requirement.
 
 ## Commands
 
@@ -240,6 +258,8 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `PORTFOLIO_WATCH_ENABLED` | worker (optional) | portfolio price-move alerts on held tokens (default true) |
 | `PORTFOLIO_WATCH_INTERVAL_MIN`, `PORTFOLIO_MOVE_THRESHOLD_PCT`, `PORTFOLIO_MIN_USD`, `PORTFOLIO_ALERT_COOLDOWN_MIN` | worker (optional) | check cadence min / alert threshold % vs rolling baseline / min holding USD watched / per-token alert cooldown min (defaults 5 / 10 / 5 / 60) |
 | `PAPER_TRADING_ENABLED` | worker (optional) | paper-trading simulation on/off (default true; simulation only, no real orders possible) |
+| `WEBHOOK_AUTOSET_ENABLED` | bot (optional) | bot claims its own webhook on startup (default true) |
+| `WEBHOOK_GUARD_ENABLED`, `WEBHOOK_GUARD_INTERVAL_MIN`, `WEBHOOK_EXPECTED_URL` | worker (optional) | hourly drift guard on/off / cadence min / expected URL (defaults true / 60 / canonical bot domain) |
 | `PAPER_MIRROR_URL` | worker (optional) | where the worker pushes the /paper state mirror (default the bot's public /internal/paper-state) |
 | `PAPER_STARTING_USD`, `PAPER_ENTRY_SCORE`, `PAPER_POSITION_USD`, `PAPER_MAX_OPEN`, `PAPER_TP_PCT`, `PAPER_SL_PCT`, `PAPER_MAX_HOLD_HOURS` | worker (optional) | simulated capital / entry score bar / position size / max concurrent / take-profit % / stop-loss % / time-stop hours (defaults 1000 / 70 / 50 / 5 / 25 / 15 / 24) |
 | `SCAN_DIGEST_ENABLED`, `SCAN_DIGEST_HOUR` | worker (optional) | daily scanner-funnel digest on/off + Athens hour (default true / 21) |
