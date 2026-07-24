@@ -159,7 +159,8 @@ def should_enter(score, price, open_count, balance_usd, already_open,
 
 def open_position(state: dict, pair_address: str, symbol: str, token_address: str,
                   price: float, score: float, now_iso: str,
-                  position_usd: float | None = None, chain: str = "cro") -> dict:
+                  position_usd: float | None = None, chain: str = "cro",
+                  flags: dict | None = None) -> dict:
     """Mutates state: deduct position size, append the open position. Returns it.
     2026-07-23: records `chain` and preserves pair_address case (base58 Solana
     addresses are case-sensitive; exit pricing queries GeckoTerminal by this)."""
@@ -174,6 +175,7 @@ def open_position(state: dict, pair_address: str, symbol: str, token_address: st
         "usd_in": usd,
         "score": round(float(score), 1),
         "opened_at": now_iso,
+        "flags": dict(flags or {}),  # e.g. {"suspicious":bool,"implausible_liq":bool} for later comparison
     }
     state["balance_usd"] -= usd
     state["open"].append(pos)

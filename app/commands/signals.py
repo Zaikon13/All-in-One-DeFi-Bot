@@ -64,10 +64,11 @@ def render_signals(signals: dict | None, now_utc: datetime | None = None) -> str
                     f"{f.get('matured', 0)}, passed {f.get('passed', 0)})\n")
         else:
             for r in rows:
+                flag = " · ⚠️ 0 sells — possible honeypot" if r.get("suspicious") else ""
                 msg += (f"- {r.get('tier', '')} **{r.get('symbol', '?')}/{r.get('quote', '?')}** "
                         f"score {r.get('score', 0):.0f} · {r.get('age_h', 0)}h · "
                         f"liq {_fmt_usd(r.get('liquidity'))} · vol1h {_fmt_usd(r.get('vol1h'))} · "
-                        f"{r.get('buys', 0)}/{r.get('sells', 0)} b/s · {r.get('dex', '?')}\n")
+                        f"{r.get('buys', 0)}/{r.get('sells', 0)} b/s · {r.get('dex', '?')}{flag}\n")
         msg += "\n"
 
     # per-chain funnel line (this window)

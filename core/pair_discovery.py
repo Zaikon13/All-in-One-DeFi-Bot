@@ -63,6 +63,23 @@ def min_score_for(chain: str, global_default: float) -> float:
     return _env_float(f"PAIR_MIN_SCORE_{_chain_env_suffix(chain)}", global_default)
 
 
+# --- Risk flags (2026-07-24): pure, tested; do NOT change scoring math ------------
+HONEYPOT_MIN_BUYS = int(_env_float("HONEYPOT_MIN_BUYS", 5.0))
+
+
+def is_honeypot_suspect(buys, sells, min_buys=None) -> bool:
+    """True when 1h sells == 0 and 1h buys >= HONEYPOT_MIN_BUYS. 'Many buys, no
+    sells' is the classic buyable-but-not-sellable honeypot signature — the same
+    pattern the scorer rewards as max buy-pressure, so it must be flagged."""
+    min_buys = HONEYPOT_MIN_BUYS if min_buys is None else min_buys
+    try:
+        b = int(buys or 0)
+        s = int(sells or 0)
+    except (TypeError, ValueError):
+        return False
+    return s == 0 and b >= min_buys
+
+
 def _f(x, default=0.0):
     try:
         v = float(x)

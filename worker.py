@@ -601,6 +601,12 @@ async def _push_paper_mirror(client, state: dict):
 paper_state: dict | None = None
 
 
+# Risk-flag paper-entry gates (2026-07-24). Honeypot default OFF — we want the
+# evidence, not censorship; the position simply records the flag. Fake-liquidity
+# gate (Part 4) defaults ON — a fake-depth pool would poison the simulation.
+HONEYPOT_BLOCK_PAPER_ENTRY = os.getenv("HONEYPOT_BLOCK_PAPER_ENTRY", "false").lower() in ("1", "true", "yes")
+
+
 async def _paper_step(client, fresh, now_utc):
     """One engine step per polling cycle: entries from this cycle's alerted pairs,
     then exit checks for open positions. Own try/except — a paper bug must never
@@ -635,9 +641,14 @@ async def _paper_step(client, fresh, now_utc):
                 if sc["score"] >= paper.PAPER_ENTRY_SCORE:
                     logger.info(f"paper: entry skipped for {base.get('symbol','?')} ({chain}): {reason}")
                 continue
+            suspicious = bool(pair.get("suspicious"))
+            if suspicious and HONEYPOT_BLOCK_PAPER_ENTRY:
+                logger.info(f"paper: entry blocked for {base.get('symbol','?')} ({chain}): honeypot-suspect (0 sells)")
+                continue
             sym = paper.sanitize_symbol(f"{base.get('symbol','?')}/{(pair.get('quoteToken') or {}).get('symbol','?')}")
             pos = paper.open_position(paper_state, pool_addr, sym, token_addr, price,
-                                      sc["score"], now_utc.isoformat(), chain=chain)
+                                      sc["score"], now_utc.isoformat(), chain=chain,
+                                      flags={"suspicious": suspicious})
             open_ids.add(dedup_key)
             paper.save_state(paper_state)
             await send_telegram(
@@ -740,6 +751,8 @@ async def poll_new_pools():
                         if liq < min_liq:
                             continue
                         sc = score_pair(norm, liq)  # scoring math UNCHANGED
+                        # risk flags (2026-07-24): informational only, scoring untouched
+                        norm["suspicious"] = disc.is_honeypot_suspect(sc["buys"], sc["sells"])
                         sym = (norm.get("baseToken") or {}).get("symbol", "?")
                         if cy_best is None or sc["score"] > cy_best[0]:
                             cy_best = (sc["score"], sym)
@@ -764,6 +777,7 @@ async def poll_new_pools():
                                 "tier": "🔥" if sc["score"] >= PAIR_SCORE_STRONG else "👀",
                                 "age_h": round(age_h, 1), "liquidity": liq,
                                 "vol1h": sc["vol1h"], "buys": sc["buys"], "sells": sc["sells"],
+                                "suspicious": bool(norm.get("suspicious")),
                                 "ts": now_utc.isoformat(),
                             })
                         else:
@@ -808,7 +822,8 @@ async def poll_new_pools():
                             f"- Price: ${norm.get('priceUsd') or 'N/A'} ({sc['chg1h']:+.1f}% 1h)\n"
                             f"- Liquidity: ${liq:,.0f} | Vol 1h: ${sc['vol1h']:,.0f}\n"
                             f"- Buys/Sells 1h: {sc['buys']}/{sc['sells']}\n"
-                            f"- Age: {age_h:.1f}h\n"
+                            + ("⚠️ 0 sells — possible honeypot\n" if norm.get("suspicious") else "")
+                            + f"- Age: {age_h:.1f}h\n"
                             f"[View on GeckoTerminal]({norm.get('url', '#')})"
                         )
                         sections.append(section)
