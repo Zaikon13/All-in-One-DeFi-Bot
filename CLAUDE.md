@@ -211,6 +211,10 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   worker's Athens-scheduled EOD send, so the report covers the owner's local day. (2026-07-05)
 - **Telegram formatting** — Markdown v1 only: `**bold**` and simple `-`/`•` bullets. No tables, no code blocks (they break Telegram rendering).
 - **Never hardcode or commit secrets.** Secrets live in Railway variables and GitHub secrets only.
+- **Outbound Telegram is logged.** Every send (`worker.send_telegram`, `app.main.send_telegram_message`,
+  `core.wallet.send_telegram_alert`) logs the rendered text at INFO with prefix `[tg-out]`, truncated
+  (`core.log_redaction.tg_out_log`, `TG_OUT_MAX` 600) and redacted (apikey/api_key stripped) so the
+  bot's conversation is readable from Railway logs but no token/key can appear (2026-07-23).
 - **Financial-decision-adjacent logic → flag for human review before shipping.** Simulate / dry-run any future on-chain action.
 - **Never store the Railway token.** It is pasted per session.
 - **Update the SOT docs in the same change as the code** so they stop drifting.

@@ -14,7 +14,7 @@ import json
 # (Review Agent 2026-06-04: switch for timeout/quality support; balances/tx for live grok-analyze)
 from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 from core.wallet import get_wallet_balances, get_recent_transactions
-from core.log_redaction import install_log_redaction
+from core.log_redaction import install_log_redaction, tg_out_log
 from core.telegram_webhook import resolve_webhook_url, ensure_webhook
 
 # Config
@@ -74,6 +74,7 @@ def get_signals_mirror() -> dict | None:
 
 
 async def send_telegram_message(text: str, chat_id: str = None, reply_markup=None):
+    tg_out_log(logging.getLogger("app.main"), text)
     cid = chat_id or CHAT_ID
     if not (BOT_TOKEN and cid):
         return

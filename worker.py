@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from core.log_redaction import install_log_redaction
+from core.log_redaction import install_log_redaction, tg_out_log
 from core import paper_trading as paper
 from core.telegram_webhook import ensure_webhook, CANONICAL_WEBHOOK_URL
 from core import pair_discovery as disc
@@ -357,6 +357,7 @@ def _is_new_or_stale(pair_address: str) -> bool:
 
 
 async def send_telegram(text: str):
+    tg_out_log(logger, text)
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"

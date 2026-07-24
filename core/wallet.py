@@ -206,6 +206,11 @@ async def note_fetch_failure(client=None):
 
 async def send_telegram_alert(text, client=None):
     """Defensive system-alert send (mirrors worker.send_telegram). Never raises."""
+    try:
+        from core.log_redaction import tg_out_log
+        tg_out_log(logging.getLogger("core.wallet"), text)
+    except Exception:
+        pass
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not (token and chat_id):

@@ -38,6 +38,23 @@ class RedactingFilter(logging.Filter):
         return True
 
 
+TG_OUT_MAX = 600  # truncate logged outbound message to a sane length
+
+
+def tg_out_log(logger, text) -> None:
+    """Log a rendered outbound Telegram message at INFO with the stable prefix
+    `[tg-out]`, truncated and REDACTED (apikey/api_key stripped) so no token or
+    key can ever appear in the logs. Never raises."""
+    try:
+        s = redact(str(text))
+        s = s.replace("\n", " ").strip()
+        if len(s) > TG_OUT_MAX:
+            s = s[:TG_OUT_MAX] + "…"
+        logger.info(f"[tg-out] {s}")
+    except Exception:
+        pass
+
+
 def install_log_redaction():
     """Attach the redacting filter to the root logger's handlers and quiet httpx's
     URL-logging. Idempotent. Call once at each entrypoint (app/main.py, worker.py)."""
