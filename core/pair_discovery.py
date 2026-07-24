@@ -182,6 +182,66 @@ def classify_pool(created_at, now_utc, min_age_minutes: float,
     return "mature"
 
 
+def parse_pool_prices(body: dict) -> dict:
+    """Map a GeckoTerminal pools/multi response to {pool_address: price_usd},
+    keyed by BOTH the original and the lowercased address. Base58 Solana
+    addresses are case-sensitive while EVM/Sui hex are not — keying both makes
+    the position lookup robust regardless of how the address was stored. Pure;
+    skips pools with no usable positive price. Never raises."""
+    out = {}
+    for pool in ((body or {}).get("data") or []):
+        a = pool.get("attributes") if isinstance(pool, dict) else None
+        if not isinstance(a, dict):
+            continue
+        addr = (a.get("address") or "").strip()
+        if not addr:
+            continue
+        try:
+            p = float(a.get("base_token_price_usd"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(p) or p <= 0:
+            continue
+        out[addr] = p
+        out[addr.lower()] = p
+    return out
+
+
+async def fetch_pool_prices(client, network: str, addresses: list,
+                            max_retries: int = 3) -> dict:
+    """Current base-token USD price per pool via pools/multi (up to 50 addresses
+    per call), for one chain. Returns {address: price} (both cases). Exponential
+    429 backoff; never raises -> partial/empty dict on failure. This is the paper
+    engine's exit-pricing feed (one call per chain per cycle, never per-position).
+    """
+    out = {}
+    addrs = [a for a in (addresses or []) if a]
+    for i in range(0, len(addrs), 50):
+        chunk = addrs[i:i + 50]
+        url = f"{GECKOTERMINAL_BASE}/networks/{network}/pools/multi/{','.join(chunk)}"
+        for attempt in range(max_retries + 1):
+            try:
+                r = await client.get(url, headers=_UA, timeout=20.0)
+                if r.status_code == 429:
+                    if attempt < max_retries:
+                        await asyncio.sleep(1.0 * (2 ** attempt))
+                        continue
+                    logging.warning(f"[discovery] {network} pools/multi 429 after retries")
+                    return out
+                if r.status_code != 200:
+                    logging.warning(f"[discovery] {network} pools/multi HTTP {r.status_code}")
+                    break
+                out.update(parse_pool_prices(r.json()))
+                break
+            except Exception as e:
+                if attempt < max_retries:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+                    continue
+                logging.warning(f"[discovery] {network} pools/multi failed: {type(e).__name__}")
+                break
+    return out
+
+
 async def fetch_new_pools(client, network: str, max_retries: int = 3) -> list:
     """GET new_pools for one network. Returns a list of normalized pool dicts
     (via parse_gt_pool), or [] on any failure. Exponential backoff on HTTP 429.

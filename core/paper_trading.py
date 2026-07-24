@@ -159,11 +159,14 @@ def should_enter(score, price, open_count, balance_usd, already_open,
 
 def open_position(state: dict, pair_address: str, symbol: str, token_address: str,
                   price: float, score: float, now_iso: str,
-                  position_usd: float | None = None) -> dict:
-    """Mutates state: deduct position size, append the open position. Returns it."""
+                  position_usd: float | None = None, chain: str = "cro") -> dict:
+    """Mutates state: deduct position size, append the open position. Returns it.
+    2026-07-23: records `chain` and preserves pair_address case (base58 Solana
+    addresses are case-sensitive; exit pricing queries GeckoTerminal by this)."""
     usd = PAPER_POSITION_USD if position_usd is None else position_usd
     pos = {
-        "pair_address": (pair_address or "").lower(),
+        "chain": chain or "cro",
+        "pair_address": (pair_address or "").strip(),
         "symbol": symbol or "?",
         "token_address": (token_address or "").lower(),
         "entry_price": float(price),
@@ -234,6 +237,16 @@ def close_position(state: dict, position: dict, exit_price: float, reason: str,
                      if p.get("pair_address") != position.get("pair_address")]
     state["closed"].append(closed)
     return closed
+
+
+def group_open_by_chain(open_positions: list) -> dict:
+    """Pure: {chain -> [positions]} for batched per-chain exit pricing (default
+    missing chain to 'cro' so legacy positions keep pricing)."""
+    out = {}
+    for pos in (open_positions or []):
+        if isinstance(pos, dict):
+            out.setdefault(pos.get("chain") or "cro", []).append(pos)
+    return out
 
 
 def win_rate(state: dict):

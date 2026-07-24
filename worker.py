@@ -573,49 +573,51 @@ async def _paper_step(client, fresh, now_utc):
             paper_state = paper.load_state()
             logger.info(f"paper: state loaded — {paper.paper_summary_line(paper_state)}")
 
-        # --- entries: alerted pairs at/above the entry bar ---
-        # 2026-07-23: exit pricing is Cronos-only (Dexscreener token endpoint), so
-        # Part 1 gates paper ENTRIES to Cronos — a Solana/Sui position could never
-        # be priced or closed and would wedge a slot forever. Part 2 adds per-chain
-        # GeckoTerminal exit pricing and lifts this gate.
-        open_ids = {p.get("pair_address") for p in paper_state["open"]}
+        # --- entries: alerted pairs (ANY enabled chain) at/above the entry bar ---
+        # 2026-07-23 (Part 2): entries accept any chain; the position records its
+        # chain and pool address so exits price via GeckoTerminal per chain.
+        open_ids = {f"{p.get('chain') or 'cro'}:{(p.get('pair_address') or '').lower()}"
+                    for p in paper_state["open"]}
         for pair, liq, age_h, sc in fresh:
-            if (pair.get("chain") or "cro") != "cro":
-                continue
-            addr = (pair.get("pairAddress") or "").lower()
+            chain = pair.get("chain") or "cro"
+            pool_addr = (pair.get("pairAddress") or "").strip()
             base = pair.get("baseToken") or {}
             token_addr = (base.get("address") or "").lower()
+            dedup_key = f"{chain}:{pool_addr.lower()}"
             try:
                 price = float(pair.get("priceUsd") or 0)
             except (TypeError, ValueError):
                 price = 0.0
             ok, reason = paper.should_enter(
                 sc["score"], price, len(paper_state["open"]),
-                paper_state["balance_usd"], already_open=addr in open_ids)
+                paper_state["balance_usd"], already_open=dedup_key in open_ids)
             if not ok:
                 if sc["score"] >= paper.PAPER_ENTRY_SCORE:
-                    logger.info(f"paper: entry skipped for {base.get('symbol','?')}: {reason}")
+                    logger.info(f"paper: entry skipped for {base.get('symbol','?')} ({chain}): {reason}")
                 continue
             sym = paper.sanitize_symbol(f"{base.get('symbol','?')}/{(pair.get('quoteToken') or {}).get('symbol','?')}")
-            pos = paper.open_position(paper_state, addr, sym, token_addr, price,
-                                      sc["score"], now_utc.isoformat())
-            open_ids.add(addr)
+            pos = paper.open_position(paper_state, pool_addr, sym, token_addr, price,
+                                      sc["score"], now_utc.isoformat(), chain=chain)
+            open_ids.add(dedup_key)
             paper.save_state(paper_state)
             await send_telegram(
-                f"🧪 **PAPER BUY** — {sym}\n"
+                f"🧪 **PAPER BUY** — {sym} [{_chain_label(chain)}]\n"
                 f"- Entry: {_fmt_price(pos['entry_price'])} · size ${pos['usd_in']:,.0f}\n"
                 f"- Reason: score {sc['score']:.0f} >= {paper.PAPER_ENTRY_SCORE:.0f} (🔥 entry bar)\n"
                 f"- Simulated balance: ${paper_state['balance_usd']:,.2f}"
             )
-            logger.info(f"paper: BUY {sym} @ {pos['entry_price']} (score {sc['score']:.0f})")
+            logger.info(f"paper: BUY {sym} [{chain}] @ {pos['entry_price']} (score {sc['score']:.0f})")
 
-        # --- exits: one batched Dexscreener call for all open positions ---
+        # --- exits: one GeckoTerminal pools/multi call PER CHAIN (never per-position) ---
         if paper_state["open"]:
-            from core.wallet import get_token_prices  # lazy: protects worker boot
-            addrs = [p["token_address"] for p in paper_state["open"] if p.get("token_address")]
-            prices = await get_token_prices(client, addrs) if addrs else {}
+            prices = {}  # pool_address (either case) -> price_usd
+            for chain, positions in paper.group_open_by_chain(paper_state["open"]).items():
+                addrs = [p.get("pair_address") for p in positions if p.get("pair_address")]
+                if addrs:
+                    prices.update(await disc.fetch_pool_prices(client, chain, addrs))
             for pos in list(paper_state["open"]):
-                cp = prices.get(pos.get("token_address"))
+                pa = pos.get("pair_address") or ""
+                cp = prices.get(pa) or prices.get(pa.lower())
                 res = paper.check_exit(pos, cp, now_utc)
                 if res is None:
                     if cp is None:
@@ -628,7 +630,7 @@ async def _paper_step(client, fresh, now_utc):
                 paper.save_state(paper_state)
                 arrow = "📈" if closed["pnl_usd"] >= 0 else "📉"
                 await send_telegram(
-                    f"🧪 **PAPER SELL** — {closed['symbol']} ({reason})\n"
+                    f"🧪 **PAPER SELL** — {closed['symbol']} [{_chain_label(closed.get('chain','cro'))}] ({reason})\n"
                     f"- {_fmt_price(closed['entry_price'])} → {_fmt_price(closed['exit_price'])} "
                     f"({closed['pnl_pct']:+.1f}%) {arrow}\n"
                     f"- Realized: {closed['pnl_usd']:+,.2f} USD on ${closed['usd_in']:,.0f}\n"

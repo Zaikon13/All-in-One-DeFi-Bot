@@ -105,9 +105,13 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   price NEVER exits (hold + log only). Every entry/exit sends ONE 🧪-marked Telegram note with
   pair, price, size, reason, and running simulated balance. State (balance/open/closed) lives
   in `paper_state.json` on the /data volume (atomic writes, corrupt-file-safe loads, survives
-  redeploys). Decision logic is pure (`should_enter`/`check_exit`/close math) and unit-tested
-  offline. Expectation: with the 🔥-tier entry bar, days may pass before the first simulated
-  trade — patience IS the strategy. **Webhook self-heal (2026-07-18):** after the webhook was
+  redeploys). **Multi-chain (2026-07-23):** entries accept qualifying pools from ANY enabled chain
+  (each position records its chain + pool address); exits price via GeckoTerminal
+  `pools/multi/{addresses}` grouped BY CHAIN — one call per chain per cycle, never per-position;
+  a missing price still holds (never exits on missing data). Simulation only — no keys, no signing,
+  no spending on any chain. Decision logic is pure (`should_enter`/`check_exit`/close math/
+  `group_open_by_chain`) and unit-tested offline. Expectation: with the 🔥-tier entry bar, days may
+  pass before the first simulated trade — patience IS the strategy. **Webhook self-heal (2026-07-18):** after the webhook was
   found pointing at the deleted web-gpl6 (404, pending updates stuck), two defenses ship:
   (a) the bot sets its OWN webhook on startup (`app/main.py` startup hook, gated by
   `WEBHOOK_AUTOSET_ENABLED`, default on; target = `WEBHOOK_URL` > `APP_URL` >
