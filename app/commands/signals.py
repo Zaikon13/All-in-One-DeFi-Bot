@@ -65,6 +65,8 @@ def render_signals(signals: dict | None, now_utc: datetime | None = None) -> str
         else:
             for r in rows:
                 flag = " · ⚠️ 0 sells — possible honeypot" if r.get("suspicious") else ""
+                if r.get("implausible_liq"):
+                    flag += " · ⚠️ implausible liquidity"
                 msg += (f"- {r.get('tier', '')} **{r.get('symbol', '?')}/{r.get('quote', '?')}** "
                         f"score {r.get('score', 0):.0f} · {r.get('age_h', 0)}h · "
                         f"liq {_fmt_usd(r.get('liquidity'))} · vol1h {_fmt_usd(r.get('vol1h'))} · "

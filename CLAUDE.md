@@ -84,7 +84,14 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   (default 5). It is INFORMATIONAL — the score math is untouched; the flag is labelled in the pool
   alert and in `/signals` (`⚠️ 0 sells — possible honeypot`) and recorded on any paper position it
   opens. Paper entry is NOT blocked by default (`HONEYPOT_BLOCK_PAPER_ENTRY`, default false — we want
-  the evidence, not censorship); set it true to skip suspect entries. **Portfolio-watch
+  the evidence, not censorship); set it true to skip suspect entries. **Fake-liquidity sanity flag
+  (2026-07-24):** a pool can report an enormous `reserve_in_usd` while almost nothing trades through it —
+  inflated liquidity that earns full liquidity points and would poison paper evidence. `core.pair_discovery.is_implausible_liquidity`
+  (pure, unit-tested) raises `implausible_liq` when reserve > `LIQ_SANITY_MAX_USD` (default $1,000,000) AND
+  1h volume < `LIQ_SANITY_MIN_VOL_USD` (default $10,000). Scoring is untouched; labelled in the alert and
+  `/signals` (`⚠️ implausible liquidity`) and recorded on paper positions. UNLIKE the honeypot flag it DOES
+  gate paper entry by default (`LIQ_SANITY_BLOCK_PAPER_ENTRY`, default **true** — a fake-depth pool would
+  poison the simulation); the implausible-liquidity block is checked before the honeypot block in `_paper_step`. **Portfolio-watch
   (2026-07-06):** `worker.portfolio_watch` (gated by `PORTFOLIO_WATCH_ENABLED`, default on)
   checks the owner's holdings every `PORTFOLIO_WATCH_INTERVAL_MIN` (default 5 min) by reusing
   `core.wallet.get_wallet_balances` (balances + Dexscreener pricing — no duplicated logic;
@@ -314,6 +321,8 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `PORTFOLIO_WATCH_INTERVAL_MIN`, `PORTFOLIO_MOVE_THRESHOLD_PCT`, `PORTFOLIO_MIN_USD`, `PORTFOLIO_ALERT_COOLDOWN_MIN` | worker (optional) | check cadence min / alert threshold % vs rolling baseline / min holding USD watched / per-token alert cooldown min (defaults 5 / 10 / 5 / 60) |
 | `HONEYPOT_MIN_BUYS` | worker (optional) | 1h buys threshold above which a 0-sell pool is flagged honeypot-suspect (default 5) |
 | `HONEYPOT_BLOCK_PAPER_ENTRY` | worker (optional) | skip paper entry on honeypot-suspect pools (default **false** — record the flag, keep the evidence) |
+| `LIQ_SANITY_MAX_USD`, `LIQ_SANITY_MIN_VOL_USD` | worker (optional) | fake-liquidity flag: implausible when reserve > MAX **and** 1h vol < MIN_VOL (defaults 1,000,000 / 10,000) |
+| `LIQ_SANITY_BLOCK_PAPER_ENTRY` | worker (optional) | skip paper entry on implausible-liquidity pools (default **true** — fake depth would poison the sim) |
 | `PAPER_TRADING_ENABLED` | worker (optional) | paper-trading simulation on/off (default true; simulation only, no real orders possible) |
 | `WEBHOOK_AUTOSET_ENABLED` | bot (optional) | bot claims its own webhook on startup (default true) |
 | `WEBHOOK_GUARD_ENABLED`, `WEBHOOK_GUARD_INTERVAL_MIN`, `WEBHOOK_EXPECTED_URL` | worker (optional) | hourly drift guard on/off / cadence min / expected URL (defaults true / 60 / canonical bot domain) |

@@ -80,6 +80,27 @@ def is_honeypot_suspect(buys, sells, min_buys=None) -> bool:
     return s == 0 and b >= min_buys
 
 
+LIQ_SANITY_MAX_USD = _env_float("LIQ_SANITY_MAX_USD", 1_000_000.0)
+LIQ_SANITY_MIN_VOL_USD = _env_float("LIQ_SANITY_MIN_VOL_USD", 10_000.0)
+
+
+def is_implausible_liquidity(reserve_usd, vol1h, max_usd=None, min_vol=None) -> bool:
+    """True when claimed pool depth is enormous (> LIQ_SANITY_MAX_USD) yet almost
+    nothing trades through it (1h volume < LIQ_SANITY_MIN_VOL_USD). Real deep pools
+    see real flow; a huge reserve with no volume is the fake-/inflated-liquidity
+    signature that would poison paper-trading evidence if entered."""
+    max_usd = LIQ_SANITY_MAX_USD if max_usd is None else max_usd
+    min_vol = LIQ_SANITY_MIN_VOL_USD if min_vol is None else min_vol
+    try:
+        r = float(reserve_usd)
+        v = float(vol1h)
+    except (TypeError, ValueError):
+        return False
+    if not (math.isfinite(r) and math.isfinite(v)):
+        return False
+    return r > max_usd and v < min_vol
+
+
 def _f(x, default=0.0):
     try:
         v = float(x)

@@ -605,6 +605,7 @@ paper_state: dict | None = None
 # evidence, not censorship; the position simply records the flag. Fake-liquidity
 # gate (Part 4) defaults ON — a fake-depth pool would poison the simulation.
 HONEYPOT_BLOCK_PAPER_ENTRY = os.getenv("HONEYPOT_BLOCK_PAPER_ENTRY", "false").lower() in ("1", "true", "yes")
+LIQ_SANITY_BLOCK_PAPER_ENTRY = os.getenv("LIQ_SANITY_BLOCK_PAPER_ENTRY", "true").lower() in ("1", "true", "yes")
 
 
 async def _paper_step(client, fresh, now_utc):
@@ -642,13 +643,17 @@ async def _paper_step(client, fresh, now_utc):
                     logger.info(f"paper: entry skipped for {base.get('symbol','?')} ({chain}): {reason}")
                 continue
             suspicious = bool(pair.get("suspicious"))
+            implausible = bool(pair.get("implausible_liq"))
+            if implausible and LIQ_SANITY_BLOCK_PAPER_ENTRY:
+                logger.info(f"paper: entry blocked for {base.get('symbol','?')} ({chain}): implausible liquidity")
+                continue
             if suspicious and HONEYPOT_BLOCK_PAPER_ENTRY:
                 logger.info(f"paper: entry blocked for {base.get('symbol','?')} ({chain}): honeypot-suspect (0 sells)")
                 continue
             sym = paper.sanitize_symbol(f"{base.get('symbol','?')}/{(pair.get('quoteToken') or {}).get('symbol','?')}")
             pos = paper.open_position(paper_state, pool_addr, sym, token_addr, price,
                                       sc["score"], now_utc.isoformat(), chain=chain,
-                                      flags={"suspicious": suspicious})
+                                      flags={"suspicious": suspicious, "implausible_liq": implausible})
             open_ids.add(dedup_key)
             paper.save_state(paper_state)
             await send_telegram(
@@ -753,6 +758,7 @@ async def poll_new_pools():
                         sc = score_pair(norm, liq)  # scoring math UNCHANGED
                         # risk flags (2026-07-24): informational only, scoring untouched
                         norm["suspicious"] = disc.is_honeypot_suspect(sc["buys"], sc["sells"])
+                        norm["implausible_liq"] = disc.is_implausible_liquidity(liq, sc["vol1h"])
                         sym = (norm.get("baseToken") or {}).get("symbol", "?")
                         if cy_best is None or sc["score"] > cy_best[0]:
                             cy_best = (sc["score"], sym)
@@ -778,6 +784,7 @@ async def poll_new_pools():
                                 "age_h": round(age_h, 1), "liquidity": liq,
                                 "vol1h": sc["vol1h"], "buys": sc["buys"], "sells": sc["sells"],
                                 "suspicious": bool(norm.get("suspicious")),
+                                "implausible_liq": bool(norm.get("implausible_liq")),
                                 "ts": now_utc.isoformat(),
                             })
                         else:
@@ -823,6 +830,7 @@ async def poll_new_pools():
                             f"- Liquidity: ${liq:,.0f} | Vol 1h: ${sc['vol1h']:,.0f}\n"
                             f"- Buys/Sells 1h: {sc['buys']}/{sc['sells']}\n"
                             + ("⚠️ 0 sells — possible honeypot\n" if norm.get("suspicious") else "")
+                            + ("⚠️ implausible liquidity (huge depth, ~no volume)\n" if norm.get("implausible_liq") else "")
                             + f"- Age: {age_h:.1f}h\n"
                             f"[View on GeckoTerminal]({norm.get('url', '#')})"
                         )
