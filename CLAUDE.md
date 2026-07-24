@@ -133,7 +133,12 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   start, open positions with entry/current/unrealized (current prices via one keyless
   Dexscreener batch; 'price unknown' if unavailable), last 10 closed with win/loss + reason,
   win rate; stale mirror (>30 min) is flagged. The daily EOD report gains one line:
-  `🧪 Paper: balance $X · open Y · closed Z · win rate W%`.
+  `🧪 Paper: balance $X · open Y · closed Z · win rate W%`. **/signals (2026-07-23):** the worker
+  pushes a discovery snapshot (enabled chains + per-chain thresholds, per-chain funnel, and the last
+  ~40 alerted qualifying pools) on the SAME mirror POST as /paper (`signals` field); `/signals`
+  (`app/commands/signals.py`, pure `render_signals` + tests) shows the live feed per chain with
+  score/tier/age/liq/vol1h/buys-sells/DEX, the active thresholds, and a per-chain funnel line —
+  honest 'none this window' with funnel numbers when nothing qualifies. Added to the /start menu.
 - **core/** — shared helpers. `claude_client.py` (AI calls), `wallet.py`, `pnl_calculator.py`,
   `price_service.py`, Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
 - **Blockchain data source (2026-06-21, balances rev. 2026-06-24).** Live, keyed Cronos Explorer API

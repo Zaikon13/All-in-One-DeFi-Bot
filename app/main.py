@@ -69,6 +69,10 @@ def get_paper_mirror() -> dict | None:
     return _paper_mirror
 
 
+def get_signals_mirror() -> dict | None:
+    return (_paper_mirror or {}).get("signals") if _paper_mirror else None
+
+
 async def send_telegram_message(text: str, chat_id: str = None, reply_markup=None):
     cid = chat_id or CHAT_ID
     if not (BOT_TOKEN and cid):
@@ -200,6 +204,7 @@ async def paper_state_mirror(req: Request):
         payload = json.loads(body)
         if isinstance(payload, dict) and isinstance(payload.get("state"), dict):
             _paper_mirror = {"state": payload["state"],
+                             "signals": payload.get("signals") if isinstance(payload.get("signals"), dict) else None,
                              "as_of": payload.get("as_of")}
             return {"ok": True}
     except Exception:
@@ -264,7 +269,8 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
 • /wallet — Same as /balances
 • /bal — Quick balance check
 • /grok-analyze — AI-powered analysis
-• /paper — 🧪 simulated trading status"""
+• /paper — 🧪 simulated trading status
+• /signals — 🔎 live multi-chain discovery feed"""
         reply_markup = {
             "keyboard": ["/daily_pnl", "/balances", "/grok-analyze"],
             "resize_keyboard": True,
@@ -278,6 +284,10 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
     elif text == "/paper":
         from app.commands import get_paper_status
         background_tasks.add_task(get_paper_status, chat_id)
+
+    elif text == "/signals":
+        from app.commands import get_signals
+        background_tasks.add_task(get_signals, chat_id)
 
     elif text in ("/daily_pnl", "/dailypnl"):
         background_tasks.add_task(process_daily_pnl, chat_id)

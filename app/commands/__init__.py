@@ -5,5 +5,6 @@
 
 from .balances import get_all_balances
 from .paper import get_paper_status
+from .signals import get_signals
 
-__all__ = ["get_all_balances", "get_paper_status"]
+__all__ = ["get_all_balances", "get_paper_status", "get_signals"]

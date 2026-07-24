@@ -204,6 +204,11 @@ def format_multichain_digest(all_stats: dict, chains: list) -> str:
 
 chain_stats: dict = {}
 
+# Discovery signals mirrored to the bot for /signals (reuses the paper mirror push).
+recent_signals: list = []          # bounded ring of recently-alerted qualifying pools
+signals_state: dict = {}           # snapshot pushed alongside paper state each cycle
+_RECENT_SIGNALS_MAX = 40
+
 # Pending-maturity set: {key -> created_at_iso}. Persisted next to known_pairs.json.
 pending_pools: dict = {}
 # PENDING_POOLS_FILE resolved after PERSISTENCE_BASE (see below)
@@ -541,7 +546,8 @@ async def _push_paper_mirror(client, state: dict):
     try:
         resp = await client.post(
             PAPER_MIRROR_URL,
-            json={"state": state, "as_of": datetime.now(timezone.utc).isoformat()},
+            json={"state": state, "signals": signals_state,
+                  "as_of": datetime.now(timezone.utc).isoformat()},
             headers={"X-Paper-Auth": _paper_mirror_auth()},
             timeout=10.0,
         )
@@ -649,7 +655,7 @@ async def poll_new_pools():
     with chain + DEX. Young pools (< PAIR_MIN_AGE_MINUTES) are held in the
     persisted pending-maturity set and re-scored once they have real vol/tx data.
     Dedup keyed {chain}:{pool_address}. Scoring math (score_pair) is unchanged."""
-    global pending_pools
+    global pending_pools, recent_signals, signals_state
     while True:
         try:
             now_utc = datetime.now(timezone.utc)
@@ -692,6 +698,17 @@ async def poll_new_pools():
                             age_h = pool_age_hours(norm.get("created_at"), now_utc) or 0.0
                             fresh.append((norm, liq, age_h, sc))
                             cy_passed += 1
+                            recent_signals.append({
+                                "chain": chain,
+                                "symbol": _md_safe((norm.get("baseToken") or {}).get("symbol", "?")),
+                                "quote": _md_safe((norm.get("quoteToken") or {}).get("symbol", "?")),
+                                "dex": _md_safe(norm.get("dex", "?")),
+                                "score": sc["score"],
+                                "tier": "🔥" if sc["score"] >= PAIR_SCORE_STRONG else "👀",
+                                "age_h": round(age_h, 1), "liquidity": liq,
+                                "vol1h": sc["vol1h"], "buys": sc["buys"], "sells": sc["sells"],
+                                "ts": now_utc.isoformat(),
+                            })
                         else:
                             pair_last_seen[key] = now_utc.isoformat()
                     record_chain_funnel(chain_stats, chain, seen=cy_seen,
@@ -700,6 +717,19 @@ async def poll_new_pools():
 
                 _expire_pending(pending_pools, now_utc, PAIR_NEWNESS_WINDOW_HOURS)
                 save_pending_pools(pending_pools)
+
+                # snapshot discovery state for /signals (mirrored via the paper push)
+                if len(recent_signals) > _RECENT_SIGNALS_MAX:
+                    recent_signals = recent_signals[-_RECENT_SIGNALS_MAX:]
+                _chs = chains_enabled()
+                signals_state = {
+                    "chains": _chs,
+                    "thresholds": {c: {"min_liq": min_liquidity_for(c),
+                                       "min_score": min_score_for(c, PAIR_MIN_SCORE)} for c in _chs},
+                    "funnel": {c: dict(chain_stats.get(c) or _new_chain_stats()) for c in _chs},
+                    "recent": recent_signals[-_RECENT_SIGNALS_MAX:],
+                    "as_of": now_utc.isoformat(),
+                }
 
                 await _paper_step(client, fresh, now_utc)
 
