@@ -740,7 +740,7 @@ async def poll_new_pools():
                                            PAIR_MIN_AGE_MINUTES, PAIR_NEWNESS_WINDOW_HOURS)[:30]
                     if due:
                         addrs = [pending_pools[k]["addr"] for k in due if pending_pools[k].get("addr")]
-                        forced = await fetch_pools_by_address(client, chain, addrs) if addrs else []
+                        forced = await disc.fetch_pools_by_address(client, chain, addrs) if addrs else []
                         got = {n["key"] for n in forced}
                         for n in forced:
                             matured_norms.append(n)

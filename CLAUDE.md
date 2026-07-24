@@ -262,6 +262,12 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 - ✅ Corrupt committed file `GROK_REPO_ANALYSIS_REPORT.md` (~10.5k null bytes) **deleted**. (2026-07-04)
 - ✅ `.claude/settings.local.json` is now **gitignored** — a blanket `git add .` can no longer commit it. (2026-07-04)
 - ✅ Grok CI workflows removed; Grok-era SOT docs and `agents/` archived to `archive/`. (2026-07-04)
+- ✅ Solana-maturity force-fetch NameError: the Part-1 call site invoked `fetch_pools_by_address`
+  by its bare name (not imported, not `disc.`-qualified), crashing the discovery loop every cycle
+  (`Discovery error: name 'fetch_pools_by_address' is not defined`). Offline Part-1 tests imported
+  the helper directly so never hit the worker call site. Fixed to `disc.fetch_pools_by_address`;
+  `tests/test_worker_discovery_callsites.py` now statically guards every bare-name call in
+  `worker.py` against runtime NameErrors. (2026-07-24)
 
 **Still open:**
 - Worker start-command drift: `Procfile` + `railway.toml` use `python -u worker.py`, but the `Dockerfile`
