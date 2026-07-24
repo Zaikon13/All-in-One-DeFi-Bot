@@ -14,6 +14,9 @@ import httpx
 from core.log_redaction import install_log_redaction
 from core import paper_trading as paper
 from core.telegram_webhook import ensure_webhook, CANONICAL_WEBHOOK_URL
+from core import pair_discovery as disc
+from core.pair_discovery import (chains_enabled, min_liquidity_for, min_score_for,
+                                 classify_pool, pool_age_hours, fetch_new_pools)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -138,6 +141,86 @@ def format_scan_digest(stats: dict) -> str:
             f"best score today: {best} — sent: {stats['sent']}")
 
 
+# --- Multi-chain discovery (2026-07-23) ------------------------------------------
+# Pools younger than PAIR_MIN_AGE_MINUTES have no volume/tx history yet (scoring
+# them would score ~0), so they are HELD in a persisted "pending maturity" set and
+# re-evaluated each cycle; they leave it only when they mature (get scored) or
+# exceed PAIR_NEWNESS_WINDOW_HOURS. Short chain labels for the digest.
+PAIR_MIN_AGE_MINUTES = _env_float("PAIR_MIN_AGE_MINUTES", 20.0)
+DISCOVERY_INTERVAL = int(_env_float("DISCOVERY_INTERVAL", float(DEXSCREENER_INTERVAL)))
+_CHAIN_LABEL = {"cro": "cro", "solana": "solana", "sui-network": "sui"}
+
+
+def _chain_label(chain: str) -> str:
+    return _CHAIN_LABEL.get(chain, chain)
+
+
+def _md_safe(s) -> str:
+    """Strip Telegram Markdown v1 entity chars from untrusted strings (token
+    symbols, dex names from a brand-new-pool feed)."""
+    return re.sub(r"[*_\[\]`]", "", str(s or "")).strip() or "?"
+
+
+def _new_chain_stats() -> dict:
+    return {"seen": 0, "matured": 0, "passed": 0, "sent": 0,
+            "best_score": None, "best_symbol": None}
+
+
+def record_chain_funnel(all_stats: dict, chain: str, seen=0, matured=0, passed=0,
+                        sent=0, best=None) -> dict:
+    """Fold one chain's cycle counts into all_stats[chain] (pure; unit-tested)."""
+    s = all_stats.setdefault(chain, _new_chain_stats())
+    s["seen"] += seen
+    s["matured"] += matured
+    s["passed"] += passed
+    s["sent"] += sent
+    if best is not None:
+        try:
+            score = float(best[0])
+            symbol = re.sub(r"[*_\[\]`]", "", str(best[1])).strip() or "?"
+            if math.isfinite(score) and (s["best_score"] is None or score > s["best_score"]):
+                s["best_score"], s["best_symbol"] = score, symbol
+        except (TypeError, ValueError, IndexError):
+            pass
+    return all_stats
+
+
+def format_multichain_digest(all_stats: dict, chains: list) -> str:
+    """Per-chain funnel digest (pure; unit-tested; Markdown v1 safe). e.g.
+    '🔎 Scanner digest — cro: seen 5, matured 3, passed 0 · solana: seen 20,
+    matured 14, passed 2, best 71 · sui: seen 20, matured 18, passed 1, best 58
+    · sent 3'."""
+    parts = []
+    total_sent = 0
+    for chain in chains:
+        s = all_stats.get(chain) or _new_chain_stats()
+        total_sent += s["sent"]
+        seg = f"{_chain_label(chain)}: seen {s['seen']}, matured {s['matured']}, passed {s['passed']}"
+        if s["best_score"] is not None:
+            seg += f", best {s['best_score']:.0f} ({s['best_symbol']})"
+        parts.append(seg)
+    return "🔎 **Scanner digest** — " + " · ".join(parts) + f" · sent {total_sent}"
+
+
+chain_stats: dict = {}
+
+# Pending-maturity set: {key -> created_at_iso}. Persisted next to known_pairs.json.
+pending_pools: dict = {}
+# PENDING_POOLS_FILE resolved after PERSISTENCE_BASE (see below)
+
+
+def _expire_pending(pending: dict, now_utc, newness_window_hours: float) -> int:
+    """Drop pending pools older than the newness window (feed may stop returning
+    them). Returns count dropped. Pure-ish (mutates the dict)."""
+    dropped = 0
+    for key in list(pending.keys()):
+        age = pool_age_hours(pending.get(key), now_utc)
+        if age is None or age > newness_window_hours:
+            pending.pop(key, None)
+            dropped += 1
+    return dropped
+
+
 if PORTFOLIO_MOVE_THRESHOLD_PCT <= 0:
     logger.warning(
         f"PORTFOLIO_MOVE_THRESHOLD_PCT={PORTFOLIO_MOVE_THRESHOLD_PCT} <= 0 — every watched "
@@ -200,6 +283,7 @@ PERSISTENCE_BASE = (os.getenv("WORKER_DATA_DIR")
                     or os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
                     or "data")
 KNOWN_PAIRS_FILE = os.path.join(PERSISTENCE_BASE, "known_pairs.json")
+PENDING_POOLS_FILE = os.path.join(PERSISTENCE_BASE, "pending_pools.json")
 
 
 def _warn_if_no_volume():
@@ -273,7 +357,12 @@ async def send_telegram(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"})
+            r = await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"})
+            if r.status_code != 200:
+                # a stray Markdown entity (untrusted token symbols) 400s the whole
+                # message; resend as plain text so the alert is never silently lost.
+                logger.warning(f"Telegram Markdown send HTTP {r.status_code}; resending as plain text")
+                await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text})
     except Exception as e:
         logger.error(f"Telegram error: {e}")
 
@@ -345,6 +434,31 @@ def save_known_pairs(pairs: set):
         os.replace(tmp_path, KNOWN_PAIRS_FILE)
     except Exception as e:
         logger.error(f"Failed to save known_pairs to disk: {e}")
+
+
+def load_pending_pools() -> dict:
+    """Load the pending-maturity set {key -> created_at_iso}. Corrupt/missing -> {}."""
+    try:
+        if not os.path.exists(PENDING_POOLS_FILE):
+            return {}
+        with open(PENDING_POOLS_FILE, "r") as f:
+            data = json.load(f)
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except Exception as e:
+        logger.error(f"Failed to load pending_pools (starting empty): {e}")
+        return {}
+
+
+def save_pending_pools(pending: dict):
+    """Atomic write of the pending-maturity set. Never crashes the caller."""
+    try:
+        os.makedirs(os.path.dirname(PENDING_POOLS_FILE) or ".", exist_ok=True)
+        tmp = PENDING_POOLS_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(pending, f, indent=2)
+        os.replace(tmp, PENDING_POOLS_FILE)
+    except Exception as e:
+        logger.error(f"Failed to save pending_pools: {e}")
 
 
 async def heartbeat():
@@ -460,8 +574,14 @@ async def _paper_step(client, fresh, now_utc):
             logger.info(f"paper: state loaded — {paper.paper_summary_line(paper_state)}")
 
         # --- entries: alerted pairs at/above the entry bar ---
+        # 2026-07-23: exit pricing is Cronos-only (Dexscreener token endpoint), so
+        # Part 1 gates paper ENTRIES to Cronos — a Solana/Sui position could never
+        # be priced or closed and would wedge a slot forever. Part 2 adds per-chain
+        # GeckoTerminal exit pricing and lifts this gate.
         open_ids = {p.get("pair_address") for p in paper_state["open"]}
         for pair, liq, age_h, sc in fresh:
+            if (pair.get("chain") or "cro") != "cro":
+                continue
             addr = (pair.get("pairAddress") or "").lower()
             base = pair.get("baseToken") or {}
             token_addr = (base.get("address") or "").lower()
@@ -520,155 +640,108 @@ async def _paper_step(client, fresh, now_utc):
         logger.error(f"paper step error (scanner unaffected): {e}", exc_info=True)
 
 
-async def poll_dexscreener():
-    """Poll Dexscreener and alert on genuinely new Cronos pairs.
-
-    Fixes (2026-07-05):
-    - search?q=cronos is a text search across ALL chains (Solana results were being
-      announced as "on Cronos") -> only pairs with chainId == "cronos" are processed.
-    - "New" now means pairCreatedAt within PAIR_NEWNESS_WINDOW_HOURS (default 24h);
-      pairs without a valid pairCreatedAt are skipped (newness unverifiable).
-    - Pairs with liquidity.usd below PAIR_MIN_LIQUIDITY_USD (default $10k) are skipped.
-    - All new pairs found in one polling cycle are sent as ONE combined Telegram
-      message (this also fixes the prior bug where the alert send sat OUTSIDE the
-      newness check, re-announcing the top search results every cycle).
-    Known-pairs dedup/persistence (seen_pairs + _is_new_or_stale) is unchanged.
-    """
+async def poll_new_pools():
+    """Poll GeckoTerminal new_pools for each enabled chain and alert on genuinely
+    new, mature, qualifying pools (2026-07-23; replaces the broken Dexscreener
+    search feed). One combined Telegram message per cycle, each alert labelled
+    with chain + DEX. Young pools (< PAIR_MIN_AGE_MINUTES) are held in the
+    persisted pending-maturity set and re-scored once they have real vol/tx data.
+    Dedup keyed {chain}:{pool_address}. Scoring math (score_pair) is unchanged."""
+    global pending_pools
     while True:
         try:
-            url = "https://api.dexscreener.com/latest/dex/search?q=cronos"
-            async with httpx.AsyncClient(timeout=20) as client:
-                r = await client.get(url)
-                if r.status_code == 200:
-                    data = r.json()
-                    now_utc = datetime.now(timezone.utc)
-                    fresh = []  # (pair, liquidity_usd, age_hours, score_dict)
-                    below_score = 0
-                    cy_seen = cy_cronos = cy_new = cy_liq = 0
-                    cy_best = None  # (score, symbol) best this cycle, alerted or not
-                    for pair in (data.get("pairs") or []):
-                        cy_seen += 1
-                        if str(pair.get("chainId") or "").lower() != "cronos":
-                            continue  # text search returns pairs from every chain
-                        cy_cronos += 1
-                        pair_address = pair.get("pairAddress")
-                        if not pair_address:
+            now_utc = datetime.now(timezone.utc)
+            fresh = []  # (norm, liq, age_h, sc) — norm doubles as the pair-shaped dict
+            async with httpx.AsyncClient(timeout=25) as client:
+                for chain in chains_enabled():
+                    pools = await fetch_new_pools(client, chain)
+                    min_liq = min_liquidity_for(chain)
+                    min_score = min_score_for(chain, PAIR_MIN_SCORE)
+                    cy_seen = len(pools)
+                    cy_matured = cy_passed = 0
+                    cy_best = None
+                    for norm in pools:
+                        key = norm["key"]
+                        cls = classify_pool(norm.get("created_at"), now_utc,
+                                            PAIR_MIN_AGE_MINUTES, PAIR_NEWNESS_WINDOW_HOURS)
+                        if cls == "pending":
+                            pending_pools[key] = norm.get("created_at") or now_utc.isoformat()
                             continue
-                        # genuine newness: pairCreatedAt (ms epoch) within the window
-                        try:
-                            created_dt = datetime.fromtimestamp(
-                                int(pair.get("pairCreatedAt")) / 1000, tz=timezone.utc
-                            )
-                        except (TypeError, ValueError, OSError, OverflowError):
-                            continue  # missing/invalid creation time -> can't verify newness
-                        age_h = (now_utc - created_dt).total_seconds() / 3600.0
-                        if age_h < 0 or age_h > PAIR_NEWNESS_WINDOW_HOURS:
+                        pending_pools.pop(key, None)
+                        if cls != "mature":
                             continue
-                        cy_new += 1
-                        # liquidity floor: skip dust pools
-                        try:
-                            liq = float((pair.get("liquidity") or {}).get("usd") or 0)
-                        except (TypeError, ValueError):
-                            liq = 0.0
-                        if liq < PAIR_MIN_LIQUIDITY_USD:
+                        cy_matured += 1
+                        liq = norm["liquidity_usd"]
+                        if liq < min_liq:
                             continue
-                        cy_liq += 1
-                        # quality score gate (2026-07-06, Part A): below-bar pairs are
-                        # skipped WITHOUT being marked seen, so they can re-qualify on a
-                        # later cycle if volume/buys/momentum pick up within the window.
-                        sc = score_pair(pair, liq)
-                        _sym = (pair.get("baseToken") or {}).get("symbol", "?")
+                        sc = score_pair(norm, liq)  # scoring math UNCHANGED
+                        sym = (norm.get("baseToken") or {}).get("symbol", "?")
                         if cy_best is None or sc["score"] > cy_best[0]:
-                            cy_best = (sc["score"], _sym)
-                        if sc["score"] < PAIR_MIN_SCORE:
-                            below_score += 1
-                            if pair_address in seen_pairs:
-                                # already announced once: keep its last_seen fresh so a
-                                # dip-below-bar + recovery doesn't re-alert (~hourly) via
-                                # _is_new_or_stale. Never-alerted pairs stay unmarked and
-                                # can still qualify later in their window.
-                                pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
+                            cy_best = (sc["score"], sym)
+                        if sc["score"] < min_score:
+                            if key in seen_pairs:
+                                pair_last_seen[key] = now_utc.isoformat()
                             continue
-                        # known-pairs dedup (last_seen + restart window, persistence unchanged).
-                        # 2026-07-05: last_seen is now ALSO refreshed in-memory on the skip path;
-                        # otherwise a pair inside the 24h window re-alerts every RESTART_DEDUP_WINDOW
-                        # (~hourly, up to ~24 dup alerts/pair/day). Disk write stays alert-path-only,
-                        # so restart behavior (one possible re-alert after a gap) is preserved.
-                        if pair_address not in seen_pairs or _is_new_or_stale(pair_address):
-                            seen_pairs.add(pair_address)
-                            pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
+                        if key not in seen_pairs or _is_new_or_stale(key):
+                            seen_pairs.add(key)
+                            pair_last_seen[key] = now_utc.isoformat()
                             _sync_seen_pairs_from_dict()
-                            save_known_pairs(seen_pairs)  # persist immediately (atomic + warns if no volume)
-                            fresh.append((pair, liq, age_h, sc))
+                            save_known_pairs(seen_pairs)
+                            age_h = pool_age_hours(norm.get("created_at"), now_utc) or 0.0
+                            fresh.append((norm, liq, age_h, sc))
+                            cy_passed += 1
                         else:
-                            pair_last_seen[pair_address] = datetime.now(timezone.utc).isoformat()
+                            pair_last_seen[key] = now_utc.isoformat()
+                    record_chain_funnel(chain_stats, chain, seen=cy_seen,
+                                        matured=cy_matured, passed=cy_passed,
+                                        sent=cy_passed, best=cy_best)
 
-                    record_pair_funnel(scan_stats, seen=cy_seen, cronos=cy_cronos,
-                                       newness=cy_new, liquidity=cy_liq,
-                                       below_score=below_score, sent=len(fresh),
-                                       best=cy_best)
+                _expire_pending(pending_pools, now_utc, PAIR_NEWNESS_WINDOW_HOURS)
+                save_pending_pools(pending_pools)
 
-                    # paper engine step (simulation only; own try/except inside)
-                    await _paper_step(client, fresh, now_utc)
+                await _paper_step(client, fresh, now_utc)
 
-                    if fresh:
-                        market_enabled = os.getenv("MARKET_ANALYSIS_ENABLED", "false").lower() == "true"
-                        sections = []
-                        for pair, liq, age_h, sc in fresh[:MAX_PAIRS_PER_ALERT]:
-                            base = pair.get("baseToken") or {}
-                            quote = pair.get("quoteToken") or {}
-                            tier = "🔥 strong" if sc["score"] >= PAIR_SCORE_STRONG else "👀 notable"
-                            section = (
-                                f"**{base.get('symbol', '???')} / {quote.get('symbol', '???')}** — score {sc['score']:.0f}/100 ({tier})\n"
-                                f"- Price: ${pair.get('priceUsd', 'N/A')} ({sc['chg1h']:+.1f}% 1h)\n"
-                                f"- Liquidity: ${liq:,.0f} | Vol 1h: ${sc['vol1h']:,.0f}\n"
-                                f"- Buys/Sells 1h: {sc['buys']}/{sc['sells']}\n"
-                                f"- Age: {age_h:.1f}h\n"
-                                f"[View on DexScreener]({pair.get('url', '#')})"
-                            )
-                            # Optional env-gated market insight per pair (semantics unchanged;
-                            # appended inside the combined message instead of its own send).
-                            if market_enabled:
-                                try:
-                                    from core.market_analysis import get_market_insight_with_fallback
-                                    pair_sum = f"{base.get('symbol', '???')} / {quote.get('symbol', '???')} (pair {pair.get('pairAddress')})"
-                                    mkt_sum = f"Liquidity ${liq:,.0f}, price ${pair.get('priceUsd', 'N/A')}"
-                                    insight = await get_market_insight_with_fallback(
-                                        pair_sum, mkt_sum, raw_fallback="", timeout=25.0
-                                    )
-                                    if insight:
-                                        ins = insight.strip()
-                                        if len(ins) > 300:
-                                            ins = ins[:300].rstrip() + "..."
-                                        section = f"{section}\n{ins}"
-                                except Exception as e:
-                                    logger.error(f"Market analysis error (new pair): {e}")
-                                    # continue - no insight appended
-                            sections.append(section)
-                        if len(fresh) > MAX_PAIRS_PER_ALERT:
-                            sections.append(f"...plus {len(fresh) - MAX_PAIRS_PER_ALERT} more new pairs this cycle.")
-                        header = (
-                            "🚀 **New Pair Detected on Cronos**"
-                            if len(fresh) == 1
-                            else f"🚀 **{len(fresh)} New Pairs Detected on Cronos**"
+                if fresh:
+                    sections = []
+                    for norm, liq, age_h, sc in fresh[:MAX_PAIRS_PER_ALERT]:
+                        base = norm.get("baseToken") or {}
+                        quote = norm.get("quoteToken") or {}
+                        # sanitize untrusted token/dex strings (Markdown v1) so one stray
+                        # entity can't 400 the whole cycle's alert
+                        bsym = _md_safe(base.get("symbol", "???"))
+                        qsym = _md_safe(quote.get("symbol", "???"))
+                        dex = _md_safe(norm.get("dex", "?"))
+                        tier = "🔥 strong" if sc["score"] >= PAIR_SCORE_STRONG else "👀 notable"
+                        section = (
+                            f"**{bsym} / {qsym}** "
+                            f"[{_chain_label(norm['chain'])} · {dex}] — "
+                            f"score {sc['score']:.0f}/100 ({tier})\n"
+                            f"- Price: ${norm.get('priceUsd') or 'N/A'} ({sc['chg1h']:+.1f}% 1h)\n"
+                            f"- Liquidity: ${liq:,.0f} | Vol 1h: ${sc['vol1h']:,.0f}\n"
+                            f"- Buys/Sells 1h: {sc['buys']}/{sc['sells']}\n"
+                            f"- Age: {age_h:.1f}h\n"
+                            f"[View on GeckoTerminal]({norm.get('url', '#')})"
                         )
-                        combined = "\n\n".join([header] + sections)
-                        if len(combined) > 4000:  # Telegram hard limit is 4096
-                            combined = combined[:4000].rstrip() + "\n\n(truncated)"
-                        await send_telegram(combined)
-                        logger.info(
-                            "New pair alert sent (1 message, %d pair(s), %d below score bar %.0f): %s",
-                            len(fresh), below_score, PAIR_MIN_SCORE,
-                            ", ".join((p.get("baseToken") or {}).get("symbol", "?") for p, _, _, _ in fresh),
-                        )
-                    elif below_score:
-                        logger.info(
-                            "New-pair scan: 0 alerted, %d pair(s) passed filters but scored below %.0f",
-                            below_score, PAIR_MIN_SCORE,
-                        )
+                        sections.append(section)
+                    if len(fresh) > MAX_PAIRS_PER_ALERT:
+                        sections.append(f"...plus {len(fresh) - MAX_PAIRS_PER_ALERT} more new pools this cycle.")
+                    header = ("🚀 **New Pool Detected**" if len(fresh) == 1
+                              else f"🚀 **{len(fresh)} New Pools Detected**")
+                    combined = "\n\n".join([header] + sections)
+                    if len(combined) > 4000:
+                        combined = combined[:4000].rstrip() + "\n\n(truncated)"
+                    await send_telegram(combined)
+                    logger.info("New pool alert sent (1 message, %d pool(s)): %s",
+                                len(fresh),
+                                ", ".join(f"{n['chain']}:{(n.get('baseToken') or {}).get('symbol','?')}"
+                                          for n, _, _, _ in fresh))
+                else:
+                    per = " · ".join(f"{_chain_label(c)} {(chain_stats.get(c) or {}).get('matured',0)}m"
+                                     for c in chains_enabled())
+                    logger.info(f"New-pool scan: 0 alerted this cycle (matured: {per})")
         except Exception as e:
-            logger.error(f"Dexscreener error: {e}")
-        await asyncio.sleep(DEXSCREENER_INTERVAL)
+            logger.error(f"Discovery error: {e}")
+        await asyncio.sleep(DISCOVERY_INTERVAL)
 
 
 def _fmt_price(p: float) -> str:
@@ -813,12 +886,12 @@ async def scheduled_scan_digest():
     (default 21:00) and reset the counters. In-memory only: a restart restarts the
     counting window (the digest then covers time since restart). DST-safe target
     recomputation each loop, same pattern as scheduled_eod_pnl. Never crashes."""
-    global scan_stats
+    global chain_stats
     if not SCAN_DIGEST_ENABLED:
         logger.info("scanner digest: disabled (SCAN_DIGEST_ENABLED=false)")
         return
     athens = ZoneInfo("Europe/Athens")
-    logger.info(f"scanner digest: on — daily at {SCAN_DIGEST_HOUR:02d}:00 Europe/Athens")
+    logger.info(f"scanner digest: on — daily at {SCAN_DIGEST_HOUR:02d}:00 Europe/Athens (per-chain)")
     while True:
         now = datetime.now(athens)
         target = now.replace(hour=SCAN_DIGEST_HOUR, minute=0, second=0, microsecond=0)
@@ -826,10 +899,8 @@ async def scheduled_scan_digest():
             target += timedelta(days=1)
         await asyncio.sleep(max(60.0, (target - datetime.now(athens)).total_seconds()))
         try:
-            # snapshot-and-reset first: counts folded while the send awaits belong
-            # to the NEXT window, and a mid-send failure can't double-report.
-            snap, scan_stats = scan_stats, _new_scan_stats()
-            msg = format_scan_digest(snap)
+            snap, chain_stats = chain_stats, {}
+            msg = format_multichain_digest(snap, chains_enabled())
             await send_telegram(msg)
             logger.info(f"scanner digest: {msg}")
         except Exception as e:
@@ -919,7 +990,7 @@ async def scheduled_eod_pnl():
                 # Approved with Conditions (High risk). Exactly one additional point (EOD post-process only).
                 # Reuses *exact* core/market_analysis.py + prompts/grok_market_analysis.txt (no new prompts, no CONTRACT changes).
                 # Pre-compute compact snapshot here (after await, inside existing scheduled_eod_pnl task).
-                # Uses proven inline dexscreener fetch pattern (from poll_dexscreener in same file) for minimal change.
+                # Uses proven inline dexscreener fetch pattern (from poll_new_pools in same file) for minimal change.
                 # Env-gated via MARKET_ANALYSIS_ENABLED (default false), 25s timeout, is_valid_grok_response gate + fallback.
                 # Appends clearly labeled **Market Context:** section *after* the untouched report (incl. any internal Claude Daily Insight).
                 # Lazy import + try/except: base EOD report never degraded. Logged. Continue-on-error.
@@ -1002,6 +1073,9 @@ async def main():
     # Load previously discovered pairs (survives in-process / local restarts)
     # Load happens early, before any polling or EOD tasks (Review condition 6).
     seen_pairs = load_known_pairs()
+    global pending_pools
+    pending_pools = load_pending_pools()
+    logger.info(f"Discovery: chains={chains_enabled()} | pending-maturity pools loaded: {len(pending_pools)}")
     if seen_pairs:
         logger.info(f"Loaded {len(seen_pairs)} known pairs from disk")
     logger.info(f"Persistence file: {KNOWN_PAIRS_FILE} (evolved: pairs+last_seen+last_eod_run; supports RAILWAY_VOLUME_MOUNT_PATH fallback 'data/')")
@@ -1056,7 +1130,7 @@ async def main():
             logger.info("EOD PnL startup sanity: no prior last_eod_run (fresh or cleared state). Scheduler will compute first target.")
 
     # Review Agent 2026-06: Market analysis env (first inc, worker-side Grok for token/market insights, analysis-only).
-    # Env-gated (default false). Calls only from existing tasks (e.g. new-pair in poll_dexscreener).
+    # Env-gated (default false). Calls only from existing tasks (e.g. new-pair in poll_new_pools).
     # Uses core/market_analysis (thin over grok_client SOT).
     market_enabled = os.getenv("MARKET_ANALYSIS_ENABLED", "false").lower() == "true"
     logger.info(f"Market analysis enabled={market_enabled} (for token/pair context in alerts)")
@@ -1082,7 +1156,7 @@ async def main():
 
     await asyncio.gather(
         heartbeat(),
-        poll_dexscreener(),
+        poll_new_pools(),
         monitor_wallet(),
         scheduled_eod_pnl(),
         portfolio_watch(),

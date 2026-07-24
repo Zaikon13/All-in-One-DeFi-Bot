@@ -42,12 +42,21 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 - **Web service** — `app/main.py` (FastAPI + uvicorn). Telegram webhook at `/telegram/webhook`,
   wallet analysis at `/grok/analyze`, daily PnL, health at `/` and `/health`.
 - **Worker** — `worker.py`. Polls Dexscreener for new Cronos pairs, monitors the wallet, sends a
-  heartbeat, runs end-of-day PnL. **Persistence (verified 2026-07-13):** the 5GB volume `worker-persistence-GNKn` is mounted at `/data`; the path resolves via `WORKER_DATA_DIR` (explicit override) → `RAILWAY_VOLUME_MOUNT_PATH` (auto-set by Railway to `/data`) → `./data` (local dev). Production writes `/data/known_pairs.json`, so known-pairs (and future paper-trading state) genuinely survive redeploys; a loud log warning fires only if neither env var is set (ephemeral). **New-pair alerts
-  (fixed 2026-07-05):** Dexscreener `search?q=cronos` is a cross-chain text search, so the detector
-  filters `chainId == "cronos"`, requires `pairCreatedAt` within `PAIR_NEWNESS_WINDOW_HOURS`
-  (default 24h), skips pools under `PAIR_MIN_LIQUIDITY_USD` (default $10k), and batches all new
-  pairs from one polling cycle into ONE Telegram message (detail for the first 10, rest counted;
-  message capped at 4000 chars). **Quality score (2026-07-06):** each passing pair gets a
+  heartbeat, runs end-of-day PnL. **Persistence (verified 2026-07-13):** the 5GB volume `worker-persistence-GNKn` is mounted at `/data`; the path resolves via `WORKER_DATA_DIR` (explicit override) → `RAILWAY_VOLUME_MOUNT_PATH` (auto-set by Railway to `/data`) → `./data` (local dev). Production writes `/data/known_pairs.json`, so known-pairs (and future paper-trading state) genuinely survive redeploys; a loud log warning fires only if neither env var is set (ephemeral). **Multi-chain discovery (2026-07-23, `core/pair_discovery.py`):**
+  the Dexscreener `search?q=cronos` feed returned established pairs ranked by relevance (0 passed
+  newness), so it was replaced by GeckoTerminal `new_pools` (keyless, ~48h of genuinely new pools,
+  30 calls/min) polled once per enabled chain per cycle. `CHAINS_ENABLED` (default
+  `cro,solana,sui-network`); per-chain floors `PAIR_MIN_LIQUIDITY_USD_{CHAIN}` (defaults cro 5000,
+  solana 10000, sui-network 10000 — Solana is a junk firehose, Cronos nearly barren) and
+  `PAIR_MIN_SCORE_{CHAIN}` (falls back to global `PAIR_MIN_SCORE`). **Maturity rule:** a pool
+  younger than `PAIR_MIN_AGE_MINUTES` (20) has no volume/tx history yet (scoring it would score
+  ~0), so it is HELD in a persisted pending-maturity set (`pending_pools.json`, sibling to
+  `known_pairs.json` on the volume), re-evaluated each cycle, and dropped only past
+  `PAIR_NEWNESS_WINDOW_HOURS` (24). Dedup is keyed `{chain}:{pool_address}` (was a bare pair address pre-2026-07-23; old keys in `known_pairs.json` become inert, so a still-live pair may re-alert at most once under its new key). GeckoTerminal fields
+  are mapped into the UNCHANGED `score_pair` 0-100 math; one combined Telegram message per cycle,
+  each alert labelled with chain + DEX, 🔥 >=70 / 👀 >=35 (detail for first 10, capped 4000 chars).
+  429 backoff; the loop never dies on a feed failure. The Dexscreener token-pricing used by
+  `/wallet` is a different endpoint and is untouched. **Quality score (2026-07-06):** each passing pair gets a
   transparent 0-100 score (`worker.score_pair`, unit-tested offline) — four ingredients worth
   0-25 points each. What raises the score: 1h volume (full 25 pts at `PAIR_SCORE_VOL1H_FULL`,
   default $25k), buy pressure above 50% buys in the last hour (full at
@@ -77,12 +86,14 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   a redeploy/restart quietly re-seeds it (first cycle seeds, alerts from the second cycle
   onward — never a false alert on restart). State machine is pure
   (`worker.detect_portfolio_moves` / `worker.watch_holdings`) and unit-tested offline. **Scanner
-  digest (2026-07-16):** `worker.scheduled_scan_digest` (gated by `SCAN_DIGEST_ENABLED`,
-  default on) sends ONE summary per day at `SCAN_DIGEST_HOUR` (default 21, Europe/Athens):
-  pairs seen / passed Cronos / passed newness / passed liquidity / best score today (symbol)
-  / sent — so the scanner's judgment is visible even on quiet days. Counters are in-memory
-  (restart restarts the counting window); no quality threshold is changed. Fold + formatter
-  are pure (`worker.record_pair_funnel` / `worker.format_scan_digest`), unit-tested offline. **Paper
+  digest (2026-07-16, per-chain 2026-07-23):** `worker.scheduled_scan_digest` (gated by
+  `SCAN_DIGEST_ENABLED`, default on) sends ONE summary per day at `SCAN_DIGEST_HOUR` (default 21,
+  Europe/Athens), now PER CHAIN: e.g. `🔎 Scanner digest — cro: seen 5, matured 3, passed 0 ·
+  solana: seen 20, matured 14, passed 2, best 71 (MOON) · sui: seen 20, matured 18, passed 1, best 58 (SPX) ·
+  sent 3`. Counters are in-memory (restart restarts the window); no quality threshold is changed.
+  Fold + formatter are pure (`worker.record_chain_funnel` / `worker.format_multichain_digest`),
+  unit-tested offline. (The old single-chain `record_pair_funnel`/`format_scan_digest` remain in
+  the file, unused, so their tests stay green.) **Paper
   trading (2026-07-17, SIMULATION ONLY):** `core/paper_trading.py` + `worker._paper_step`,
   gated by `PAPER_TRADING_ENABLED` (default on — it risks nothing; no keys, no real orders).
   Starts with `PAPER_STARTING_USD` (default $1000) of simulated money. Entry: an ALERTED pair
@@ -252,6 +263,11 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `WALLET_BALANCE_CONCURRENCY`, `WALLET_V2_MAX_RETRIES` | runtime (optional) | concurrent tokenbalance reads / 429 backoff retries (default 8 / 3) |
 | `PAIR_NEWNESS_WINDOW_HOURS` | worker (optional) | new-pair alert window vs `pairCreatedAt` (default 24) |
 | `PAIR_MIN_LIQUIDITY_USD` | worker (optional) | minimum pool liquidity for a new-pair alert (default 10000) |
+| `CHAINS_ENABLED` | worker (optional) | comma list of GeckoTerminal networks to scan (default `cro,solana,sui-network`) |
+| `PAIR_MIN_LIQUIDITY_USD_{CHAIN}` | worker (optional) | per-chain liquidity floor (defaults CRO 5000, SOLANA 10000, SUI_NETWORK 10000); `{CHAIN}` = upper, `-`→`_` |
+| `PAIR_MIN_SCORE_{CHAIN}` | worker (optional) | per-chain score bar (falls back to `PAIR_MIN_SCORE`) |
+| `PAIR_MIN_AGE_MINUTES` | worker (optional) | pools younger than this are held pending maturity, not scored (default 20) |
+| `DISCOVERY_INTERVAL` | worker (optional) | seconds between discovery cycles (default 300) |
 | `PAIR_MIN_SCORE` | worker (optional) | minimum 0-100 quality score for a new-pair alert (default 35) |
 | `PAIR_SCORE_VOL1H_FULL`, `PAIR_SCORE_BUY_RATIO_FULL`, `PAIR_SCORE_MOM1H_FULL`, `PAIR_SCORE_LIQ_FULL` | worker (optional) | level at which each ingredient earns its full 25 pts: 1h volume USD / buy ratio as a fraction in (0.5, 1] / 1h change percent / liquidity USD (defaults 25000 / 0.85 / 30 / 50000) |
 | `WORKER_DATA_DIR` | worker (optional) | explicit persistence dir; else `RAILWAY_VOLUME_MOUNT_PATH` (=/data in prod) else `./data` |
