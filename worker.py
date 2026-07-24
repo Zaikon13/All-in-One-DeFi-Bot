@@ -209,9 +209,32 @@ recent_signals: list = []          # bounded ring of recently-alerted qualifying
 signals_state: dict = {}           # snapshot pushed alongside paper state each cycle
 _RECENT_SIGNALS_MAX = 40
 
-# Pending-maturity set: {key -> created_at_iso}. Persisted next to known_pairs.json.
+# Pending-maturity set: {key -> {"ca": created_at_iso, "addr": original_pool_addr}}.
+# Persisted next to known_pairs.json. `addr` keeps ORIGINAL case (base58 Solana
+# addresses are case-sensitive) so a matured pending pool can be force-fetched by
+# address via GeckoTerminal pools/multi (2026-07-24 Solana maturity fix).
 pending_pools: dict = {}
 # PENDING_POOLS_FILE resolved after PERSISTENCE_BASE (see below)
+
+
+def _pending_ca(v):
+    """created_at from a pending value (dict new-format or legacy str)."""
+    return v.get("ca") if isinstance(v, dict) else v
+
+
+def pending_due_keys(pending: dict, chain: str, now_utc, min_age_minutes: float,
+                     newness_window_hours: float) -> list:
+    """Pure: pending keys for `chain` whose pool has now reached maturity age
+    (so they should be force-fetched directly rather than waited for in
+    new_pools). Unit-tested offline — this is the heart of the Solana fix."""
+    prefix = f"{chain}:"
+    out = []
+    for key, v in pending.items():
+        if not key.startswith(prefix):
+            continue
+        if classify_pool(_pending_ca(v), now_utc, min_age_minutes, newness_window_hours) == "mature":
+            out.append(key)
+    return out
 
 
 def _expire_pending(pending: dict, now_utc, newness_window_hours: float) -> int:
@@ -219,7 +242,7 @@ def _expire_pending(pending: dict, now_utc, newness_window_hours: float) -> int:
     them). Returns count dropped. Pure-ish (mutates the dict)."""
     dropped = 0
     for key in list(pending.keys()):
-        age = pool_age_hours(pending.get(key), now_utc)
+        age = pool_age_hours(_pending_ca(pending.get(key)), now_utc)
         if age is None or age > newness_window_hours:
             pending.pop(key, None)
             dropped += 1
@@ -449,7 +472,17 @@ def load_pending_pools() -> dict:
             return {}
         with open(PENDING_POOLS_FILE, "r") as f:
             data = json.load(f)
-        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        out = {}
+        for k, v in data.items():
+            k = str(k)
+            addr_from_key = k.split(":", 1)[1] if ":" in k else ""
+            if isinstance(v, dict) and v.get("ca"):
+                out[k] = {"ca": str(v.get("ca")), "addr": str(v.get("addr") or addr_from_key)}
+            else:  # legacy {key: created_at_str}
+                out[k] = {"ca": str(v), "addr": addr_from_key}
+        return out
     except Exception as e:
         logger.error(f"Failed to load pending_pools (starting empty): {e}")
         return {}
@@ -669,16 +702,39 @@ async def poll_new_pools():
                     cy_seen = len(pools)
                     cy_matured = cy_passed = 0
                     cy_best = None
+                    matured_norms = []  # pools to score this cycle (from new_pools + force-fetch)
                     for norm in pools:
                         key = norm["key"]
                         cls = classify_pool(norm.get("created_at"), now_utc,
                                             PAIR_MIN_AGE_MINUTES, PAIR_NEWNESS_WINDOW_HOURS)
                         if cls == "pending":
-                            pending_pools[key] = norm.get("created_at") or now_utc.isoformat()
+                            pending_pools[key] = {"ca": norm.get("created_at") or now_utc.isoformat(),
+                                                  "addr": norm.get("pairAddress") or ""}
                             continue
                         pending_pools.pop(key, None)
-                        if cls != "mature":
-                            continue
+                        if cls == "mature":
+                            matured_norms.append(norm)
+
+                    # Solana maturity fix (2026-07-24): fast chains push a pool out of
+                    # the new_pools window before it reaches min age, so it is never
+                    # re-observed. Force-fetch the pending pools that have now matured
+                    # directly via pools/multi (<=30/call, one call per chain per cycle);
+                    # a fetch miss leaves them pending to retry next cycle (never dropped).
+                    due = pending_due_keys(pending_pools, chain, now_utc,
+                                           PAIR_MIN_AGE_MINUTES, PAIR_NEWNESS_WINDOW_HOURS)[:30]
+                    if due:
+                        addrs = [pending_pools[k]["addr"] for k in due if pending_pools[k].get("addr")]
+                        forced = await fetch_pools_by_address(client, chain, addrs) if addrs else []
+                        got = {n["key"] for n in forced}
+                        for n in forced:
+                            matured_norms.append(n)
+                        for k in got:
+                            pending_pools.pop(k, None)  # scored now; un-fetched stay pending
+                        logger.info(f"[discovery] {chain}: force-fetched {len(due)} due pending, "
+                                    f"{len(forced)} matured via direct fetch")
+
+                    for norm in matured_norms:
+                        key = norm["key"]
                         cy_matured += 1
                         liq = norm["liquidity_usd"]
                         if liq < min_liq:

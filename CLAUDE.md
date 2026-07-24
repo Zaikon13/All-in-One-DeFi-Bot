@@ -52,7 +52,14 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   younger than `PAIR_MIN_AGE_MINUTES` (20) has no volume/tx history yet (scoring it would score
   ~0), so it is HELD in a persisted pending-maturity set (`pending_pools.json`, sibling to
   `known_pairs.json` on the volume), re-evaluated each cycle, and dropped only past
-  `PAIR_NEWNESS_WINDOW_HOURS` (24). Dedup is keyed `{chain}:{pool_address}` (was a bare pair address pre-2026-07-23; old keys in `known_pairs.json` become inert, so a still-live pair may re-alert at most once under its new key). GeckoTerminal fields
+  `PAIR_NEWNESS_WINDOW_HOURS` (24). **Solana maturity fix (2026-07-24):** fast chains (Solana)
+  churn the 20-slot new_pools window every ~2 min, so a pool first seen at age ~0 is pushed out
+  before it can be re-observed at min-age — it would never mature. Each cycle the worker now
+  FORCE-FETCHES pending pools that have reached maturity age directly via GeckoTerminal
+  `pools/multi` (`fetch_pools_by_address`, reusing the exit-pricing endpoint; ≤30 addr/call, one
+  call per chain per cycle; a fetch miss leaves them pending to retry, never dropped). Pending
+  values store the ORIGINAL-case pool address (base58 Solana is case-sensitive). `pending_due_keys`
+  is pure + unit-tested. Dedup is keyed `{chain}:{pool_address}` (was a bare pair address pre-2026-07-23; old keys in `known_pairs.json` become inert, so a still-live pair may re-alert at most once under its new key). GeckoTerminal fields
   are mapped into the UNCHANGED `score_pair` 0-100 math; one combined Telegram message per cycle,
   each alert labelled with chain + DEX, 🔥 >=70 / 👀 >=35 (detail for first 10, capped 4000 chars).
   429 backoff; the loop never dies on a feed failure. The Dexscreener token-pricing used by

@@ -207,31 +207,30 @@ def parse_pool_prices(body: dict) -> dict:
     return out
 
 
-async def fetch_pool_prices(client, network: str, addresses: list,
-                            max_retries: int = 3) -> dict:
-    """Current base-token USD price per pool via pools/multi (up to 50 addresses
-    per call), for one chain. Returns {address: price} (both cases). Exponential
-    429 backoff; never raises -> partial/empty dict on failure. This is the paper
-    engine's exit-pricing feed (one call per chain per cycle, never per-position).
-    """
-    out = {}
+async def _iter_multi_bodies(client, network: str, addresses: list, chunk_size: int,
+                            max_retries: int = 3):
+    """Yield raw JSON bodies from batched GET pools/multi/{addresses} calls
+    (chunk_size addresses each). Exponential 429 backoff; a failed chunk is
+    skipped, never raised. Shared by fetch_pool_prices (exit pricing) and
+    fetch_pools_by_address (maturity force-fetch) — one endpoint, no duplication."""
     addrs = [a for a in (addresses or []) if a]
-    for i in range(0, len(addrs), 50):
-        chunk = addrs[i:i + 50]
+    for i in range(0, len(addrs), chunk_size):
+        chunk = addrs[i:i + chunk_size]
         url = f"{GECKOTERMINAL_BASE}/networks/{network}/pools/multi/{','.join(chunk)}"
+        params = {"include": "base_token,quote_token,dex"}
         for attempt in range(max_retries + 1):
             try:
-                r = await client.get(url, headers=_UA, timeout=20.0)
+                r = await client.get(url, params=params, headers=_UA, timeout=20.0)
                 if r.status_code == 429:
                     if attempt < max_retries:
                         await asyncio.sleep(1.0 * (2 ** attempt))
                         continue
                     logging.warning(f"[discovery] {network} pools/multi 429 after retries")
-                    return out
+                    return
                 if r.status_code != 200:
                     logging.warning(f"[discovery] {network} pools/multi HTTP {r.status_code}")
                     break
-                out.update(parse_pool_prices(r.json()))
+                yield r.json()
                 break
             except Exception as e:
                 if attempt < max_retries:
@@ -239,6 +238,33 @@ async def fetch_pool_prices(client, network: str, addresses: list,
                     continue
                 logging.warning(f"[discovery] {network} pools/multi failed: {type(e).__name__}")
                 break
+
+
+async def fetch_pool_prices(client, network: str, addresses: list,
+                            max_retries: int = 3) -> dict:
+    """Current base-token USD price per pool via pools/multi (50/call), for one
+    chain. Returns {address: price} (both cases). Never raises -> partial/empty.
+    The paper engine's exit-pricing feed (one call per chain per cycle)."""
+    out = {}
+    async for body in _iter_multi_bodies(client, network, addresses, 50, max_retries):
+        out.update(parse_pool_prices(body))
+    return out
+
+
+async def fetch_pools_by_address(client, network: str, addresses: list,
+                                 max_retries: int = 3) -> list:
+    """Full CURRENT data for specific pools via pools/multi (30/call), normalized
+    with parse_gt_pool. Used to MATURE pending pools directly instead of waiting
+    to re-observe them in new_pools (critical for fast chains like Solana whose
+    new_pools window turns over before a pool reaches min age). Never raises."""
+    out = []
+    async for body in _iter_multi_bodies(client, network, addresses, 30, max_retries):
+        inc = {x["id"]: x for x in (body.get("included") or [])
+               if isinstance(x, dict) and x.get("id")}
+        for pool in (body.get("data") or []):
+            n = parse_gt_pool(pool, network, inc)
+            if n:
+                out.append(n)
     return out
 
 
