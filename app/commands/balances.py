@@ -19,9 +19,10 @@ def _fmt_usd(v: float) -> str:
 
 
 def _stale(d: dict) -> str:
-    """Marker for a holding shown from its last-known amount (not refreshed this
-    cycle) — so a token is never silently dropped, and the user knows it's carried."""
-    return " · last known" if d.get("stale") else ""
+    """Marker for a row carried from last-known data — either its amount (not
+    refreshed this cycle) or its USD price (this cycle's price lookup missed) —
+    so a token is never silently dropped and the number is never misleading."""
+    return " · last known" if (d.get("stale") or d.get("price_stale")) else ""
 
 
 def _render_plain(wallet_address: str, balances: dict) -> str:
@@ -84,6 +85,10 @@ def _render_usd(wallet_address: str, balances: dict) -> str:
         if small:
             total_small = sum(d["usd"] for d in small)
             msg += f"• + {len(small)} more token(s) under {_fmt_usd(min_usd)} ({_fmt_usd(total_small)} combined)\n"
+    n_stale = balances.get("price_stale_count") or 0
+    if n_stale:
+        oldest = balances.get("price_stale_oldest_h") or 0
+        msg += f"\n⚠️ {n_stale} value(s) shown from last-known prices (oldest {oldest:.1f}h old)\n"
     return msg
 
 

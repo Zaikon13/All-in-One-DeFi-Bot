@@ -169,7 +169,13 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   successful read below dust) — never on a failed/absent read — so a real holding can't silently
   disappear between incremental cycles (the XYO/ADA \$69 omission bug); a token shown from its
   last-known amount (not refreshed this cycle) is marked `· last known`. Current holdings are also
-  force-re-checked every cycle so staleness is rare. Serves /wallet /bal /balances. A failed native `getBalance` now returns `ok=False` so
+  force-re-checked every cycle so staleness is rare. Serves /wallet /bal /balances. **Price no-flicker (2026-07-24):**
+  last-known USD prices are cached per token with a timestamp; a cycle whose price lookup misses
+  carries the cached price (marked `· last known`) and STILL counts it in the total, so the
+  portfolio value can't swing hundreds of dollars because different tokens got prices on different
+  cycles. Beyond `WALLET_PRICE_MAX_STALE_HOURS` (default 24) a cached price expires → 'price
+  unknown' and excluded from the total. A footer states how many values are stale and the oldest
+  age. Only genuinely-never-priced tokens show 'price unknown'. A failed native `getBalance` now returns `ok=False` so
   `/wallet /bal /balances` reply 'data source unavailable' instead of '$0 / no tokens'
   (2026-07-13). **PnL honesty (2026-07-17):** `get_today_transactions_async` returns
   `(txs, fetch_ok)`; any Explorer failure (HTTP error / 429 / rejected key / exception —
@@ -285,6 +291,7 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `CRONOS_STALE_ALERT_COOLDOWN_SECONDS` | runtime (optional) | min seconds between stale-data Telegram alerts (default 21600 = 6h; logs are not throttled) |
 | `WALLET_MIN_USD_DISPLAY` | web (optional) | /wallet holdings under this USD value collapse into one line (default 1) |
 | `WALLET_DISCOVERY_TTL_HOURS`, `WALLET_BALANCE_REFRESH_HOURS` | runtime (optional) | hours between token re-discovery / full balance sweeps (default 6 / 6) |
+| `WALLET_PRICE_MAX_STALE_HOURS` | runtime (optional) | max age a cached token price is carried as stale before → 'price unknown' (default 24) |
 | `WALLET_BALANCE_CONCURRENCY`, `WALLET_V2_MAX_RETRIES` | runtime (optional) | concurrent tokenbalance reads / 429 backoff retries (default 8 / 3) |
 | `PAIR_NEWNESS_WINDOW_HOURS` | worker (optional) | new-pair alert window vs `pairCreatedAt` (default 24) |
 | `PAIR_MIN_LIQUIDITY_USD` | worker (optional) | minimum pool liquidity for a new-pair alert (default 10000) |

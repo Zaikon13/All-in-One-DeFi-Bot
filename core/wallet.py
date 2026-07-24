@@ -74,6 +74,7 @@ _TOKEN_SET_CACHE: dict = {}
 # discovered_ts.
 WALLET_DISCOVERY_TTL_HOURS = float(os.getenv("WALLET_DISCOVERY_TTL_HOURS", "6"))
 WALLET_BALANCE_REFRESH_HOURS = float(os.getenv("WALLET_BALANCE_REFRESH_HOURS", "6"))
+WALLET_PRICE_MAX_STALE_HOURS = float(os.getenv("WALLET_PRICE_MAX_STALE_HOURS", "24"))
 WALLET_BALANCE_CONCURRENCY = int(os.getenv("WALLET_BALANCE_CONCURRENCY", "8"))
 _V2_MAX_RETRIES = int(os.getenv("WALLET_V2_MAX_RETRIES", "3"))
 
@@ -564,26 +565,59 @@ async def get_wallet_balances(wallet_address: str):
                     token_details.append({"symbol": disp, "contract": contract,
                                           "amount": amount, "usd": None, "stale": stale})
 
-        # --- USD enrichment (2026-07-05): best-effort, never blocks /wallet ---
-        # If pricing fails entirely, priced=False and callers fall back to the
-        # pre-existing amounts-only output.
+        # --- USD enrichment (2026-07-05; price-flicker fix 2026-07-24) ---
+        # Prices are cached per token with a timestamp. When a lookup returns
+        # nothing THIS cycle, the last-known price (within WALLET_PRICE_MAX_STALE_
+        # HOURS) is carried and marked stale, and STILL counted in the total — so a
+        # token doesn't flip to "price unknown" and swing the portfolio total by
+        # hundreds of dollars purely because different tokens got prices on
+        # different cycles. Only genuinely-never-priced (or expired) tokens show
+        # "price unknown" and are excluded from the total.
         cro_usd = None
         usd_total = None
         priced = False
+        price_stale_count = 0
+        price_stale_oldest_h = 0.0
+        max_stale_s = WALLET_PRICE_MAX_STALE_HOURS * 3600
+        price_cache = entry.setdefault("last_prices", {})  # contract -> {"price","ts"}
+        now_p = time.time()
+
+        def _resolve_price(contract, fresh):
+            """(price|None, stale_bool, age_hours). Fresh updates the cache; a miss
+            falls back to a non-expired cached price marked stale."""
+            nonlocal price_stale_count, price_stale_oldest_h
+            if fresh and fresh > 0:
+                price_cache[contract] = {"price": float(fresh), "ts": now_p}
+                return float(fresh), False, 0.0
+            cached = price_cache.get(contract)
+            if cached and (now_p - cached.get("ts", 0)) <= max_stale_s:
+                age_h = (now_p - cached["ts"]) / 3600.0
+                price_stale_count += 1
+                price_stale_oldest_h = max(price_stale_oldest_h, age_h)
+                return cached["price"], True, age_h
+            return None, False, 0.0  # never priced or expired -> genuinely unknown
+
         try:
             prices = await get_token_prices(
                 client, [d["contract"] for d in token_details] + [_WCRO_CONTRACT]
             )
-            if prices:
-                priced = True
-                cro_price = prices.get(_WCRO_CONTRACT)
-                if cro_price:
-                    cro_usd = cro * cro_price
-                for d in token_details:
-                    p = prices.get(d["contract"])
-                    if p:
-                        d["usd"] = d["amount"] * p
-                usd_total = (cro_usd or 0.0) + sum(d["usd"] for d in token_details if d["usd"])
+            cro_price, cro_stale, _ = _resolve_price(_WCRO_CONTRACT, prices.get(_WCRO_CONTRACT))
+            if cro_price:
+                cro_usd = cro * cro_price
+            for d in token_details:
+                p, stale, age_h = _resolve_price(d["contract"], prices.get(d["contract"]))
+                if p is not None:
+                    d["usd"] = d["amount"] * p
+                    d["price_stale"] = stale
+                    if stale:
+                        d["price_age_h"] = round(age_h, 1)
+                else:
+                    d["price_stale"] = False  # genuinely price unknown
+            priced = bool(cro_usd is not None or any(d.get("usd") is not None for d in token_details))
+            if priced:
+                usd_total = (cro_usd or 0.0) + sum(d["usd"] for d in token_details if d.get("usd") is not None)
+            if cro_stale:
+                price_stale_count += 1
         except Exception as e:
             logging.error(f"[wallet] USD enrichment failed (amounts-only fallback): {e}")
 
@@ -601,6 +635,8 @@ async def get_wallet_balances(wallet_address: str):
             "usd_total": usd_total,
             "token_details": token_details,
             "priced": priced,
+            "price_stale_count": price_stale_count,
+            "price_stale_oldest_h": round(price_stale_oldest_h, 1),
         }
 
 
