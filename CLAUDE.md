@@ -58,8 +58,14 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   FORCE-FETCHES pending pools that have reached maturity age directly via GeckoTerminal
   `pools/multi` (`fetch_pools_by_address`, reusing the exit-pricing endpoint; ≤30 addr/call, one
   call per chain per cycle; a fetch miss leaves them pending to retry, never dropped). Pending
-  values store the ORIGINAL-case pool address (base58 Solana is case-sensitive). `pending_due_keys`
-  is pure + unit-tested. Dedup is keyed `{chain}:{pool_address}` (was a bare pair address pre-2026-07-23; old keys in `known_pairs.json` become inert, so a still-live pair may re-alert at most once under its new key). GeckoTerminal fields
+  values store the ORIGINAL-case pool address (base58 Solana is case-sensitive). **Legacy-address
+  cleanup (2026-07-24):** entries persisted before the fix only ever stored the address inside the
+  lowercased dedup key, so `load_pending_pools` recovered a lowercased Solana address that
+  `pools/multi` can never resolve (returns 0 rows) — and at 30/call those poison entries starved
+  the budget so Solana matured 0 for hours. `migrate_pending` / `_addr_recoverable` (pure,
+  unit-tested) now DROP any pending entry whose address is untrustworthy for a force-fetch (a
+  case-sensitive network — Solana — with an all-lowercase address); EVM/Sui lowercase is kept.
+  `pending_due_keys` is pure + unit-tested. Dedup is keyed `{chain}:{pool_address}` (was a bare pair address pre-2026-07-23; old keys in `known_pairs.json` become inert, so a still-live pair may re-alert at most once under its new key). GeckoTerminal fields
   are mapped into the UNCHANGED `score_pair` 0-100 math; one combined Telegram message per cycle,
   each alert labelled with chain + DEX, 🔥 >=70 / 👀 >=35 (detail for first 10, capped 4000 chars).
   429 backoff; the loop never dies on a feed failure. The Dexscreener token-pricing used by
@@ -268,6 +274,13 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   the helper directly so never hit the worker call site. Fixed to `disc.fetch_pools_by_address`;
   `tests/test_worker_discovery_callsites.py` now statically guards every bare-name call in
   `worker.py` against runtime NameErrors. (2026-07-24)
+- ✅ Solana-maturity 0-matured-despite-force-fetch: after the NameError fix the loop ran cleanly but
+  Solana still matured 0 for 3+ hrs (`solana: seen 420, matured 0`). The 3180 pending pools carried
+  over from before the fix stored their address only in the lowercased dedup key; base58 Solana is
+  case-sensitive so every recovered address returned 0 rows from `pools/multi`, and at 30/cycle they
+  starved the force-fetch budget. `migrate_pending`/`_addr_recoverable` drop these unrecoverable
+  legacy entries at load (proved live: original-case addr → 1 row, lowercased → 0). New pending
+  entries already store original case, so maturation proceeds once the poison is cleared. (2026-07-24)
 
 **Still open:**
 - Worker start-command drift: `Procfile` + `railway.toml` use `python -u worker.py`, but the `Dockerfile`

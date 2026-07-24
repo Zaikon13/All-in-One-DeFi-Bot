@@ -222,6 +222,45 @@ def _pending_ca(v):
     return v.get("ca") if isinstance(v, dict) else v
 
 
+# Base58 (Solana) addresses are case-sensitive; EVM (cro) and Sui hex are not.
+# The force-fetch needs the ORIGINAL-case address to resolve via pools/multi.
+_CASE_SENSITIVE_NETWORKS = {"solana"}
+
+
+def _addr_recoverable(network: str, addr: str) -> bool:
+    """Whether a pending pool's stored address can be trusted for a pools/multi
+    force-fetch. For case-sensitive networks an all-lowercase address is a
+    corrupted legacy value — its case was lost because only the lowercased dedup
+    key was ever persisted — and will NEVER resolve (GeckoTerminal returns 0
+    rows), so retrying it forever just starves the 30/call budget. Drop it. Real
+    Solana base58 addresses effectively always contain an uppercase char."""
+    if not addr:
+        return False
+    if network in _CASE_SENSITIVE_NETWORKS:
+        return any(c.isupper() for c in addr)
+    return True
+
+
+def migrate_pending(data: dict):
+    """Pure: normalize a loaded pending map to {key: {ca, addr}}, dropping any
+    entry whose address can't be trusted for a force-fetch (see _addr_recoverable).
+    Returns (clean_dict, dropped_count). Unit-tested offline."""
+    out, dropped = {}, 0
+    for k, v in (data or {}).items():
+        k = str(k)
+        network = k.split(":", 1)[0]
+        addr_from_key = k.split(":", 1)[1] if ":" in k else ""
+        if isinstance(v, dict) and v.get("ca"):
+            ca, addr = str(v.get("ca")), str(v.get("addr") or addr_from_key)
+        else:  # legacy {key: created_at_str}
+            ca, addr = str(v), addr_from_key
+        if not _addr_recoverable(network, addr):
+            dropped += 1
+            continue
+        out[k] = {"ca": ca, "addr": addr}
+    return out, dropped
+
+
 def pending_due_keys(pending: dict, chain: str, now_utc, min_age_minutes: float,
                      newness_window_hours: float) -> list:
     """Pure: pending keys for `chain` whose pool has now reached maturity age
@@ -474,14 +513,10 @@ def load_pending_pools() -> dict:
             data = json.load(f)
         if not isinstance(data, dict):
             return {}
-        out = {}
-        for k, v in data.items():
-            k = str(k)
-            addr_from_key = k.split(":", 1)[1] if ":" in k else ""
-            if isinstance(v, dict) and v.get("ca"):
-                out[k] = {"ca": str(v.get("ca")), "addr": str(v.get("addr") or addr_from_key)}
-            else:  # legacy {key: created_at_str}
-                out[k] = {"ca": str(v), "addr": addr_from_key}
+        out, dropped = migrate_pending(data)
+        if dropped:
+            logger.info(f"pending-maturity: dropped {dropped} unrecoverable legacy "
+                        f"entry(ies) with lowercased case-sensitive addresses")
         return out
     except Exception as e:
         logger.error(f"Failed to load pending_pools (starting empty): {e}")
