@@ -18,6 +18,12 @@ def _fmt_usd(v: float) -> str:
     return f"${v:,.2f}"
 
 
+def _stale(d: dict) -> str:
+    """Marker for a holding shown from its last-known amount (not refreshed this
+    cycle) — so a token is never silently dropped, and the user knows it's carried."""
+    return " · last known" if d.get("stale") else ""
+
+
 def _render_plain(wallet_address: str, balances: dict) -> str:
     """Pre-2026-07-05 amounts-only rendering — the exact fallback when pricing
     fails entirely (priced=False) or token_details is missing."""
@@ -69,10 +75,10 @@ def _render_usd(wallet_address: str, balances: dict) -> str:
         msg += "No tokens found.\n"
     else:
         for d in big:
-            msg += f"• **{d['symbol']}**: `{d['amount']:,.4f}` — {_fmt_usd(d['usd'])}\n"
+            msg += f"• **{d['symbol']}**: `{d['amount']:,.4f}` — {_fmt_usd(d['usd'])}{_stale(d)}\n"
         MAX_UNPRICED_ROWS = 15  # Telegram 4096-char safety
         for d in unpriced_rows[:MAX_UNPRICED_ROWS]:
-            msg += f"• **{d['symbol']}**: `{d['amount']:,.4f}` — price unknown\n"
+            msg += f"• **{d['symbol']}**: `{d['amount']:,.4f}` — price unknown{_stale(d)}\n"
         if len(unpriced_rows) > MAX_UNPRICED_ROWS:
             msg += f"• + {len(unpriced_rows) - MAX_UNPRICED_ROWS} more token(s), price unknown\n"
         if small:

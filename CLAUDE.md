@@ -157,7 +157,12 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   with no API call, keeps a per-wallet held-set and only balance-checks real holdings each
   cycle (full sweep of all candidates every `WALLET_BALANCE_REFRESH_HOURS`), and backs off on
   429 (`WALLET_V2_MAX_RETRIES`). A held token keeps its last known amount on a transient
-  failure instead of flickering to 0. A failed native `getBalance` now returns `ok=False` so
+  failure instead of flickering to 0. **No-vanish (2026-07-23):** the /wallet display
+  is driven by a persistent per-wallet `holdings` map pruned ONLY on a CONFIRMED zero (a
+  successful read below dust) — never on a failed/absent read — so a real holding can't silently
+  disappear between incremental cycles (the XYO/ADA \$69 omission bug); a token shown from its
+  last-known amount (not refreshed this cycle) is marked `· last known`. Current holdings are also
+  force-re-checked every cycle so staleness is rare. Serves /wallet /bal /balances. A failed native `getBalance` now returns `ok=False` so
   `/wallet /bal /balances` reply 'data source unavailable' instead of '$0 / no tokens'
   (2026-07-13). **PnL honesty (2026-07-17):** `get_today_transactions_async` returns
   `(txs, fetch_ok)`; any Explorer failure (HTTP error / 429 / rejected key / exception —

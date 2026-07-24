@@ -480,6 +480,10 @@ async def get_wallet_balances(wallet_address: str):
         now = time.time()
         to_check, is_full = _select_balance_contracts(
             candidates, entry, now, WALLET_BALANCE_REFRESH_HOURS * 3600)
+        # 2026-07-23: ALWAYS re-check whatever we're currently displaying (holdings),
+        # so a shown token gets a fresh read every cycle and staleness is rare.
+        _holdings_keys = set(entry.get("holdings") or {}) & set(candidates)
+        to_check = sorted(set(to_check) | _holdings_keys)
         logging.info(f"[wallet] balance read: {len(to_check)} token(s) "
                      f"({'full sweep' if is_full else 'incremental'}) of {len(candidates)} candidates")
 
@@ -497,48 +501,63 @@ async def get_wallet_balances(wallet_address: str):
         # Resolve amounts; a failed read (None, after 429 backoff) keeps the last known
         # amount so a held token never flickers to 0 on a transient rate-limit.
         last_amounts = entry.setdefault("last_amounts", {})
+        # holdings is the DISPLAY source of truth (2026-07-23): a token is pruned
+        # ONLY on a confirmed zero read (successful read below dust) — NEVER on a
+        # failed/absent read — so a real holding can never silently vanish between
+        # /wallet calls. Each entry keeps its last-known amount + meta + last-ok ts.
+        holdings = entry.setdefault("holdings", {})
         amount_by_contract: dict = {}
         for contract, raw in results:
-            _sym, decimals, _name = candidates[contract]
+            meta = candidates.get(contract)
+            decimals = meta[1] if meta else 18
             if raw is None:
+                # failed read (429/backoff exhausted): keep last known, don't evict
                 amt = last_amounts.get(contract)
                 if amt is None:
                     continue
-            else:
-                try:
-                    amt = _to_int(raw, 0) / (10 ** int(decimals))
-                except (ValueError, TypeError, ZeroDivisionError):
-                    amt = 0.0
-                last_amounts[contract] = amt
+                amount_by_contract[contract] = amt
+                continue
+            try:
+                amt = _to_int(raw, 0) / (10 ** int(decimals))
+            except (ValueError, TypeError, ZeroDivisionError):
+                amt = 0.0
+            last_amounts[contract] = amt
             amount_by_contract[contract] = amt
+            if amt >= _DUST_THRESHOLD:
+                holdings[contract] = {"amount": amt, "ts": now, "meta": meta}
+            else:
+                holdings.pop(contract, None)  # confirmed zero -> genuinely sold/empty
 
         _update_held(entry, to_check, amount_by_contract, _DUST_THRESHOLD, is_full, now)
 
-        # --- build display from the held set; disambiguate duplicate symbols by contract ---
-        by_symbol: dict = {}  # symbol -> list of (contract, amount)
-        for contract in (entry.get("held_set") or set()):
-            meta = candidates.get(contract) or contracts.get(contract)
+        # --- build display from the persistent holdings map (never drops on a
+        #     failed/unchecked read); mark tokens not refreshed THIS cycle as stale ---
+        by_symbol: dict = {}  # symbol -> list of (contract, amount, stale)
+        for contract, h in list(holdings.items()):
+            meta = h.get("meta") or candidates.get(contract) or contracts.get(contract)
             if not meta:
                 continue
-            symbol, decimals, name = meta
-            amount = amount_by_contract.get(contract, last_amounts.get(contract, 0.0))
+            symbol = meta[0]
+            amount = h.get("amount", 0.0)
             if amount < _DUST_THRESHOLD:
                 continue
-            by_symbol.setdefault(symbol, []).append((contract, amount))
+            stale = h.get("ts") != now  # not refreshed this cycle -> last known value
+            by_symbol.setdefault(symbol, []).append((contract, amount, stale))
 
         tokens: dict = {}
-        token_details: list = []  # additive: [{symbol, contract, amount, usd|None}]
+        token_details: list = []  # additive: [{symbol, contract, amount, usd|None, stale}]
         for symbol, entries in by_symbol.items():
             if len(entries) == 1:
-                tokens[symbol] = entries[0][1]
-                token_details.append({"symbol": symbol, "contract": entries[0][0],
-                                      "amount": entries[0][1], "usd": None})
+                contract, amount, stale = entries[0]
+                tokens[symbol] = amount
+                token_details.append({"symbol": symbol, "contract": contract,
+                                      "amount": amount, "usd": None, "stale": stale})
             else:  # same symbol, different contracts -> disambiguate
-                for contract, amount in entries:
+                for contract, amount, stale in entries:
                     disp = f"{symbol} (0x{contract[2:6]})"
                     tokens[disp] = amount
                     token_details.append({"symbol": disp, "contract": contract,
-                                          "amount": amount, "usd": None})
+                                          "amount": amount, "usd": None, "stale": stale})
 
         # --- USD enrichment (2026-07-05): best-effort, never blocks /wallet ---
         # If pricing fails entirely, priced=False and callers fall back to the
