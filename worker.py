@@ -652,7 +652,9 @@ async def _paper_step(client, fresh, now_utc):
         return
     try:
         if paper_state is None:
+            logger.info(f"paper: state file resolves to {paper.state_path()}")
             paper_state = paper.load_state()
+            paper.save_state(paper_state)  # persist any load-time repair/reconcile at once
             logger.info(f"paper: state loaded — {paper.paper_summary_line(paper_state)}")
 
         # --- entries: alerted pairs (ANY enabled chain) at/above the entry bar ---
@@ -714,6 +716,10 @@ async def _paper_step(client, fresh, now_utc):
                     if cp is None:
                         # spec: never exit on missing data; say so in the LOG only
                         logger.info(f"paper: no price for {pos['symbol']} this cycle; holding")
+                    elif paper.is_bad_tick(pos.get("entry_price"), cp):
+                        # a single garbage tick must never book a trade
+                        logger.warning(f"paper: ⚠️ ignored absurd price {cp} for {pos['symbol']} "
+                                       f"(entry {pos.get('entry_price')}); holding, not booking")
                     continue
                 reason, exit_price = res
                 closed = paper.close_position(paper_state, pos, exit_price, reason,

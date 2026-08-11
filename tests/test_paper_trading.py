@@ -167,8 +167,10 @@ class TestStateIO(unittest.TestCase):
         json.dump(bad, open(p, "w"))
         st = pt.load_state(p)
         self.assertEqual([q["pair_address"] for q in st["open"]], ["0xok"])
-        # int balance accepted (not silently reset to the default 1000)
-        self.assertEqual(st["balance_usd"], 900.0)
+        # Reconcile-on-load (2026-08-10): the stored 900 was inconsistent with the
+        # trade record (one $50 open, no closed -> 1000 - 50 = 950). Balance now
+        # reconciles to the trade-derived value instead of trusting a corrupt field.
+        self.assertEqual(st["balance_usd"], 950.0)
 
     def test_summary_line_formats(self):
         st = _state()

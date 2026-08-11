@@ -47,6 +47,10 @@ PAPER_MAX_OPEN = int(_env_pos_float("PAPER_MAX_OPEN", 5.0))
 PAPER_TP_PCT = _env_pos_float("PAPER_TP_PCT", 25.0)
 PAPER_SL_PCT = _env_pos_float("PAPER_SL_PCT", 15.0)
 PAPER_MAX_HOLD_HOURS = _env_pos_float("PAPER_MAX_HOLD_HOURS", 24.0)
+# A single exit tick above this multiple of the entry price is treated as bad
+# feed data (a glitch), never as a real fill — the +43,137% trade proved one
+# garbage tick can otherwise book an enormous fake gain (2026-08-10).
+PAPER_MAX_TICK_RATIO = _env_pos_float("PAPER_MAX_TICK_RATIO", 10.0)
 
 
 def data_dir() -> str:
@@ -88,6 +92,7 @@ def load_state(path: str | None = None) -> dict:
     are dropped with a log (a hand-edited zombie position must not wedge the
     engine or hold a slot forever); numeric fields accept int or float."""
     p = path or state_path()
+    logging.info(f"[paper] loading state from {p}")
     try:
         with open(p, "r", encoding="utf-8") as f:
             raw = json.load(f)
@@ -105,6 +110,23 @@ def load_state(path: str | None = None) -> dict:
             if dropped:
                 logging.warning(f"[paper] dropped {dropped} malformed open position(s) on load")
             st["open"] = good
+        # Integrity pass (2026-08-10): re-book any impossible glitch-gains, then
+        # reconcile the balance against the trade record so a corrupted balance
+        # (e.g. the +43,137% fake profit) can never silently persist, and a
+        # partial file can't keep an inflated balance while wiping history.
+        rep = repair_impossible_trades(st)
+        expected, drift = reconcile_balance(st)
+        if abs(drift) > 0.01:
+            logging.warning(
+                f"[paper] balance reconciled on load: stored ${st['balance_usd']:.2f} -> "
+                f"derived ${expected:.2f} (drift ${drift:.2f}); "
+                f"{rep['corrected']} impossible trade(s) re-booked to +{PAPER_TP_PCT:g}%, "
+                f"${rep['removed_usd']:.2f} fake profit removed")
+            st["balance_usd"] = expected
+        elif rep["corrected"]:
+            logging.warning(
+                f"[paper] re-booked {rep['corrected']} impossible trade(s) on load "
+                f"(removed ${rep['removed_usd']:.2f})")
         return st
     except FileNotFoundError:
         return fresh_state()
@@ -182,13 +204,41 @@ def open_position(state: dict, pair_address: str, symbol: str, token_address: st
     return pos
 
 
+def is_bad_tick(entry, price, max_ratio=None) -> bool:
+    """True when an exit price is so far above entry it can't be a real fill — a
+    feed glitch (the +43,137% trade). Used to HOLD rather than book: a single
+    garbage tick must never book a trade. Only the HIGH side is treated as bad
+    data; an extreme LOW price is plausibly a real dump and is handled by the
+    stop-loss (booked at the SL threshold). Pure; never raises."""
+    max_ratio = PAPER_MAX_TICK_RATIO if max_ratio is None else max_ratio
+    try:
+        e = float(entry)
+        p = float(price)
+    except (TypeError, ValueError):
+        return False
+    if not (math.isfinite(e) and math.isfinite(p)) or e <= 0 or p <= 0:
+        return False
+    return p > e * max_ratio
+
+
 def check_exit(position: dict, current_price, now_utc,
-               tp_pct=None, sl_pct=None, max_hold_hours=None):
+               tp_pct=None, sl_pct=None, max_hold_hours=None, max_tick_ratio=None):
     """None (hold) or (reason, exit_price). First rule hit wins: TP, then SL,
-    then time-stop. Missing/bad price NEVER exits — hold and retry next cycle."""
+    then time-stop. Missing/bad price NEVER exits — hold and retry next cycle.
+
+    Safeguards (2026-08-10) stop one bad tick from booking a fake trade:
+    1. An absurd tick (> max_tick_ratio x entry) is rejected as bad data → HOLD.
+    2. Booking is deliberately ASYMMETRIC: take-profit books at the +tp% THRESHOLD
+       (you cannot fill above your own limit, so a spike past the target can never
+       book more than +tp%), while stop-loss books at the OBSERVED price (an
+       illiquid memecoin can dump far below the stop, so booking the raw fill
+       captures the real loss — a rug to -95% books ~-95%, not a flattering -sl%).
+       The high-side bad-tick guard already blocks a garbage tick from faking a
+       gain. A time-stop books at the sanity-checked observed price."""
     tp_pct = PAPER_TP_PCT if tp_pct is None else tp_pct
     sl_pct = PAPER_SL_PCT if sl_pct is None else sl_pct
     max_hold_hours = PAPER_MAX_HOLD_HOURS if max_hold_hours is None else max_hold_hours
+    max_tick_ratio = PAPER_MAX_TICK_RATIO if max_tick_ratio is None else max_tick_ratio
     entry = position.get("entry_price") or 0
     price = None
     try:
@@ -198,25 +248,28 @@ def check_exit(position: dict, current_price, now_utc,
                 price = p
     except (TypeError, ValueError):
         price = None
-    if price is not None and entry > 0:
-        move_pct = (price - entry) / entry * 100.0
-        if move_pct >= tp_pct:
-            return "take-profit", price
-        if move_pct <= -sl_pct:
-            return "stop-loss", price
-    # time-stop uses last known price if current is missing? NO — a time-stop with
-    # no price cannot be booked honestly; wait for a price (spec: never exit on
-    # missing data). With a price, time-stop closes at that price.
-    if price is not None:
-        try:
-            opened = datetime.fromisoformat(str(position.get("opened_at")))
-            if opened.tzinfo is None:
-                opened = opened.replace(tzinfo=timezone.utc)
-            held_h = (now_utc - opened).total_seconds() / 3600.0
-            if held_h >= max_hold_hours:
-                return "time-stop", price
-        except Exception:
-            pass  # bad timestamp -> no time exit; TP/SL still work
+    if price is None or entry <= 0:
+        return None  # missing/unusable price -> hold (spec: never exit on missing data)
+    # (1) reject an absurd tick as bad feed data — never book on a glitch
+    if is_bad_tick(entry, price, max_tick_ratio):
+        return None  # hold; the worker logs the ignored tick
+    move_pct = (price - entry) / entry * 100.0
+    # take-profit caps at the +tp% threshold; stop-loss books the OBSERVED price
+    # (a dump fills below the stop — capture the real loss, never a flattering -sl%)
+    if move_pct >= tp_pct:
+        return "take-profit", entry * (1.0 + tp_pct / 100.0)
+    if move_pct <= -sl_pct:
+        return "stop-loss", price
+    # time-stop closes at the (already sanity-checked) observed price
+    try:
+        opened = datetime.fromisoformat(str(position.get("opened_at")))
+        if opened.tzinfo is None:
+            opened = opened.replace(tzinfo=timezone.utc)
+        held_h = (now_utc - opened).total_seconds() / 3600.0
+        if held_h >= max_hold_hours:
+            return "time-stop", price
+    except Exception:
+        pass  # bad timestamp -> no time exit; TP/SL still work
     return None
 
 
@@ -239,6 +292,57 @@ def close_position(state: dict, position: dict, exit_price: float, reason: str,
                      if p.get("pair_address") != position.get("pair_address")]
     state["closed"].append(closed)
     return closed
+
+
+def reconcile_balance(state: dict) -> tuple:
+    """(expected_balance, drift). The trade record is the source of truth:
+    expected = starting + sum(realized pnl) - open cost basis. drift = the stored
+    balance minus that expected value; a nonzero drift means the stored balance
+    was corrupted (e.g. a glitch-inflated gain). Pure; never raises."""
+    starting = float(state.get("starting_usd") or 0)
+    closed = state.get("closed") or []
+    opens = state.get("open") or []
+    sum_pnl = sum(float(c.get("pnl_usd") or 0) for c in closed if isinstance(c, dict))
+    open_basis = sum(float(p.get("usd_in") or 0) for p in opens if isinstance(p, dict))
+    expected = starting + sum_pnl - open_basis
+    drift = float(state.get("balance_usd") or 0) - expected
+    return expected, drift
+
+
+def repair_impossible_trades(state: dict, tp_pct=None) -> dict:
+    """Re-book any closed trade whose recorded pnl_pct exceeds the take-profit cap
+    (an exit booked at a garbage/overshoot tick under the old logic) to the +tp%
+    threshold. The original values are preserved on the record so history stays
+    honest and auditable. Idempotent (a corrected trade is at +tp%, not above it).
+    Returns {'corrected': n, 'removed_usd': fake profit removed}. Pure; mutates
+    the closed entries in place."""
+    tp_pct = PAPER_TP_PCT if tp_pct is None else tp_pct
+    corrected = 0
+    removed = 0.0
+    for c in state.get("closed") or []:
+        if not isinstance(c, dict):
+            continue
+        try:
+            pct = float(c.get("pnl_pct"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(pct) or pct <= tp_pct + 1e-9:
+            continue  # within the cap (or a loss) -> leave untouched
+        usd_in = float(c.get("usd_in") or 0)
+        entry = float(c.get("entry_price") or 0)
+        old_pnl = float(c.get("pnl_usd") or 0)
+        new_pnl = usd_in * tp_pct / 100.0
+        removed += (old_pnl - new_pnl)
+        c.setdefault("original_pnl_usd", old_pnl)       # keep the audit trail once
+        c.setdefault("original_pnl_pct", pct)
+        c.setdefault("original_exit_price", c.get("exit_price"))
+        c["pnl_usd"] = round(new_pnl, 2)
+        c["pnl_pct"] = round(float(tp_pct), 2)
+        if entry > 0:
+            c["exit_price"] = entry * (1.0 + tp_pct / 100.0)
+        c["corrected"] = f"capped to +{tp_pct:g}% TP (was an impossible glitch tick)"
+        corrected += 1
+    return {"corrected": corrected, "removed_usd": round(removed, 2)}
 
 
 def group_open_by_chain(open_positions: list) -> dict:

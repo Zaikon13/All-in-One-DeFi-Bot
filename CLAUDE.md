@@ -138,7 +138,27 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   a missing price still holds (never exits on missing data). Simulation only — no keys, no signing,
   no spending on any chain. Decision logic is pure (`should_enter`/`check_exit`/close math/
   `group_open_by_chain`) and unit-tested offline. Expectation: with the 🔥-tier entry bar, days may
-  pass before the first simulated trade — patience IS the strategy. **Webhook self-heal (2026-07-18):** after the webhook was
+  pass before the first simulated trade — patience IS the strategy. **Exit-price integrity
+  (2026-08-10):** exits used to book at the observed price tick with no cap, so one garbage feed
+  tick booked a +43,137% (+$21,568 on a $50 position) "gain" and ~197 winners booked above the
+  +25% TP — inflating the balance to ~$25.5k when the true result was near break-even. Two
+  safeguards in `check_exit`: (1) an absurd tick above `PAPER_MAX_TICK_RATIO`× entry (default 10)
+  is rejected as bad feed data → HOLD, never booked (`is_bad_tick`, pure; HIGH side only — an
+  extreme low price is a plausible real dump handled by SL); (2) booking is deliberately
+  ASYMMETRIC — take-profit books at the +TP% THRESHOLD (`entry×(1+TP/100)`; you can't fill above
+  your own limit, so a spike can't book more than +TP%), while stop-loss books at the OBSERVED
+  price (an illiquid memecoin dumps far below the stop, so the raw fill captures the real loss —
+  a rug to −95% books ~−95%, NOT a flattering −SL%; booking rugs at −SL% would make the sim
+  systematically optimistic about the risk that matters most). Time-stop books at the
+  sanity-checked observed price; the high-side bad-tick guard still blocks any fake gain. **State integrity:** `load_state` now runs
+  `repair_impossible_trades` (re-books any closed trade with `pnl_pct` > TP down to +TP%, keeping
+  `original_pnl_usd`/`original_pnl_pct`/`original_exit_price` + a `corrected` marker so history
+  stays honest; idempotent) then `reconcile_balance` (balance := starting + Σ realized pnl − open
+  cost basis) — a corrupted/inflated balance can no longer persist, and a partial file can't keep
+  an inflated balance while wiping history. The worker logs the resolved `state_path()` at startup
+  and saves once right after the load-time repair. The repair auto-applies on the next deploy and
+  logs before/after (projected: balance ~$25.5k → ~$1–2k, ~$24.3–24.7k fake profit removed).
+  `repair_impossible_trades`/`reconcile_balance`/`is_bad_tick` are pure + unit-tested. **Webhook self-heal (2026-07-18):** after the webhook was
   found pointing at the deleted web-gpl6 (404, pending updates stuck), two defenses ship:
   (a) the bot sets its OWN webhook on startup (`app/main.py` startup hook, gated by
   `WEBHOOK_AUTOSET_ENABLED`, default on; target = `WEBHOOK_URL` > `APP_URL` >
@@ -347,6 +367,7 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `WEBHOOK_GUARD_ENABLED`, `WEBHOOK_GUARD_INTERVAL_MIN`, `WEBHOOK_EXPECTED_URL` | worker (optional) | hourly drift guard on/off / cadence min / expected URL (defaults true / 60 / canonical bot domain) |
 | `PAPER_MIRROR_URL` | worker (optional) | where the worker pushes the /paper state mirror (default the bot's public /internal/paper-state) |
 | `PAPER_STARTING_USD`, `PAPER_ENTRY_SCORE`, `PAPER_POSITION_USD`, `PAPER_MAX_OPEN`, `PAPER_TP_PCT`, `PAPER_SL_PCT`, `PAPER_MAX_HOLD_HOURS` | worker (optional) | simulated capital / entry score bar / position size / max concurrent / take-profit % / stop-loss % / time-stop hours (defaults 1000 / 70 / 50 / 5 / 25 / 15 / 24) |
+| `PAPER_MAX_TICK_RATIO` | worker (optional) | exit ticks above this multiple of entry are rejected as bad feed data (hold, never book) — stops a glitch tick booking a fake gain (default 10) |
 | `SCAN_DIGEST_ENABLED`, `SCAN_DIGEST_HOUR` | worker (optional) | daily scanner-funnel digest on/off + Athens hour (default true / 21) |
 | `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |
 | `ETHERSCAN_API_KEY` | legacy | no longer used by the live data path (deprecated sync Covalent helper only) |
