@@ -371,6 +371,32 @@ def total_equity_pnl(state: dict) -> float:
     return (state.get("balance_usd", 0) + invested) - state.get("starting_usd", 0)
 
 
+def compact_paper_state(state: dict, max_closed: int = 10) -> dict:
+    """A small, BOUNDED projection of the paper state for the /paper mirror — only
+    the fields the bot renders, never the full closed[] history. The mirror POSTs
+    the whole state to the bot, and closed[] grows without limit; once it passed
+    the bot's 200 KB body cap every push 413'd and /paper went stale. This keeps
+    the payload ~constant no matter how long the history gets: the (already
+    capped) open positions, the last `max_closed` closed trades for display, and
+    precomputed totals (count, wins) so the renderer never needs the full list.
+    Pure; safe on missing/oddly-typed fields."""
+    closed = [c for c in (state.get("closed") or []) if isinstance(c, dict)]
+    opens = [p for p in (state.get("open") or []) if isinstance(p, dict)]
+    wins = sum(1 for c in closed if (c.get("pnl_usd") or 0) > 0)
+    open_keys = ("symbol", "chain", "pair_address", "token_address",
+                 "entry_price", "qty", "usd_in")
+    closed_keys = ("symbol", "pnl_usd", "pnl_pct", "exit_reason", "closed_at")
+    return {
+        "balance_usd": state.get("balance_usd"),
+        "starting_usd": state.get("starting_usd"),
+        "open": [{k: p.get(k) for k in open_keys} for p in opens],
+        "closed_count": len(closed),
+        "wins": wins,
+        "closed_recent": [{k: c.get(k) for k in closed_keys}
+                          for c in closed[-max_closed:]],
+    }
+
+
 def paper_summary_line(state: dict) -> str:
     """One-line status (EOD wiring lands in the /paper commit). Markdown v1 safe."""
     wr = win_rate(state)

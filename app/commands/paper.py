@@ -65,16 +65,28 @@ def render_paper_status(mirror: dict | None, prices: dict | None = None,
             line += " · current price unknown this minute"
         msg += line + "\n"
 
-    closed = st.get("closed") or []
-    msg += f"\n**Closed trades ({len(closed)} total, last {min(10, len(closed))}):**\n"
-    if not closed:
+    # Closed count / recent list / win rate come from EITHER the compact mirror
+    # (closed_count + wins + closed_recent) or a full state (closed[]). Supporting
+    # both keeps /paper correct across a deploy where one side is newer, and lets
+    # the mirror stay small (the full closed[] history is never sent — it grows
+    # unbounded and blew past the bot's 200 KB body cap).
+    if isinstance(st.get("closed"), list):
+        closed_count = len(st["closed"])
+        recent = st["closed"][-10:]
+        wr = win_rate(st)
+    else:
+        closed_count = int(st.get("closed_count") or 0)
+        recent = st.get("closed_recent") or []
+        w = st.get("wins")
+        wr = (100.0 * w / closed_count) if (isinstance(w, (int, float)) and closed_count > 0) else None
+    msg += f"\n**Closed trades ({closed_count} total, last {min(10, len(recent))}):**\n"
+    if closed_count == 0:
         msg += "- none yet\n"
-    for c in closed[-10:][::-1]:
+    for c in recent[::-1]:
         emoji = "✅" if (c.get("pnl_usd") or 0) > 0 else "❌"
         msg += (f"- {emoji} **{c.get('symbol','?')}** {c.get('pnl_usd', 0):+,.2f} USD "
                 f"({c.get('pnl_pct', 0):+.1f}%) · {c.get('exit_reason','?')}\n")
 
-    wr = win_rate(st)
     msg += f"\n**Win rate:** {'—' if wr is None else f'{wr:.0f}%'}"
     return msg
 

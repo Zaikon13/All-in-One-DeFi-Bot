@@ -615,7 +615,9 @@ async def _push_paper_mirror(client, state: dict):
     try:
         resp = await client.post(
             PAPER_MIRROR_URL,
-            json={"state": state, "signals": signals_state,
+            # compact projection only — the full closed[] history grows unbounded
+            # and blew past the bot's 200 KB body cap (413), staling /paper
+            json={"state": paper.compact_paper_state(state), "signals": signals_state,
                   "as_of": datetime.now(timezone.utc).isoformat()},
             headers={"X-Paper-Auth": _paper_mirror_auth()},
             timeout=10.0,

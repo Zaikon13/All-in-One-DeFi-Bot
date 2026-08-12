@@ -175,7 +175,14 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   ONLY to the worker, so the bot cannot read `paper_state.json`; after every engine step the
   worker POSTs a compact state mirror to the bot's `POST /internal/paper-state` (auth =
   sha256 of the shared `TELEGRAM_BOT_TOKEN`, token never sent; in-memory, refills ≤1 cycle
-  after a bot restart; override target via `PAPER_MIRROR_URL`). `/paper` renders from the
+  after a bot restart; override target via `PAPER_MIRROR_URL`). **Compact payload
+  (2026-08-11):** the mirror sends `core.paper_trading.compact_paper_state` — only what /paper
+  renders (balance, starting, open positions, `closed_count`, `wins`, and the last 10 closed) —
+  never the full `closed[]` history, which grows unbounded. The full state had passed the bot's
+  200 KB body cap so every push returned 413 and /paper went stale (the repair's audit fields
+  tipped it over); the compact payload is ~2 KB regardless of history length. The renderer reads
+  the compact fields with a fallback to a full `closed[]` for safety across a deploy. Pure +
+  unit-tested (payload stays under the cap even with a 50k-trade history). `/paper` renders from the
   mirror (renderer `app/commands/paper.py`, pure + unit-tested): balance + realized PnL since
   start, open positions with entry/current/unrealized (current prices via one keyless
   Dexscreener batch; 'price unknown' if unavailable), last 10 closed with win/loss + reason,
