@@ -29,6 +29,16 @@
 
 ## Quick Start — standalone (no Railway needed)
 
+**Easiest (Windows):**
+1. Download the ZIP of this branch and unzip it.
+2. Double-click **`start_bot.bat`**.
+
+It installs what it needs, asks once for your bot token (@BotFather → your bot → API Token),
+finds your chat id by itself when you press Start in Telegram, messages you, and runs the bot.
+On macOS/Linux use `./start_bot.sh`. Settings stay in the local `.env`, which is never uploaded.
+
+Manual way:
+
 `run_local.py` runs the bot **and** the worker in one process. No public URL, no
 webhook, no volume to rent: Telegram is reached by long-polling and state lives
 in `./data/`.
