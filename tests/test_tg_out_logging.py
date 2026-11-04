@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.log_redaction import tg_out_log, RedactingFilter, TG_OUT_MAX
 
-SECRET = "Tti8FhS23cC8TOOo4PIEAbcd1234"
+FAKE_KEY = "Tti8FhS23cC8TOOo4PIEAbcd1234"
 
 
 def _capture_logger(name):
@@ -30,10 +30,10 @@ def _capture_logger(name):
 class TestTgOutLog(unittest.TestCase):
     def test_prefix_and_redaction(self):
         lg, buf = _capture_logger("tgout_test_1")
-        tg_out_log(lg, f"🚀 New Pool https://api.geckoterminal.com/x?apikey={SECRET}&y=1")
+        tg_out_log(lg, f"🚀 New Pool https://api.geckoterminal.com/x?apikey={FAKE_KEY}&y=1")
         out = buf.getvalue()
         self.assertIn("[tg-out]", out)
-        self.assertNotIn(SECRET, out)           # key never appears
+        self.assertNotIn(FAKE_KEY, out)           # key never appears
         self.assertIn("apikey=***", out)        # redacted form
 
     def test_truncated(self):
@@ -63,10 +63,10 @@ class TestWorkerSendPath(unittest.TestCase):
         with mock.patch.object(worker, "TELEGRAM_BOT_TOKEN", ""), \
              mock.patch.object(worker, "TELEGRAM_CHAT_ID", ""):
             asyncio.get_event_loop().run_until_complete(
-                worker.send_telegram(f"paper buy apikey={SECRET}"))
+                worker.send_telegram(f"paper buy apikey={FAKE_KEY}"))
         out = buf.getvalue()
         self.assertIn("[tg-out]", out)
-        self.assertNotIn(SECRET, out)
+        self.assertNotIn(FAKE_KEY, out)
 
 
 if __name__ == "__main__":

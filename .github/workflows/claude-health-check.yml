@@ -5,10 +5,12 @@ name: Claude Health Check
 # worker is not monitored here. The legacy Grok Health Check workflow was removed
 # 2026-07 — scheduled health checks are Claude-only.
 
+# 2026-11-04: the 6-hourly schedule was REMOVED. With the Railway service down it
+# opened a new "Health check: /health returned 404" issue every 6 hours (192 open
+# duplicates) and paid for a Claude call each time. Run it manually; re-add a
+# schedule only once the bot is hosted again.
 on:
   workflow_dispatch: {}
-  schedule:
-    - cron: "0 */6 * * *"   # every 6 hours
 
 permissions:
   contents: read
@@ -52,6 +54,14 @@ jobs:
         with:
           script: |
             const out = process.env.ANALYSIS || "_Analysis unavailable._";
+            // never pile up duplicates: one open health-check issue at a time
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo, state: "open", per_page: 100,
+            });
+            if (open.some(i => !i.pull_request && i.title.startsWith("Health check:"))) {
+              core.info("An open health-check issue already exists; not opening another.");
+              return;
+            }
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,

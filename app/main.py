@@ -14,14 +14,16 @@ import json
 # (Review Agent 2026-06-04: switch for timeout/quality support; balances/tx for live grok-analyze)
 from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 from core.wallet import get_wallet_balances, get_recent_transactions
-from core.log_redaction import install_log_redaction, tg_out_log
+from core.log_redaction import install_log_redaction, tg_out_log, log_safe
 from core.telegram_webhook import resolve_webhook_url, ensure_webhook
+from core.local_mode import (console_mode, console_print, normalize_command,
+                              configured_allowed_chats, is_chat_allowed)
+from core.tg_format import to_tg_markdown, plain_text, split_message
 
 # Config
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
-WEBHOOK_BASE_URL = os.getenv('WEBHOOK_URL') or os.getenv('APP_URL') or "https://web-gpl6-production.up.railway.app"
 RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
 
 install_log_redaction()  # Part D: strip apikey= from logs (log-only)
@@ -73,23 +75,44 @@ def get_signals_mirror() -> dict | None:
     return (_paper_mirror or {}).get("signals") if _paper_mirror else None
 
 
+def set_paper_mirror(state: dict, signals: dict | None = None, as_of: str | None = None):
+    """Install the paper/signals mirror. Used by the HTTP endpoint and, in the
+    single-process local runner (run_local.py), directly by the worker."""
+    global _paper_mirror
+    _paper_mirror = {"state": state,
+                     "signals": signals if isinstance(signals, dict) else None,
+                     "as_of": as_of}
+
+
 async def send_telegram_message(text: str, chat_id: str = None, reply_markup=None):
     tg_out_log(logging.getLogger("app.main"), text)
     cid = chat_id or CHAT_ID
+    if console_mode():
+        console_print("bot", plain_text(text), cid)  # readable, as Telegram renders it
+        return
     if not (BOT_TOKEN and cid):
         return
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    # Telegram caps a message at 4096 chars (400 above that) -> split on lines.
+    chunks = split_message(text)
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            payload = {
-                "chat_id": cid,
-                "text": text,
-                "parse_mode": "Markdown"
-            }
-            if reply_markup:
-                payload["reply_markup"] = reply_markup
-            await client.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json=payload)
+            for i, chunk in enumerate(chunks):
+                payload = {
+                    "chat_id": cid,
+                    "text": to_tg_markdown(chunk),  # **bold** -> *bold* (legacy Markdown)
+                    "parse_mode": "Markdown"
+                }
+                if reply_markup and i == 0:
+                    payload["reply_markup"] = reply_markup
+                r = await client.post(url, json=payload)
+                if r.status_code != 200:
+                    # A stray Markdown entity (token symbols, '_' in names) 400s the
+                    # whole message; resend as plain text so the reply is never lost.
+                    logging.warning(f"Telegram Markdown send HTTP {r.status_code}; resending as plain text")
+                    payload.pop("parse_mode", None)
+                    payload["text"] = plain_text(chunk)
+                    await client.post(url, json=payload)
     except Exception as e:
         logging.error(f"Send message error: {e}")
 
@@ -108,9 +131,9 @@ async def process_daily_pnl(chat_id: str):
     Broken inline Explorer + PnLCalculator import removed (was non-functional).
     """
     if not WALLET_ADDRESS:
-        await send_telegram_message("WALLET_ADDRESS not configured", chat_id)
+        await send_telegram_message("❌ Wallet address not configured (set WALLET\\_ADDRESS).", chat_id)
         return
-    await send_telegram_message("🔄 Generating daily PnL report...", chat_id)
+    await send_telegram_message("🔄 Generating daily wallet report...", chat_id)
     try:
         # Core async path (Grok-enhanced with safe fallback). Reuses core/ logic.
         from core.pnl_calculator import get_daily_pnl_report
@@ -135,11 +158,29 @@ async def _get_grok_live_context(wallet_address: str) -> dict:
         balances = await get_wallet_balances(wallet_address)
         recent = await get_recent_transactions(wallet_address, 20)  # limit=20 per Review Agent 2026-06-04 helper spec
         preview = f"{wallet_address[:6]}...{wallet_address[-4:]}"
-        b_lines = [f"CRO: {balances.get('cro', 0):,.4f}"]
-        for sym, amt in sorted((balances.get("tokens") or {}).items(), key=lambda x: -x[1])[:5]:
-            if amt > 0.0001:
-                b_lines.append(f"• {sym}: {amt:,.4f}")
-        bsum = "\n".join(b_lines)
+        if not balances.get("ok", True):
+            # an Explorer outage must not reach the AI as "CRO 0, no tokens" (2026-11-04)
+            bsum = ("Balances unavailable right now (data source error) - "
+                    "do not treat this as an empty wallet.")
+        else:
+            cro_usd = balances.get("cro_usd")
+            b_lines = [f"CRO: {balances.get('cro', 0) or 0:,.4f}"
+                       + (f" (≈ ${cro_usd:,.2f})" if cro_usd is not None else "")]
+            details = balances.get("token_details")
+            if details is not None:
+                # top 5 by USD value (priced first), then by amount — not by raw unit count
+                rows = sorted((d for d in details if (d.get("amount") or 0) > 0.0001),
+                              key=lambda d: (d.get("usd") is None, -(d.get("usd") or 0),
+                                             -(d.get("amount") or 0)))
+                for d in rows[:5]:
+                    usd = d.get("usd")
+                    b_lines.append(f"• {d.get('symbol', '?')}: {d.get('amount') or 0:,.4f}"
+                                   + (f" (≈ ${usd:,.2f})" if usd is not None else ""))
+            else:  # older balance shape without token_details
+                for sym, amt in sorted((balances.get("tokens") or {}).items(), key=lambda x: -x[1])[:5]:
+                    if amt > 0.0001:
+                        b_lines.append(f"• {sym}: {amt:,.4f}")
+            bsum = "\n".join(b_lines)
         tsum = "\n".join(f"• {t}" for t in recent) if recent else "No recent transactions found."
         return {"preview": preview, "balances": bsum, "txs": tsum}
     except Exception as e:
@@ -153,7 +194,7 @@ async def process_grok_analyze(chat_id: str):
     (Thinking message sent *immediately* in webhook handler before background_tasks.add_task per Review Agent 2026-06-04.)
     """
     if not WALLET_ADDRESS:
-        await send_telegram_message("WALLET_ADDRESS not configured", chat_id)
+        await send_telegram_message("❌ Wallet address not configured (set WALLET\\_ADDRESS).", chat_id)
         return
     try:
         ctx = await _get_grok_live_context(WALLET_ADDRESS)
@@ -174,12 +215,12 @@ async def process_grok_analyze(chat_id: str):
                 f"Live data fetched for {ctx['preview']}.\n\n"
                 f"**Balances:**\n{ctx['balances']}\n\n"
                 f"**Recent activity:**\n{ctx['txs']}\n\n"
-                "(Grok insight temporarily unavailable - raw context shown above)",
+                "(AI insight temporarily unavailable - raw context shown above)",
                 chat_id,
             )
     except Exception as e:
         logging.exception("grok analyze error")
-        await send_telegram_message("Error generating live Grok analysis. Please try again.", chat_id)
+        await send_telegram_message("Error generating the AI analysis. Please try again.", chat_id)
 
 
 @app.get("/")
@@ -204,9 +245,7 @@ async def paper_state_mirror(req: Request):
     try:
         payload = json.loads(body)
         if isinstance(payload, dict) and isinstance(payload.get("state"), dict):
-            _paper_mirror = {"state": payload["state"],
-                             "signals": payload.get("signals") if isinstance(payload.get("signals"), dict) else None,
-                             "as_of": payload.get("as_of")}
+            set_paper_mirror(payload["state"], payload.get("signals"), payload.get("as_of"))
             return {"ok": True}
     except Exception:
         pass
@@ -241,7 +280,7 @@ async def grok_analyze(req: Request):
                     f"Live data for {ctx['preview']}.\n\n"
                     f"**Balances:**\n{ctx['balances']}\n\n"
                     f"**Recent activity:**\n{ctx['txs']}\n\n"
-                    "(Grok insight unavailable this time - raw context shown)"
+                    "(AI insight unavailable this time - raw context shown)"
                 ),
                 "live_context_used": True,
             }
@@ -250,57 +289,72 @@ async def grok_analyze(req: Request):
         return {"ok": False, "error": str(e)}
 
 
+START_MENU = """**👋 Welcome to All-in-One DeFi Bot!**
+
+**Available Commands:**
+
+• /wallet — wallet balances with USD (also /balances, /bal)
+• /daily\\_pnl — daily wallet activity (also /pnl)
+• /analyze — AI analysis of the wallet (also /grok-analyze)
+• /paper — 🧪 simulated trading status
+• /signals — 🔎 live multi-chain discovery feed
+• /help — this menu"""
+
+# Telegram requires keyboard = array of ROWS (arrays of buttons). The old flat
+# list made Telegram reject the whole /start reply (400), so the menu never showed.
+START_KEYBOARD = {
+    "keyboard": [["/wallet", "/daily_pnl"], ["/paper", "/signals"], ["/analyze"]],
+    "resize_keyboard": True,
+    "one_time_keyboard": False,
+}
+
+
+async def handle_command(text: str, chat_id: str, run_task) -> None:
+    """Route one incoming command. Shared by the webhook and the local poller.
+    `run_task(fn, *args)` schedules the slow work (BackgroundTasks on the webhook,
+    asyncio tasks in run_local.py)."""
+    cmd = normalize_command(text)
+    if cmd in ("/start", "/help", "/menu"):
+        await send_telegram_message(START_MENU, chat_id, reply_markup=START_KEYBOARD)
+    elif cmd in ("/balances", "/wallet", "/bal", "/balance"):
+        run_task(get_all_balances, chat_id)
+    elif cmd == "/paper":
+        from app.commands import get_paper_status
+        run_task(get_paper_status, chat_id)
+    elif cmd == "/signals":
+        from app.commands import get_signals
+        run_task(get_signals, chat_id)
+    elif cmd in ("/daily_pnl", "/dailypnl", "/pnl"):
+        run_task(process_daily_pnl, chat_id)
+    elif cmd in ("/grok-analyze", "/analyze"):
+        await send_telegram_message("🔄 Generating live AI analysis...", chat_id)
+        run_task(process_grok_analyze, chat_id)
+    else:
+        await send_telegram_message("Unknown command. Type /start for the menu.", chat_id)
+
+
 @app.post("/telegram/webhook")
 async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
     try:
         payload = await req.json()
         message = payload.get("message") or payload.get("edited_message") or {}
-        text = (message.get("text") or "").strip().lower()
+        text = (message.get("text") or "").strip()
         chat_id = str((message.get("chat") or {}).get("id", ""))
-    except:
+    except Exception:
         return JSONResponse({"ok": False}, status_code=400)
 
-    if text.startswith("/start"):
-        menu = """**👋 Welcome to All-in-One DeFi Bot!**
-
-**Available Commands:**
-
-• /daily_pnl — Advanced daily PnL report
-• /balances — Full wallet balances with USD
-• /wallet — Same as /balances
-• /bal — Quick balance check
-• /grok-analyze — AI-powered analysis
-• /paper — 🧪 simulated trading status
-• /signals — 🔎 live multi-chain discovery feed"""
-        reply_markup = {
-            "keyboard": ["/daily_pnl", "/balances", "/grok-analyze"],
-            "resize_keyboard": True,
-            "one_time_keyboard": False
-        }
-        await send_telegram_message(menu, chat_id, reply_markup=reply_markup)
-
-    elif text in ("/balances", "/wallet", "/bal", "/balance"):
-        background_tasks.add_task(get_all_balances, chat_id)
-
-    elif text == "/paper":
-        from app.commands import get_paper_status
-        background_tasks.add_task(get_paper_status, chat_id)
-
-    elif text == "/signals":
-        from app.commands import get_signals
-        background_tasks.add_task(get_signals, chat_id)
-
-    elif text in ("/daily_pnl", "/dailypnl"):
-        background_tasks.add_task(process_daily_pnl, chat_id)
-
-    elif text == "/grok-analyze":
-        # Per Review Agent 2026-06-04: immediate thinking msg + background dispatch (matches balances/daily_pnl pattern)
-        await send_telegram_message("🔄 Generating live Grok analysis...", chat_id)
-        background_tasks.add_task(process_grok_analyze, chat_id)
-
-    else:
-        await send_telegram_message("Unknown command. Type /start for the menu.", chat_id)
-
+    if text:
+        # Same fail-closed allow-list as the local poller (2026-11-04), read at
+        # request time. Refusals still answer 200 so Telegram does not retry.
+        allowed = configured_allowed_chats()
+        if not allowed:
+            logging.warning(f"[webhook] no TELEGRAM_CHAT_ID / TELEGRAM_ALLOWED_CHAT_IDS set — "
+                            f"message from chat {log_safe(chat_id)} not served (fail closed)")
+            return JSONResponse({"ok": True})
+        if not is_chat_allowed(chat_id, allowed):
+            logging.info(f"[webhook] ignoring message from non-allowed chat {log_safe(chat_id)}")
+            return JSONResponse({"ok": True})
+        await handle_command(text, chat_id, background_tasks.add_task)
     return JSONResponse({"ok": True})
 
 

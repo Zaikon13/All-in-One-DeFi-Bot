@@ -58,6 +58,13 @@ class TestFilterCapturesRealLogging(unittest.TestCase):
             any(isinstance(f, RedactingFilter) for f in h.filters) for h in root.handlers))
         self.assertGreaterEqual(logging.getLogger("httpx").level, logging.WARNING)
 
+class TestLogSafe(unittest.TestCase):
+    def test_strips_line_breaks_and_caps(self):
+        from core.log_redaction import log_safe
+        self.assertEqual(log_safe("42\nFAKE log line\r"), "42FAKE log line")
+        self.assertEqual(len(log_safe("9" * 500)), 64)
+        self.assertEqual(log_safe(-100123), "-100123")
+
 
 if __name__ == "__main__":
     unittest.main()

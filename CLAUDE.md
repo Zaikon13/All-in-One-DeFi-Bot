@@ -118,6 +118,9 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   Europe/Athens), now PER CHAIN: e.g. `🔎 Scanner digest — cro: seen 5, matured 3, passed 0 ·
   solana: seen 20, matured 14, passed 2, best 71 (MOON) · sui: seen 20, matured 18, passed 1, best 58 (SPX) ·
   sent 3`. Counters are in-memory (restart restarts the window); no quality threshold is changed.
+  Both daily schedulers (this digest and the EOD report) sleep `worker.seconds_until_local(...)`
+  — pure, unit-tested, the gap measured in UTC — so a DST change can't shift a send by an hour
+  (before 2026-11-04 the spring-forward EOD fired at 00:55 and reported the empty new day).
   Fold + formatter are pure (`worker.record_chain_funnel` / `worker.format_multichain_digest`),
   unit-tested offline. (The old single-chain `record_pair_funnel`/`format_scan_digest` remain in
   the file, unused, so their tests stay green.) **Paper
@@ -132,7 +135,9 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   price NEVER exits (hold + log only). Every entry/exit sends ONE 🧪-marked Telegram note with
   pair, price, size, reason, and running simulated balance. State (balance/open/closed) lives
   in `paper_state.json` on the /data volume (atomic writes, corrupt-file-safe loads, survives
-  redeploys). **Multi-chain (2026-07-23):** entries accept qualifying pools from ANY enabled chain
+  redeploys). An unreadable or non-object state file is first COPIED to
+  `paper_state.json.corrupt-<UTC %Y%m%dT%H%M%SZ>` (`load_state`, 2026-11-04) — the worker saves
+  right after loading, which used to overwrite the only copy of the simulation evidence. **Multi-chain (2026-07-23):** entries accept qualifying pools from ANY enabled chain
   (each position records its chain + pool address); exits price via GeckoTerminal
   `pools/multi/{addresses}` grouped BY CHAIN — one call per chain per cycle, never per-position;
   a missing price still holds (never exits on missing data). Simulation only — no keys, no signing,
@@ -193,14 +198,50 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   (`app/commands/signals.py`, pure `render_signals` + tests) shows the live feed per chain with
   score/tier/age/liq/vol1h/buys-sells/DEX, the active thresholds, and a per-chain funnel line —
   honest 'none this window' with funnel numbers when nothing qualifies. Added to the /start menu.
+- **Standalone runner (2026-11-04)** — `run_local.py` runs bot + worker in ONE process with
+  Telegram long-polling (getUpdates) instead of a webhook, so no Railway / public URL is needed
+  (state in `./data/`). `--console` / no token → `CONSOLE_MODE=true`: every outbound message is
+  printed (`core/local_mode.console_print`) and Telegram is never called — all three senders
+  honour it (`worker.send_telegram`, `app.main.send_telegram_message`, and since 2026-11-04
+  `core.wallet.send_telegram_alert`); `CONSOLE_MODE` accepts 1/true/yes everywhere (the runner's
+  loop choice included); `--selftest` runs each command once and exits. Defaults it sets: `WEBHOOK_AUTOSET_ENABLED=false`,
+  `WEBHOOK_GUARD_ENABLED=false`, `PAPER_MIRROR_URL=inprocess` (worker calls
+  `app.main.set_paper_mirror` directly, no HTTP). **Never steals a token:** if the token already
+  has a webhook (e.g. the Grok-run bot) the poller REFUSES unless `--take-over-webhook`, and even
+  then only polls after a read-back confirms the webhook is gone. Polling answers only
+  `TELEGRAM_ALLOWED_CHAT_IDS` (default `TELEGRAM_CHAT_ID`); with neither set it FAILS CLOSED —
+  no command is served, the sender only gets a hint naming their chat id to configure. **The hosted
+  webhook enforces the SAME list (2026-11-04):** `app.main.telegram_webhook` reads
+  `core.local_mode.configured_allowed_chats()` per request; empty → fail closed (warning log, no
+  reply), other chats ignored, and every refusal still answers 200 so Telegram does not retry.
+  The poller stops on getUpdates 401/404 (token rejected) and backs off exponentially on any other
+  non-200 (429/5xx) instead of hot-looping. Command routing is shared:
+  `app.main.handle_command` serves both the webhook and the poller (strips `@botname`, adds
+  `/analyze` + `/help` aliases). Fixed with it: the `/start` reply keyboard was a flat list
+  (Telegram 400 → the menu never arrived), and bot replies now fall back to plain text on a
+  Markdown 400 like the worker. `/signals` now says "feed unavailable" when the last GeckoTerminal
+  fetch failed (`core.pair_discovery.LAST_FETCH_STATUS`) instead of a misleading "seen 0".
 - **core/** — shared helpers. `claude_client.py` (AI calls), `wallet.py`, `pnl_calculator.py`,
   `price_service.py`, Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
 - **Blockchain data source (2026-06-21, balances rev. 2026-06-24).** Live, keyed Cronos Explorer API
   (`explorer-api.cronos.org/mainnet/api/{v1,v2}`; helpers in `core/wallet.py`). **Daily PnL** → v1
-  (`explorer_get`: `account/getTxsByAddress` + `account/getCRC20TransferByAddress`). **`/wallet` balances**
+  (`explorer_get`: `account/getTxsByAddress` + `account/getCRC20TransferByAddress`). These v1 list
+  calls (daily report + `/analyze` recent activity) pass `endBlock=EXPLORER_END_BLOCK`
+  (`core/wallet.py`, int32 max 2,147,483,647) since 2026-11-04: the old hard-coded 99,999,999 was
+  passed by the chain tip around 2026-10, and if v1 honours `endBlock` as an upper filter it hid
+  every newer transaction (the freshness guard can't see that). Whether v1 applies the filter is
+  PENDING a live confirmation. **`/wallet` balances**
   → native v1 `account/getBalance` + **v2 Etherscan-style** (`_v2_get`: `tokentx` paginated over the *full*
   history for the complete token set, then `tokenbalance` per token; needs a `User-Agent`; scam/dust
-  filtered, duplicate symbols disambiguated by contract, token set cached per wallet). **USD values (2026-07-05):** `core/wallet.get_token_prices` batches Dexscreener
+  filtered, duplicate symbols disambiguated by contract, token set cached per wallet). The same
+  `_looks_like_scam` name filter also drops scam/airdrop CRC-20 transfers from the daily report
+  (`get_today_transactions_async`) and from `/analyze`'s recent activity
+  (`get_recent_transactions`) since 2026-11-04, so a phishing-URL "symbol" never reaches a report
+  or the AI prompt (skips are counted in the log). **/analyze honesty (2026-11-04):**
+  `app.main._get_grok_live_context` tells the AI "Balances unavailable right now (data source
+  error)" when `ok=False` (never "CRO 0, no tokens"), shows CRO with its ≈$ value, and lists the
+  top 5 tokens by USD value (priced first, then by amount; ≈$ shown) from `token_details`, falling
+  back to the plain `tokens` dict. **USD values (2026-07-05):** `core/wallet.get_token_prices` batches Dexscreener
   `latest/dex/tokens/{addrs}` (30/call, cronos pairs only, best-liquidity pool wins; CRO via the
   WCRO contract); `/wallet` shows a portfolio total, sorts by USD desc, collapses holdings under
   `WALLET_MIN_USD_DISPLAY` (default $1), marks unpriced tokens 'price unknown', and falls back to
@@ -211,7 +252,9 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   with no API call, keeps a per-wallet held-set and only balance-checks real holdings each
   cycle (full sweep of all candidates every `WALLET_BALANCE_REFRESH_HOURS`), and backs off on
   429 (`WALLET_V2_MAX_RETRIES`). A held token keeps its last known amount on a transient
-  failure instead of flickering to 0. **No-vanish (2026-07-23):** the /wallet display
+  failure instead of flickering to 0. Only reads that resolved to an amount are marked
+  `balance_seen` (`_update_held`, 2026-11-04): a failed FIRST read stays "never checked", so the
+  next incremental cycle retries it instead of hiding the token until the next full sweep. **No-vanish (2026-07-23):** the /wallet display
   is driven by a persistent per-wallet `holdings` map pruned ONLY on a CONFIRMED zero (a
   successful read below dust) — never on a failed/absent read — so a real holding can't silently
   disappear between incremental cycles (the XYO/ADA \$69 omission bug); a token shown from its
@@ -222,7 +265,9 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   portfolio value can't swing hundreds of dollars because different tokens got prices on different
   cycles. Beyond `WALLET_PRICE_MAX_STALE_HOURS` (default 24) a cached price expires → 'price
   unknown' and excluded from the total. A footer states how many values are stale and the oldest
-  age. Only genuinely-never-priced tokens show 'price unknown'. A failed native `getBalance` now returns `ok=False` so
+  age. Only genuinely-never-priced tokens show 'price unknown'. The CRO row follows the same rule
+  (2026-11-04): a carried CRO price is marked `· last known` (`cro_price_stale` in the balances
+  dict) and counted ONCE in the footer (it used to be counted twice). A failed native `getBalance` now returns `ok=False` so
   `/wallet /bal /balances` reply 'data source unavailable' instead of '$0 / no tokens'
   (2026-07-13). **PnL honesty (2026-07-17):** `get_today_transactions_async` returns
   `(txs, fetch_ok)`; any Explorer failure (HTTP error / 429 / rejected key / exception —
@@ -241,7 +286,7 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   `claude_wallet_analysis.txt` (+ CI's `claude_code_review.txt`, `claude_health_check.txt`).
   Grok-era prompts were archived to `archive/prompts/` — except `grok_market_analysis.txt`,
   which stays because gated `core/market_analysis.py` (default off) still loads it.
-- **Railway** — 3 services: `bot`, `web-gpl6`, `worker`. Worker has a 5GB volume at `/data`.
+- **Railway** — PAUSED by the owner (unpaid, 2026-11). Was: `bot` (web) + `worker` (5GB volume at `/data`); `web-gpl6` was deleted in July. Health checks against it 404 — the scheduled health-check workflow was removed after it opened ~190 duplicate issues. `run_local.py` is the no-Railway way to run everything.
 
 ## Current AI-provider state (Claude-only as of 2026-07-04)
 
@@ -269,7 +314,7 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 - **UTC** for all internal timestamps and time filters. One deliberate exception: the **daily PnL
   reporting day boundary is Europe/Athens** (`REPORT_TZ` in `core/pnl_calculator.py`), matching the
   worker's Athens-scheduled EOD send, so the report covers the owner's local day. (2026-07-05)
-- **Telegram formatting** — Markdown v1 only: `**bold**` and simple `-`/`•` bullets. No tables, no code blocks (they break Telegram rendering).
+- **Telegram formatting** — Telegram *legacy* Markdown (`parse_mode="Markdown"`): bold is `*single*`. Renderers may write `**bold**` — the send layer (`core/tg_format.to_tg_markdown`) converts it, because legacy Markdown reads `**x**` as an empty span (nothing was ever bold before 2026-11-04). A bare `_` (e.g. `/daily_pnl` in text) opens italics and 400s the whole message — escape it as `\_` in static text; all three senders (`worker.send_telegram`, `app.main.send_telegram_message`, `core.wallet.send_telegram_alert`) retry as plain text on any non-200, and the bot + worker senders split messages over 4096 chars (alerts are short). `send_telegram_alert` returns True only when Telegram accepted the alert, so a rejected send can't arm the 6h stale-alert throttle. Simple `-`/`•` bullets only; no tables, no code blocks.
 - **Never hardcode or commit secrets.** Secrets live in Railway variables and GitHub secrets only.
 - **Outbound Telegram is logged.** Every send (`worker.send_telegram`, `app.main.send_telegram_message`,
   `core.wallet.send_telegram_alert`) logs the rendered text at INFO with prefix `[tg-out]`, truncated
@@ -309,11 +354,31 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   legacy entries at load (proved live: original-case addr → 1 row, lowercased → 0). New pending
   entries already store original case, so maturation proceeds once the poison is cleared. (2026-07-24)
 
+- ✅ Full audit 2026-11-04 (`reviews/2026-11-04-full-audit.md`): `/start` menu never delivered (flat
+  keyboard + bare `_` in `/daily_pnl` → Telegram 400); `**bold**` never rendered; >4096-char replies
+  silently failed; error-text `tokenbalance` results deleted real holdings from /wallet; failed discovery
+  pages were cached as "end of history"; /paper had no current price for Solana/Sui positions; daily
+  report showed a fake "Avg Cost" (always = current price) and a mislabeled "Total Portfolio Value";
+  sync CoinGecko lookup blocked the event loop and guessed coin ids from symbols; hourly heartbeat spam;
+  EOD default hour 0 reported the empty just-started day; health-check workflow spammed issues; dead
+  `telegram/` package (shadowed the pip package), `app/health.py`, `app/github_webhook.py` deleted.
+- ✅ Reviewer pass 2026-11-04 (same file, "Reviewer pass" section): `endBlock` cap → `EXPLORER_END_BLOCK`
+  (live check pending); webhook chat allow-list (fail closed); console mode + real status in
+  `send_telegram_alert`; poller 401/429 hot loop; DST-correct EOD/digest sleeps; corrupt paper-state
+  backup; scam filter on the daily report + `/analyze`; `/analyze` ok-honesty + USD ranking; CRO stale
+  double count + marker; failed first `tokenbalance` read no longer marked seen; `CONSOLE_MODE=1` and
+  the `WORKER_DATA_DIR` startup warning; report trade times labelled UTC.
+
 **Still open:**
+- **Do not lower `PAPER_TP_PCT`** on a state with history: `repair_impossible_trades` re-books every
+  closed trade against the CURRENT TP on each load, so a lower TP would permanently re-book legitimate
+  earlier wins as "impossible" (#8 in the 2026-11-04 reviewer pass; fix deferred).
+- **SECURITY:** a real-looking `ETHERSCAN_API_KEY` value sits in PUBLIC git history (`.env.example`,
+  commits cc23605 / 9acdbd3, removed in 68278da). The key is no longer used by the live code, but it must
+  be revoked at Etherscan by the owner. Rewriting public history does not un-leak it.
 - Worker start-command drift: `Procfile` + `railway.toml` use `python -u worker.py`, but the `Dockerfile`
   `CMD` is `python worker.py` (no `-u`); confirm `WORKER.md` agrees.
-- Orphaned / dead code: `telegram/handlers.py`, `app/health.py`, `app/github_webhook.py`, a dead `main.py`
-  stub, and a local `telegram/` package that shadows the pip `telegram` package.
+- Dead `main.py` stub (kept: the CI smoke test imports it).
 - Leftover gated Grok code: `core/grok_client.py`, `core/market_analysis.py`, `.github/scripts/call_grok.py`,
   `prompts/grok_market_analysis.txt` (other grok prompts archived 2026-07-05) — retiring these is a
   separate approved-later step.
@@ -331,6 +396,9 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 
 ```bash
 pip install -r requirements.txt        # install (must include python-dotenv)
+python run_local.py --selftest         # standalone: every command once, printed, exit
+python run_local.py --console          # standalone bot + worker, replies printed (no Telegram)
+python run_local.py                    # standalone with Telegram polling (needs a token with NO webhook)
 uvicorn app.main:app --reload          # run web service locally
 python -u worker.py                    # run worker locally
 ```
@@ -354,7 +422,7 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `WALLET_PRICE_MAX_STALE_HOURS` | runtime (optional) | max age a cached token price is carried as stale before → 'price unknown' (default 24) |
 | `WALLET_BALANCE_CONCURRENCY`, `WALLET_V2_MAX_RETRIES` | runtime (optional) | concurrent tokenbalance reads / 429 backoff retries (default 8 / 3) |
 | `PAIR_NEWNESS_WINDOW_HOURS` | worker (optional) | new-pair alert window vs `pairCreatedAt` (default 24) |
-| `PAIR_MIN_LIQUIDITY_USD` | worker (optional) | minimum pool liquidity for a new-pair alert (default 10000) |
+| `PAIR_MIN_LIQUIDITY_USD` | worker (legacy) | legacy, no effect since 2026-07-23 — use `PAIR_MIN_LIQUIDITY_USD_{CHAIN}` (still parsed, never read) |
 | `CHAINS_ENABLED` | worker (optional) | comma list of GeckoTerminal networks to scan (default `cro,solana,sui-network`) |
 | `PAIR_MIN_LIQUIDITY_USD_{CHAIN}` | worker (optional) | per-chain liquidity floor (defaults CRO 5000, SOLANA 10000, SUI_NETWORK 10000); `{CHAIN}` = upper, `-`→`_` |
 | `PAIR_MIN_SCORE_{CHAIN}` | worker (optional) | per-chain score bar (falls back to `PAIR_MIN_SCORE`) |
@@ -376,10 +444,33 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `PAPER_STARTING_USD`, `PAPER_ENTRY_SCORE`, `PAPER_POSITION_USD`, `PAPER_MAX_OPEN`, `PAPER_TP_PCT`, `PAPER_SL_PCT`, `PAPER_MAX_HOLD_HOURS` | worker (optional) | simulated capital / entry score bar / position size / max concurrent / take-profit % / stop-loss % / time-stop hours (defaults 1000 / 70 / 50 / 5 / 25 / 15 / 24) |
 | `PAPER_MAX_TICK_RATIO` | worker (optional) | exit ticks above this multiple of entry are rejected as bad feed data (hold, never book) — stops a glitch tick booking a fake gain (default 10) |
 | `SCAN_DIGEST_ENABLED`, `SCAN_DIGEST_HOUR` | worker (optional) | daily scanner-funnel digest on/off + Athens hour (default true / 21) |
-| `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |
+| `EOD_PNL_ENABLED`, `EOD_PNL_HOUR`, `EOD_PNL_MINUTE` | worker (optional) | automatic end-of-day wallet report — default ON when `WALLET_ADDRESS` is set, at 23:55 Europe/Athens (2026-11-04; the old default 00:00 reported the just-started empty day); the sleep is computed in UTC, so DST can't shift it |
+| `HEARTBEAT_ENABLED` | worker (optional) | hourly "💓 Worker Heartbeat" message (default **false** since 2026-11-04 — 24 msgs/day buried real alerts; the startup message + daily digest are the sign of life) |
+| `CONSOLE_MODE` | run_local.py (optional) | print every outbound message instead of sending — all three senders (bot, worker, data-source alerts); accepts 1/true/yes |
+| `TELEGRAM_ALLOWED_CHAT_IDS` | bot webhook + run_local.py (optional) | comma list of chats allowed to command the bot — covers the hosted webhook AND the polling runner (default `TELEGRAM_CHAT_ID`; none set → fail closed, nobody is served) |
 | `ETHERSCAN_API_KEY` | legacy | no longer used by the live data path (deprecated sync Covalent helper only) |
 
 ## Working with Claude Code on this repo
+
+- **Agent team (2026-11-04)** — `.claude/agents/` has 10 agents. The flow is in `docs/AGENT_TEAM.md`:
+  - auditors find (read-only, numbered findings with verified/inferred evidence);
+  - the `reviewer` decides per item (APPROVE-NOW / OWNER-DECISION / DEFER / REJECT);
+  - the `implementer` does the approved work order;
+  - the `test-guardian` writes tests only;
+  - the main session owns git.
+
+  The domain auditors are `telegram-auditor`, `wallet-data-auditor`, `scanner-auditor`,
+  `simulation-auditor` (booking-rule changes are always owner decisions) and `runtime-auditor`.
+  There are also the `investigator` and the `researcher` (external facts graded by source).
+- **Critical functions** — `docs/CRITICAL_FUNCTIONS.md` lists the functions the bot can't work
+  without, each with the invariant that must hold. `tests/test_critical_registry.py` enforces it:
+  a renamed or removed critical function fails CI, and coverage only ratchets up (`KNOWN_GAPS`
+  lists those still untested).
+  - Any change to a critical function needs a test.
+  - A new critical function must be registered in both places.
+- **Function catalogue** — `docs/FUNCTIONS.md` covers all functions with what each really does, its
+  feature, and LIVE/GATED-OFF/CI-ONLY/TEST-ONLY/DEAD status. Open issues are marked ⚠️. The AST scan
+  and Investigator pass were done on 2026-11-04; regenerate it after big changes.
 
 - **Use Plan Mode** for any multi-step change. Present the plan and get approval before editing.
 - Follow `IMPLEMENTATION_PLAN.md` for the current stabilization work.

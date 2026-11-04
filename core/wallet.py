@@ -31,6 +31,9 @@ import httpx
 # ---------------------------------------------------------------------------
 
 EXPLORER_BASE = "https://explorer-api.cronos.org/mainnet/api/v1"
+# Upper block bound for v1 list calls. The old 8-digit literal became a real cap
+# once the chain tip passed it (~2026-10), hiding every newer transaction.
+EXPLORER_END_BLOCK = 2_147_483_647  # int32 max; chain tip passed 99,999,999 ~2026-10
 
 # Alert when the newest wallet block is more than this many blocks behind the
 # live chain tip. Cronos runs ~0.45 s/block, so ~200k blocks ~= 1 day. Override
@@ -76,6 +79,7 @@ WALLET_DISCOVERY_TTL_HOURS = float(os.getenv("WALLET_DISCOVERY_TTL_HOURS", "6"))
 WALLET_BALANCE_REFRESH_HOURS = float(os.getenv("WALLET_BALANCE_REFRESH_HOURS", "6"))
 WALLET_PRICE_MAX_STALE_HOURS = float(os.getenv("WALLET_PRICE_MAX_STALE_HOURS", "24"))
 WALLET_BALANCE_CONCURRENCY = int(os.getenv("WALLET_BALANCE_CONCURRENCY", "8"))
+DISCOVERY_RETRY_SECONDS = 900  # re-walk an incomplete cold discovery after 15 min
 _V2_MAX_RETRIES = int(os.getenv("WALLET_V2_MAX_RETRIES", "3"))
 
 
@@ -97,7 +101,9 @@ def _select_balance_contracts(candidates, entry, now, refresh_seconds):
 def _update_held(entry, to_check, amount_by_contract, dust, is_full, now):
     """Pure-ish: fold this cycle's balances into the cache's held_set / balance_seen /
     last_full_ts. On a full sweep held_set is recomputed from scratch; on an
-    incremental cycle only the re-checked contracts are updated."""
+    incremental cycle only the re-checked contracts are updated. Only reads that
+    RESOLVED to an amount count as seen: a failed first read stays "never checked"
+    so the next incremental cycle retries it (instead of hiding it for hours)."""
     checked = set(to_check)
     nonzero = {c for c in checked if amount_by_contract.get(c, 0.0) >= dust}
     if is_full:
@@ -106,7 +112,8 @@ def _update_held(entry, to_check, amount_by_contract, dust, is_full, now):
     else:
         held = set(entry.get("held_set") or set())
         entry["held_set"] = (held - checked) | nonzero
-    entry["balance_seen"] = (entry.get("balance_seen") or set()) | checked
+    entry["balance_seen"] = ((entry.get("balance_seen") or set())
+                             | {c for c in checked if c in amount_by_contract})
 
 # --- USD pricing via Dexscreener (2026-07-05) ---
 # Dexscreener's token endpoint knows Cronos micro-caps that CoinGecko doesn't.
@@ -212,20 +219,36 @@ async def send_telegram_alert(text, client=None):
         tg_out_log(logging.getLogger("core.wallet"), text)
     except Exception:
         pass
+    from core.local_mode import console_mode, console_print
+    from core.tg_format import plain_text, to_tg_markdown
+    if console_mode():  # local runner: print, never call Telegram
+        console_print("alert", plain_text(text))
+        return True
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not (token and chat_id):
         logging.warning("[alert] Telegram not configured; cannot send freshness alert")
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    payload = {"chat_id": chat_id, "text": to_tg_markdown(text), "parse_mode": "Markdown"}
+
+    async def _send(c):
+        # True only when Telegram accepted the alert, so a rejected send can't
+        # arm the stale-alert throttle. A Markdown 400 is retried as plain text.
+        r = await c.post(url, json=payload, timeout=15.0)
+        if r.status_code == 200:
+            return True
+        logging.warning(f"[alert] Telegram Markdown send HTTP {r.status_code}; resending as plain text")
+        r2 = await c.post(url, json={"chat_id": chat_id, "text": plain_text(text)}, timeout=15.0)
+        if r2.status_code != 200:
+            logging.error(f"[alert] Telegram plain-text resend HTTP {r2.status_code}")
+        return r2.status_code == 200
+
     try:
         if client is not None:
-            await client.post(url, json=payload, timeout=15.0)
-        else:
-            async with httpx.AsyncClient(timeout=15.0) as c:
-                await c.post(url, json=payload)
-        return True
+            return await _send(client)
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            return await _send(c)
     except Exception as e:
         logging.error(f"[alert] Telegram send failed: {e}")
         return False
@@ -327,6 +350,21 @@ async def _v2_get(client, params: dict):
     return None
 
 
+def parse_raw_balance(raw):
+    """tokenbalance `result` -> int raw units, or None when it is not a number.
+    Etherscan-style APIs report errors as HTTP 200 + status "0" with the error
+    TEXT in `result` (e.g. "Max rate limit reached"). _to_int() turned that into
+    0, i.e. a *confirmed* zero, and the no-vanish logic then deleted a real
+    holding from /wallet. A non-numeric result is a FAILED read. Pure."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if raw >= 0 else None
+    if isinstance(raw, str) and raw.strip().isdigit():
+        return int(raw.strip())
+    return None
+
+
 def _absorb_transfer_rows(rows, contracts) -> int:
     """Add any new {contract: (symbol, decimals, name)} from tokentx rows; return newest block seen."""
     newest = 0
@@ -353,25 +391,43 @@ async def _discover_token_set(client, wallet_address: str) -> dict:
     entry = _TOKEN_SET_CACHE.get(w)
 
     async def _page(n):
+        """rows (possibly []) on success; None when the read FAILED (HTTP error,
+        429 after backoff, or a status-0 error string in `result`)."""
         res = await _v2_get(client, {"module": "account", "action": "tokentx",
                                      "address": wallet_address, "page": n,
                                      "offset": 100, "sort": "desc"})
-        return res if isinstance(res, list) else []
+        return res if isinstance(res, list) else None
 
-    if entry is None:
+    # A cold walk that hit failed pages is cached as INCOMPLETE and re-walked after
+    # DISCOVERY_RETRY_SECONDS — before, a failed page looked like "end of history",
+    # so tokens on that page were never discovered and never shown (until restart).
+    incomplete_retry = (entry is not None and entry.get("complete") is False
+                        and (time.time() - entry.get("discovered_ts", 0.0)) >= DISCOVERY_RETRY_SECONDS)
+    if entry is None or incomplete_retry:
         # cold: walk the full history once, in parallel batches, then cache it
-        contracts: dict = {}
-        newest_block = 0
+        contracts: dict = dict((entry or {}).get("contracts") or {})  # retry keeps what we had
+        newest_block = (entry or {}).get("newest_block", 0)
         MAX_PAGES = 80
+        failed = 0
         for start in range(1, MAX_PAGES + 1, 10):
             batch = await asyncio.gather(*[_page(n) for n in range(start, min(start + 10, MAX_PAGES + 1))])
-            if not any(batch):
-                break
-            for rows in batch:
+            failed += sum(1 for rows in batch if rows is None)
+            ok_rows = [rows for rows in batch if rows]
+            for rows in ok_rows:
                 newest_block = max(newest_block, _absorb_transfer_rows(rows, contracts))
-        _TOKEN_SET_CACHE[w] = {"contracts": contracts, "newest_block": newest_block,
-                               "discovered_ts": time.time()}
-        logging.info(f"[wallet] cold token discovery: {len(contracts)} distinct tokens")
+            # stop at the true end of history: a successfully-read EMPTY page
+            if any(rows == [] for rows in batch):
+                break
+            if not ok_rows:  # every page in this batch failed -> source trouble, stop
+                break
+        if entry is None:
+            entry = {}
+            _TOKEN_SET_CACHE[w] = entry
+        entry.update({"contracts": contracts, "newest_block": newest_block,
+                      "discovered_ts": time.time(), "complete": failed == 0})
+        logging.info(f"[wallet] cold token discovery: {len(contracts)} distinct tokens"
+                     + (f" — INCOMPLETE ({failed} page(s) failed; retry in "
+                        f"{DISCOVERY_RETRY_SECONDS // 60} min)" if failed else ""))
         return contracts
 
     # TTL: which-tokens-held changes rarely; skip the warm re-scan while the
@@ -384,8 +440,12 @@ async def _discover_token_set(client, wallet_address: str) -> dict:
     cached_newest = entry["newest_block"]
     max_new = cached_newest
     page = 1
+    warm_failed = False
     while page <= 6:
         rows = await _page(page)
+        if rows is None:
+            warm_failed = True  # retry on the next call instead of waiting a full TTL
+            break
         if not rows:
             break
         fresh = [it for it in rows if _to_int(it.get("blockNumber")) > cached_newest]
@@ -394,7 +454,8 @@ async def _discover_token_set(client, wallet_address: str) -> dict:
             break  # caught up to the cached tip
         page += 1
     entry["newest_block"] = max_new
-    entry["discovered_ts"] = time.time()
+    if not warm_failed:
+        entry["discovered_ts"] = time.time()
     return contracts
 
 
@@ -516,8 +577,10 @@ async def get_wallet_balances(wallet_address: str):
         for contract, raw in results:
             meta = candidates.get(contract)
             decimals = meta[1] if meta else 18
+            raw = parse_raw_balance(raw)
             if raw is None:
-                # failed read (429/backoff exhausted): keep last known, don't evict
+                # failed read (429/backoff exhausted, or a status-0 error text such as
+                # "Max rate limit reached" in `result`): keep last known, don't evict
                 amt = last_amounts.get(contract)
                 if amt is None:
                     continue
@@ -581,6 +644,7 @@ async def get_wallet_balances(wallet_address: str):
         max_stale_s = WALLET_PRICE_MAX_STALE_HOURS * 3600
         price_cache = entry.setdefault("last_prices", {})  # contract -> {"price","ts"}
         now_p = time.time()
+        cro_stale = False
 
         def _resolve_price(contract, fresh):
             """(price|None, stale_bool, age_hours). Fresh updates the cache; a miss
@@ -616,8 +680,7 @@ async def get_wallet_balances(wallet_address: str):
             priced = bool(cro_usd is not None or any(d.get("usd") is not None for d in token_details))
             if priced:
                 usd_total = (cro_usd or 0.0) + sum(d["usd"] for d in token_details if d.get("usd") is not None)
-            if cro_stale:
-                price_stale_count += 1
+            # (a stale CRO price is already counted once inside _resolve_price)
         except Exception as e:
             logging.error(f"[wallet] USD enrichment failed (amounts-only fallback): {e}")
 
@@ -637,6 +700,7 @@ async def get_wallet_balances(wallet_address: str):
             "priced": priced,
             "price_stale_count": price_stale_count,
             "price_stale_oldest_h": round(price_stale_oldest_h, 1),
+            "cro_price_stale": bool(cro_stale),  # CRO row shows "· last known"
         }
 
 
@@ -653,7 +717,7 @@ async def get_recent_transactions(wallet_address: str, limit: int = 20) -> list[
         rows = await explorer_get(
             client,
             "account/getTxsByAddress",
-            {"address": wallet_address, "startBlock": 0, "endBlock": 99999999},
+            {"address": wallet_address, "startBlock": 0, "endBlock": EXPLORER_END_BLOCK},
         ) or []
         for it in rows[:limit]:
             ts = _to_int(it.get("timestamp"))
@@ -669,10 +733,16 @@ async def get_recent_transactions(wallet_address: str, limit: int = 20) -> list[
         rows = await explorer_get(
             client,
             "account/getCRC20TransferByAddress",
-            {"address": wallet_address, "startBlock": 0, "endBlock": 99999999},
+            {"address": wallet_address, "startBlock": 0, "endBlock": EXPLORER_END_BLOCK},
         ) or []
+        scam_skipped = 0
         for it in rows[:limit]:
             meta = it.get("tokenMetadata") or {}
+            # same scam/airdrop name filter as /wallet (never echo a phishing "symbol")
+            if _looks_like_scam(meta.get("tokenSymbol") or "",
+                                meta.get("tokenName") or meta.get("name") or ""):
+                scam_skipped += 1
+                continue
             sym = meta.get("tokenSymbol") or "???"
             dec = _to_int(meta.get("decimals"), 18)
             ts = _to_int(it.get("timestamp"))
@@ -683,6 +753,8 @@ async def get_recent_transactions(wallet_address: str, limit: int = 20) -> list[
             h = (it.get("transactionHash") or "")[:8]
             tstr = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%m-%d %H:%M") if ts else "--"
             collected.append((ts, f"{tstr} | {ttyp} {val:.4f} {sym} {h}..."))
+        if scam_skipped:
+            logging.info(f"[wallet] recent activity: skipped {scam_skipped} scam/airdrop token transfer(s)")
 
     collected.sort(key=lambda x: x[0], reverse=True)
     seen_s, result = set(), []

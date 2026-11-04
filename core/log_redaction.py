@@ -11,7 +11,7 @@ import logging
 import re
 
 # apikey / api_key value up to the next & , whitespace, quote, or end.
-_SECRET_RE = re.compile(r"(?i)(api_?key=)[^&\s'\"]+")
+_APIKEY_RE = re.compile(r"(?i)(api_?key=)[^&\s'\"]+")
 _REDACTED = r"\1***"
 
 
@@ -19,7 +19,7 @@ def redact(text):
     """Return text with any apikey/api_key value masked. Safe on non-str."""
     if not isinstance(text, str):
         return text
-    return _SECRET_RE.sub(_REDACTED, text)
+    return _APIKEY_RE.sub(_REDACTED, text)
 
 
 class RedactingFilter(logging.Filter):
@@ -36,6 +36,12 @@ class RedactingFilter(logging.Filter):
         except Exception:
             pass  # logging must never raise
         return True
+
+
+def log_safe(value, limit: int = 64) -> str:
+    """Untrusted value (e.g. a chat id from an inbound update) made safe to log:
+    CR/LF removed so a crafted value can't forge extra log lines, then capped."""
+    return str(value).replace("\r", "").replace("\n", "")[:limit]
 
 
 TG_OUT_MAX = 600  # truncate logged outbound message to a sane length

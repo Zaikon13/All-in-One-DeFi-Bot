@@ -20,6 +20,7 @@ import json
 import logging
 import math
 import os
+import shutil
 from datetime import datetime, timezone
 
 # --- env knobs (defensive parse; all simulation-only) ---------------------------
@@ -86,17 +87,37 @@ def _valid_open(p) -> bool:
             and bool(p.get("pair_address")) and bool(p.get("token_address")))
 
 
+def _backup_corrupt(p: str) -> str | None:
+    """COPY (never move) an unreadable state file to <p>.corrupt-<UTC> before the
+    engine's next save replaces it, so simulation evidence is never silently
+    lost. Returns the backup path or None. Never raises."""
+    try:
+        if not os.path.exists(p):
+            return None
+        dst = f"{p}.corrupt-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+        shutil.copyfile(p, dst)
+        logging.error(f"[paper] unreadable state file backed up to {dst}")
+        return dst
+    except Exception as e:
+        logging.error(f"[paper] corrupt-state backup failed: {e}")
+        return None
+
+
 def load_state(path: str | None = None) -> dict:
     """Load paper state; missing/corrupt/partial files degrade to a valid state.
     Element-level sanitation (2026-07-17 review M1): malformed open/closed entries
     are dropped with a log (a hand-edited zombie position must not wedge the
-    engine or hold a slot forever); numeric fields accept int or float."""
+    engine or hold a slot forever); numeric fields accept int or float. An
+    unreadable or non-object file is first copied to <p>.corrupt-<UTC> (2026-11-04),
+    because the worker saves right after loading and would overwrite it."""
     p = path or state_path()
     logging.info(f"[paper] loading state from {p}")
     try:
         with open(p, "r", encoding="utf-8") as f:
             raw = json.load(f)
         if not isinstance(raw, dict):
+            logging.error("[paper] state file is not a JSON object; starting fresh")
+            _backup_corrupt(p)
             return fresh_state()
         st = fresh_state()
         for k in ("balance_usd", "starting_usd"):
@@ -131,7 +152,8 @@ def load_state(path: str | None = None) -> dict:
     except FileNotFoundError:
         return fresh_state()
     except Exception as e:
-        logging.error(f"[paper] state load failed ({e}); starting fresh (old file kept)")
+        logging.error(f"[paper] state load failed ({e}); starting fresh")
+        _backup_corrupt(p)
         return fresh_state()
 
 
@@ -209,7 +231,7 @@ def is_bad_tick(entry, price, max_ratio=None) -> bool:
     feed glitch (the +43,137% trade). Used to HOLD rather than book: a single
     garbage tick must never book a trade. Only the HIGH side is treated as bad
     data; an extreme LOW price is plausibly a real dump and is handled by the
-    stop-loss (booked at the SL threshold). Pure; never raises."""
+    stop-loss (booked at the observed price). Pure; never raises."""
     max_ratio = PAPER_MAX_TICK_RATIO if max_ratio is None else max_ratio
     try:
         e = float(entry)
@@ -384,7 +406,7 @@ def compact_paper_state(state: dict, max_closed: int = 10) -> dict:
     opens = [p for p in (state.get("open") or []) if isinstance(p, dict)]
     wins = sum(1 for c in closed if (c.get("pnl_usd") or 0) > 0)
     open_keys = ("symbol", "chain", "pair_address", "token_address",
-                 "entry_price", "qty", "usd_in")
+                 "entry_price", "qty", "usd_in", "last_price", "last_price_ts")
     closed_keys = ("symbol", "pnl_usd", "pnl_pct", "exit_reason", "closed_at")
     return {
         "balance_usd": state.get("balance_usd"),

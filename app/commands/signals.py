@@ -58,6 +58,9 @@ def render_signals(signals: dict | None, now_utc: datetime | None = None) -> str
         rows = [r for r in recent if r.get("chain") == c]
         rows = sorted(rows, key=lambda r: r.get("ts") or "", reverse=True)[:5]
         msg += f"**{_label(c)}** — most recent qualifying:\n"
+        feed = (signals.get("feed") or {}).get(c) or {}
+        if feed.get("ok") is False:
+            msg += "- ⚠️ feed unavailable on the last scan (GeckoTerminal unreachable) — no data, not 'no pools'\n"
         if not rows:
             f = funnel.get(c) or {}
             msg += (f"- none this window (seen {f.get('seen', 0)}, matured "

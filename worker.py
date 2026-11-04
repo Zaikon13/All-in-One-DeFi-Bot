@@ -353,9 +353,15 @@ KNOWN_PAIRS_FILE = os.path.join(PERSISTENCE_BASE, "known_pairs.json")
 PENDING_POOLS_FILE = os.path.join(PERSISTENCE_BASE, "pending_pools.json")
 
 
+def _volume_configured() -> bool:
+    """True when persistence points at a configured dir (WORKER_DATA_DIR or the
+    Railway volume), i.e. the same two vars PERSISTENCE_BASE honours."""
+    return bool(os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or os.getenv("WORKER_DATA_DIR"))
+
+
 def _warn_if_no_volume():
     """Emit loud WARNING on every load/save and at startup if no volume (per Review)."""
-    if not (os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or os.getenv("WORKER_DATA_DIR")):
+    if not _volume_configured():
         logger.warning(
             f"RAILWAY VOLUME NOT DETECTED: persistence at {KNOWN_PAIRS_FILE} uses ephemeral 'data/' (or base). "
             "pairs/last_seen/last_eod_run are NOT durable across redeploys or container replacements. "
@@ -420,17 +426,26 @@ def _is_new_or_stale(pair_address: str) -> bool:
 
 async def send_telegram(text: str):
     tg_out_log(logger, text)
+    from core.local_mode import console_mode, console_print
+    from core.tg_format import to_tg_markdown, plain_text, split_message
+    if console_mode():
+        console_print("worker", plain_text(text), TELEGRAM_CHAT_ID)
+        return
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"})
-            if r.status_code != 200:
-                # a stray Markdown entity (untrusted token symbols) 400s the whole
-                # message; resend as plain text so the alert is never silently lost.
-                logger.warning(f"Telegram Markdown send HTTP {r.status_code}; resending as plain text")
-                await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text})
+            # Telegram caps a message at 4096 chars -> split on line boundaries
+            for chunk in split_message(text):
+                r = await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID,
+                                                 "text": to_tg_markdown(chunk),  # **x** -> *x*
+                                                 "parse_mode": "Markdown"})
+                if r.status_code != 200:
+                    # a stray Markdown entity (untrusted token symbols) 400s the whole
+                    # message; resend as plain text so the alert is never silently lost.
+                    logger.warning(f"Telegram Markdown send HTTP {r.status_code}; resending as plain text")
+                    await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": plain_text(chunk)})
     except Exception as e:
         logger.error(f"Telegram error: {e}")
 
@@ -535,9 +550,18 @@ def save_pending_pools(pending: dict):
         logger.error(f"Failed to save pending_pools: {e}")
 
 
+# Hourly heartbeat = 24 Telegram messages a day that bury the real alerts. Opt-in
+# since 2026-11-04 (HEARTBEAT_ENABLED); the startup "online" message and the daily
+# scanner digest (21:00 Athens) already prove the worker is alive.
+HEARTBEAT_ENABLED = os.getenv("HEARTBEAT_ENABLED", "false").lower() in ("1", "true", "yes")
+
+
 async def heartbeat():
+    if not HEARTBEAT_ENABLED:
+        logger.info("heartbeat: off (HEARTBEAT_ENABLED=false) — daily digest is the sign of life")
+        return
     while True:
-        ts = datetime.now().strftime("%H:%M")
+        ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
         msg = f"💓 **Worker Heartbeat**\n\n**Time:** {ts}\n**Status:** Online\n**Next:** in 1 hour"
         await send_telegram(msg)
         await asyncio.sleep(HEARTBEAT_INTERVAL)
@@ -610,6 +634,15 @@ def _paper_mirror_auth() -> str:
 
 async def _push_paper_mirror(client, state: dict):
     """Best-effort POST of the paper state to the bot service. Never raises."""
+    if PAPER_MIRROR_URL == "inprocess":
+        # single-process local runner (run_local.py): bot + worker share memory
+        try:
+            from app.main import set_paper_mirror
+            set_paper_mirror(paper.compact_paper_state(state), signals_state,
+                             datetime.now(timezone.utc).isoformat())
+        except Exception as e:
+            logger.info(f"paper: in-process mirror failed (non-fatal): {e}")
+        return
     if not (PAPER_MIRROR_URL and TELEGRAM_BOT_TOKEN):
         return
     try:
@@ -713,6 +746,11 @@ async def _paper_step(client, fresh, now_utc):
             for pos in list(paper_state["open"]):
                 pa = pos.get("pair_address") or ""
                 cp = prices.get(pa) or prices.get(pa.lower())
+                if cp is not None and not paper.is_bad_tick(pos.get("entry_price"), cp):
+                    # remembered for /paper: the bot's own price lookup is Cronos-only,
+                    # so Solana/Sui positions otherwise always showed "price unknown"
+                    pos["last_price"] = cp
+                    pos["last_price_ts"] = now_utc.isoformat()
                 res = paper.check_exit(pos, cp, now_utc)
                 if res is None:
                     if cp is None:
@@ -849,6 +887,7 @@ async def poll_new_pools():
                                        "min_score": min_score_for(c, PAIR_MIN_SCORE)} for c in _chs},
                     "funnel": {c: dict(chain_stats.get(c) or _new_chain_stats()) for c in _chs},
                     "recent": recent_signals[-_RECENT_SIGNALS_MAX:],
+                    "feed": {c: dict(disc.LAST_FETCH_STATUS.get(c) or {}) for c in _chs},
                     "as_of": now_utc.isoformat(),
                 }
 
@@ -1036,11 +1075,24 @@ async def portfolio_watch():
         await asyncio.sleep(interval_s)
 
 
+def seconds_until_local(now_local, hour, minute=0) -> float:
+    """Pure: real seconds from now_local (an aware local datetime) until the next
+    hour:minute wall-clock time in the same zone. The difference is taken in UTC:
+    subtracting two aware datetimes that share a ZoneInfo is wall-clock
+    arithmetic and ignores a DST change in between (the EOD fired at 00:55 after
+    spring-forward and reported the empty new day)."""
+    target = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now_local >= target:
+        target += timedelta(days=1)
+    return (target.astimezone(timezone.utc) - now_local.astimezone(timezone.utc)).total_seconds()
+
+
 async def scheduled_scan_digest():
     """Send ONE scanner-funnel summary per day at SCAN_DIGEST_HOUR Europe/Athens
     (default 21:00) and reset the counters. In-memory only: a restart restarts the
-    counting window (the digest then covers time since restart). DST-safe target
-    recomputation each loop, same pattern as scheduled_eod_pnl. Never crashes."""
+    counting window (the digest then covers time since restart). DST-safe: the
+    sleep is recomputed each loop and measured in UTC (seconds_until_local), same
+    as scheduled_eod_pnl. Never crashes."""
     global chain_stats
     if not SCAN_DIGEST_ENABLED:
         logger.info("scanner digest: disabled (SCAN_DIGEST_ENABLED=false)")
@@ -1048,11 +1100,7 @@ async def scheduled_scan_digest():
     athens = ZoneInfo("Europe/Athens")
     logger.info(f"scanner digest: on — daily at {SCAN_DIGEST_HOUR:02d}:00 Europe/Athens (per-chain)")
     while True:
-        now = datetime.now(athens)
-        target = now.replace(hour=SCAN_DIGEST_HOUR, minute=0, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        await asyncio.sleep(max(60.0, (target - datetime.now(athens)).total_seconds()))
+        await asyncio.sleep(max(60.0, seconds_until_local(datetime.now(athens), SCAN_DIGEST_HOUR, 0)))
         try:
             snap, chain_stats = chain_stats, {}
             msg = format_multichain_digest(snap, chains_enabled())
@@ -1116,24 +1164,43 @@ async def monitor_wallet():
 # each cycle (DST-safe for Europe/Athens), if now past target hour then schedule next day,
 # avoid dups/misses especially post-Railway restart, max(60s) sleep, continue on error.
 # Reuses core.pnl_calculator.get_daily_pnl_report() *exactly* (no modifications allowed).
-# Automatic path ONLY adds the "📊 **Automatic EOD PnL Report**" header.
+# Automatic path ONLY adds the "📊 **Automatic end-of-day wallet report**" header.
 # Manual /daily_pnl (app/main.py process_daily_pnl) remains 100% untouched and primary.
 # Env: EOD_PNL_ENABLED (default false), EOD_PNL_HOUR (0-23, default 0).
 # Lazy import of the PnL reporter inside the send block (protects worker startup if
 # COVALENT/ETHERSCAN keys not present in worker service env; top-level in pnl_calculator
 # has hard guards).
+def eod_pnl_enabled() -> bool:
+    """Automatic end-of-day wallet report. Default: ON when a wallet is configured
+    (it is the bot's headline feature); EOD_PNL_ENABLED=false turns it off."""
+    raw = os.getenv("EOD_PNL_ENABLED")
+    if raw is None or raw.strip() == "":
+        return bool(WALLET_ADDRESS)
+    return raw.strip().lower() in ("1", "true", "yes")
+
+
+def eod_pnl_time() -> tuple:
+    """(hour, minute) Europe/Athens for the automatic EOD report. Default 23:55.
+    The report covers the Athens calendar day, so the old default (00:00) always
+    reported the just-started, empty day. Bad values fall back to the default."""
+    def _int(name, default, lo, hi):
+        try:
+            v = int(str(os.getenv(name, default)).strip())
+            return v if lo <= v <= hi else default
+        except (TypeError, ValueError):
+            return default
+    return _int("EOD_PNL_HOUR", 23, 0, 23), _int("EOD_PNL_MINUTE", 55, 0, 59)
+
+
 async def scheduled_eod_pnl():
     global last_eod_run
     athens = ZoneInfo("Europe/Athens")
-    enabled = os.getenv("EOD_PNL_ENABLED", "false").lower() == "true"
-    hour = int(os.getenv("EOD_PNL_HOUR", "0"))
+    enabled = eod_pnl_enabled()
+    hour, minute = eod_pnl_time()
 
     while True:
-        now = datetime.now(athens)
-        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        sleep_s = max(60, (target - datetime.now(athens)).total_seconds())
+        # DST-correct: real seconds to the next Athens hour:minute, measured in UTC
+        sleep_s = max(60, seconds_until_local(datetime.now(athens), hour, minute))
         await asyncio.sleep(sleep_s)
 
         if enabled:
@@ -1197,11 +1264,11 @@ async def scheduled_eod_pnl():
                     try:
                         last_dt = datetime.fromisoformat(last_eod_run.replace("Z", "+00:00"))
                         delta_s = (now_utc - last_dt).total_seconds()
-                        if delta_s < 23 * 3600:
-                            logger.info(f"EOD PnL: delta={delta_s:.0f}s since last_eod_run; 23h guard decision=skip (restart hardening per Review 2026-06-08 cond. 3 + Phase 2)")
+                        if delta_s < 22 * 3600:  # 22h: a DST-spring day is only 23h long
+                            logger.info(f"EOD PnL: delta={delta_s:.0f}s since last_eod_run; 22h guard decision=skip (restart hardening per Review 2026-06-08 cond. 3 + Phase 2)")
                             do_send = False
                         else:
-                            logger.info(f"EOD PnL: delta={delta_s:.0f}s since last_eod_run; 23h guard decision=send")
+                            logger.info(f"EOD PnL: delta={delta_s:.0f}s since last_eod_run; 22h guard decision=send")
                     except Exception:
                         logger.info("EOD PnL: malformed last_eod_run ts; treating as send (defensive, continue-on-error per Review 2026-06-08 cond. 3)")
                         pass  # malformed ts -> treat as send (defensive, continue-on-error)
@@ -1213,7 +1280,7 @@ async def scheduled_eod_pnl():
                             report = f"{report}\n\n{paper.paper_summary_line(st)}"
                         except Exception as pe:
                             logger.error(f"paper: EOD line failed (report unchanged): {pe}")
-                    await send_telegram(f"📊 **Automatic EOD PnL Report**\n\n{report}")
+                    await send_telegram(f"📊 **Automatic end-of-day wallet report**\n\n{report}")
                     last_eod_run = now_utc.isoformat()
                     save_known_pairs(seen_pairs)  # persist EOD state (atomic + volume warn)
             except Exception as e:
@@ -1236,9 +1303,10 @@ async def main():
     logger.info(f"Persistence file: {KNOWN_PAIRS_FILE} (evolved: pairs+last_seen+last_eod_run; supports RAILWAY_VOLUME_MOUNT_PATH fallback 'data/')")
 
     # Review Agent 2026-06-08: startup durability status + path logging for ops visibility (ephemeral warning already emitted by load)
-    if not os.getenv("RAILWAY_VOLUME_MOUNT_PATH"):
+    if not _volume_configured():
         logger.warning(
-            "Startup: no RAILWAY_VOLUME_MOUNT_PATH -> persistence is ephemeral (data lost on redeploy). "
+            "Startup: neither WORKER_DATA_DIR nor RAILWAY_VOLUME_MOUNT_PATH is set -> "
+            "persistence is ephemeral (data lost on redeploy). "
             "See full caveat in code + reviews/2026-06-08-worker-persistence-first-inc.md. "
             "# Review Agent 2026-06-09 (Phase 1 extension): Phase 1 improvements (dict source-of-truth + "
             "RESTART_DEDUP_WINDOW_SECONDS time-window) are in-process / local-restart hardening only. "
@@ -1258,9 +1326,9 @@ async def main():
     await send_telegram("✅ **All-in-One-DeFi-Bot worker is online.**")
 
     # EOD PnL schedule (Review Agent 2026-06-06)
-    eod_enabled = os.getenv("EOD_PNL_ENABLED", "false").lower() == "true"
-    eod_hour = int(os.getenv("EOD_PNL_HOUR", "0"))
-    logger.info(f"EOD PnL scheduled for {eod_hour:02d}:00 Europe/Athens (enabled={eod_enabled})")
+    eod_enabled = eod_pnl_enabled()
+    eod_hour, eod_minute = eod_pnl_time()
+    logger.info(f"EOD report scheduled for {eod_hour:02d}:{eod_minute:02d} Europe/Athens (enabled={eod_enabled})")
 
     # Review Agent 2026-06-09 (Phase 2, per reviews/2026-06-08-worker-persistence-first-inc.md cond. 6 + reviews/2026-06-09-worker-persistence-phase1.md + reviews/2026-06-09-worker-persistence-phase2.md):
     # Startup sanity for EOD PnL (logging-only decision after long downtime; no immediate/auto send, no behavior/timing change).

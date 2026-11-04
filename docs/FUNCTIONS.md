@@ -1,0 +1,584 @@
+# Function catalogue
+
+Every function in the production code: 211 in total, including 8 nested helpers. Generated 2026-11-04 from an AST scan. Each entry was then read and classified by the project's Investigator agent.
+
+Status meanings:
+- **LIVE**: runs with default settings.
+- **GATED-OFF**: runs only if a default-off env flag is set.
+- **CI-ONLY**: runs only in GitHub Actions.
+- **TEST-ONLY**: only the tests call it.
+- **DEAD**: nothing reaches it.
+
+| Status | Count |
+|---|---|
+| LIVE | 188 |
+| GATED-OFF | 6 |
+| CI-ONLY | 3 |
+| TEST-ONLY | 4 |
+| DEAD | 10 |
+
+## /wallet (28)
+
+- `_min_usd_display()` · `app/commands/balances.py:6`
+  - Reads WALLET_MIN_USD_DISPLAY (default 1) as a non-negative float, falling back to 1.0 on bad input.
+- `_fmt_usd(v)` · `app/commands/balances.py:17`
+  - Formats a number as $1,234.56.
+- `_stale(d)` · `app/commands/balances.py:21`
+  - Returns ' · last known' when a holding's amount or price was carried over from an earlier cycle.
+- `_render_plain(wallet_address, balances)` · `app/commands/balances.py:28`
+  - Builds the amounts-only /wallet text (CRO plus tokens sorted by amount), used when USD pricing failed or the USD render raised.
+- `_render_usd(wallet_address, balances)` · `app/commands/balances.py:45`
+  - Builds the USD /wallet text: total, CRO value, tokens sorted by USD, up to 15 unpriced rows, sub-threshold holdings collapsed into one line, and a stale-price footer.
+  - ✅ Fixed 2026-11-04 (reviewer pass): the CRO row is marked '· last known'. Still open: a failed cold discovery prints 'No tokens found.'
+- `async get_all_balances(chat_id)` · `app/commands/balances.py:96`
+  - The /wallet handler: checks WALLET_ADDRESS, sends a 'Fetching' note, calls core.wallet.get_wallet_balances, answers 'data source unavailable' when ok=False, otherwise renders the USD or plain view with a UTC timestamp.
+- `async get_all_balances(chat_id)` · `app/main.py:120`
+  - Delegates to app.commands.get_all_balances.
+- `_select_balance_contracts(candidates, entry, now, refresh_seconds)` · `core/wallet.py:86`
+  - Chooses this cycle's tokenbalance reads: every candidate on a full sweep (no held set yet, or the last sweep is older than the refresh interval), else held tokens plus never-checked candidates.
+- `_update_held(entry, to_check, amount_by_contract, dust, is_full, now)` · `core/wallet.py:101`
+  - Updates held_set (recomputed on a full sweep, patched otherwise), balance_seen and last_full_ts from this cycle's amounts.
+  - ✅ Fixed 2026-11-04 (reviewer pass): only resolved reads are marked seen, so a failed first read is retried next cycle.
+- `_explorer_key()` · `core/wallet.py:126`
+  - Reads CRONOS_EXPLORER_API_KEY.
+- `_to_int(x, default)` · `core/wallet.py:130`
+  - int() that returns a default on ValueError or TypeError.
+- `async explorer_get(client, path, params, full)` · `core/wallet.py:144`
+  - GETs an Explorer v1 path with the API key and returns result (or the full envelope) when status is '1', else logs and returns None; never raises.
+- `async get_chain_height(client)` · `core/wallet.py:169`
+  - Reads the chain tip via eth_blockNumber on CRONOS_RPC_URL, or None if it is unset or the call fails.
+- `build_stale_alert(blocks_behind, days_behind)` · `core/wallet.py:187`
+  - Formats the 'data source looks stale' Telegram alert with days and blocks behind.
+- `build_unavailable_alert()` · `core/wallet.py:195`
+  - Returns the 'data source unavailable' alert text.
+- `async note_fetch_failure(client)` · `core/wallet.py:203`
+  - Logs a failed Explorer fetch and sends the 'unavailable' alert, throttled by the shared 6 h stale-alert cooldown.
+- `async _explorer_block_number(client)` · `core/wallet.py:257`
+  - Reads the explorer's own tip via ethproxy/getBlockNumber (hex or int), or None on failure.
+- `async check_data_freshness(client, send_alert)` · `core/wallet.py:279`
+  - Compares the explorer tip with the independent RPC tip, logging and alerting (throttled) when it is more than the threshold behind, and returns a status dict.
+  - ⚠️ Checks only the explorer tip vs the RPC tip, so it can't detect queries that silently miss data. (The endBlock cap that caused this was fixed 2026-11-04.)
+- `_looks_like_scam(symbol, name)` · `core/wallet.py:316`
+  - Regex check for URL, claim or airdrop lures in a token's symbol or name.
+  - ✅ Fixed 2026-11-04 (reviewer pass): also used by the daily report and /analyze now.
+- `async _v2_get(client, params)` · `core/wallet.py:322`
+  - GETs the Explorer v2 Etherscan-style API with a User-Agent and the key, retrying 429s and exceptions with 0.5/1/2 s backoff; returns result or None.
+- `parse_raw_balance(raw)` · `core/wallet.py:353`
+  - Returns a non-negative int from a tokenbalance result, or None for error text, bools or negatives.
+- `_absorb_transfer_rows(rows, contracts)` · `core/wallet.py:368`
+  - Adds unseen contracts (symbol, decimals, name) from tokentx rows and returns the newest block seen.
+- `async _discover_token_set(client, wallet_address)` · `core/wallet.py:385`
+  - Discovers the wallet's CRC-20 contracts: a cold full walk of v2 tokentx (up to 80 pages, redone after 15 min if incomplete), then a TTL cache with an incremental warm scan of newer pages.
+  - ⚠️ When the cold walk fails completely it returns {} while get_wallet_balances still reports ok=True, so /wallet says 'No tokens found.' instead of 'token list unavailable'.
+- `async _discover_token_set._page(n)` · `core/wallet.py:393`
+  - Fetches one tokentx page (100 rows, newest first), returning the rows or None if the read failed.
+- `async get_token_prices(client, contracts)` · `core/wallet.py:462`
+  - Batches Dexscreener token lookups (30 per call) and keeps the highest-liquidity Cronos pool where the token is the base token; returns {contract: price}.
+  - ⚠️ Pools where the token is only the quote token are ignored, so such tokens go unpriced; Cronos-only, so it can't price /paper's Solana or Sui positions.
+- `async get_wallet_balances(wallet_address)` · `core/wallet.py:503`
+  - Builds the /wallet data: native CRO (a failure returns ok=False), cached token discovery, a scam pre-filter, selective tokenbalance reads that carry last-known amounts, a persistent holdings map, symbol disambiguation, Dexscreener USD pricing with a 24 h last-known price cache, and the freshness guard.
+  - ✅ Fixed 2026-11-04 (reviewer pass): the CRO stale price is counted once, and cro_price_stale is returned.
+- `async get_wallet_balances._token_balance(contract)` · `core/wallet.py:559`
+  - Reads one contract's tokenbalance via _v2_get under the concurrency semaphore (8) and returns (contract, raw).
+- `get_wallet_balances._resolve_price(contract, fresh)` · `core/wallet.py:649`
+  - Returns (price, stale, age_h): a fresh price updates the cache, and a miss falls back to a cached price within WALLET_PRICE_MAX_STALE_HOURS, counted as stale.
+  - ✅ Fixed 2026-11-04 (reviewer pass): the double count was removed in the caller.
+
+## /daily_pnl + EOD report (27)
+
+- `async process_daily_pnl(chat_id)` · `app/main.py:126`
+  - The /daily_pnl handler: checks WALLET_ADDRESS, sends a 'Generating' note, awaits core.pnl_calculator.get_daily_pnl_report and replies with the result.
+- `is_valid_grok_response(text)` · `core/grok_client.py:20` · **GATED-OFF**
+  - Quality gate for Grok replies: more than 15 chars and no Grok error prefix.
+  - ⚠️ Gated by MARKET_ANALYSIS_ENABLED (default false). Also imported by the dead .github/scripts/call_grok.py.
+- `load_prompt(filename, **kwargs)` · `core/grok_client.py:32` · **GATED-OFF**
+  - Reads and formats prompts/<filename> (CWD-relative), returning an '[ERROR]' string on failure; an exact duplicate of the Claude version.
+  - ⚠️ Gated by MARKET_ANALYSIS_ENABLED (default false).
+- `async call_grok(prompt, timeout)` · `core/grok_client.py:44` · **GATED-OFF**
+  - POSTs the prompt to api.x.ai (grok-4.3, 600 tokens) and returns the reply or an error string, or a not-configured message without GROK_API_KEY.
+  - ⚠️ Needs MARKET_ANALYSIS_ENABLED=true and GROK_API_KEY (removed from the deployment per CLAUDE.md); without the key the EOD append silently adds nothing.
+- `async get_market_insight(pair_summary, market_data_summary, timeout)` · `core/market_analysis.py:34` · **GATED-OFF**
+  - Formats prompts/grok_market_analysis.txt with two summaries and returns the stripped Grok reply ('' on error or empty input).
+  - ⚠️ Gated by MARKET_ANALYSIS_ENABLED (default false).
+- `async get_market_insight_with_fallback(pair_summary, market_data_summary, raw_fallback, timeout)` · `core/market_analysis.py:62` · **GATED-OFF**
+  - Returns the Grok market insight if it passes the Grok quality gate, otherwise raw_fallback.
+  - ⚠️ Gated by MARKET_ANALYSIS_ENABLED (default false). Its caller builds the snapshot from Dexscreener search?q=cronos (worker.py:1218), the feed CLAUDE.md says returns established pairs rather than new ones.
+- `_fmt_signed_usd(v)` · `core/pnl_calculator.py:37`
+  - Formats a value as +$1,234.56 or -$1,234.56, or '$?' if it is not numeric.
+- `format_pnl_report(data)` · `core/pnl_calculator.py:143`
+  - Builds the basic daily-activity text: header, wallet, net-flow note, each token's trades and net, plus optional USD net-flow lines.
+  - ✅ Fixed 2026-11-04 (reviewer pass): trade times are labelled 'UTC'; scam tokens are filtered at fetch time.
+- `format_daily_pnl_report(data, grok_insight)` · `core/pnl_calculator.py:177`
+  - Builds the richer daily report: totals, the top 5 movers, USD net-flow lines and the AI insight.
+  - ✅ Fixed 2026-11-04 (reviewer pass): scam tokens are filtered at fetch time.
+- `_aggregate_pnl(transactions)` · `core/pnl_calculator.py:248`
+  - Folds normalized tx dicts into per-token buys, sells, trade lists and net amounts dated by the Athens day, or returns an error dict when there are none.
+  - ⚠️ The log_events and native-value branches can never fire for explorer-adapted rows. (The scam filter now runs upstream, in get_today_transactions_async.)
+- `_normalize_etherscan_item(item, action)` · `core/pnl_calculator.py:429`
+  - Converts an Etherscan-shaped row into a synthetic Covalent-shaped tx (UTC timestamp, success flag, signed token or native CRO delta), returning None for zero-value txlist rows.
+  - ⚠️ Self-transfers count as inflows. Inferred: CRO received from contracts (internal txs, e.g. token->CRO swap proceeds) is never fetched, since only getTxsByAddress and getCRC20TransferByAddress are queried.
+- `_adapt_explorer_row(item, action)` · `core/pnl_calculator.py:499`
+  - Maps a Cronos Explorer v1 row (nested from/to, timestamp, tokenMetadata) to the Etherscan shape.
+- `async get_today_transactions_async()` · `core/pnl_calculator.py:528`
+  - Pages Explorer v1 getTxsByAddress and getCRC20TransferByAddress (up to 10 pages each, stopping at the first row older than today) and returns today's normalized txs with a fetch_ok flag, running the freshness guard.
+  - ⚠️ Fixed 2026-11-04: endBlock cap and scam-token filter. Still unverified: v1 row order (the newest-first early exit).
+- `async calculate_daily_pnl_async()` · `core/pnl_calculator.py:648`
+  - Fetches today's txs and aggregates them, or returns an 'unavailable' error dict when the fetch failed.
+- `_enrich_with_current_prices(data)` · `core/pnl_calculator.py:664`
+  - Adds position_value_usd (net x CoinGecko price) for each token with a known symbol, plus a total net-flow USD field.
+  - ⚠️ The PriceService client isn't closed on the exception path (lines 718-723).
+- `async get_daily_pnl_report()` · `core/pnl_calculator.py:739`
+  - Builds the daily report string: fetch and aggregate, price enrichment in a thread, honest 'unavailable' or 'no transactions' messages, then the AI-insight report or the basic report with a fallback note.
+  - ✅ Fixed 2026-11-04 (reviewer pass): the docstring is corrected. Still open: load_prompt's '[ERROR]' sentinel is not checked before calling Claude.
+- `_PriceCache.__init__(ttl_seconds)` · `core/price_service.py:17`
+  - Creates an empty symbol -> (price, timestamp) cache with a TTL (default 120 s).
+- `_PriceCache.get(symbol)` · `core/price_service.py:21`
+  - Returns a cached price younger than the TTL, else None.
+  - ⚠️ A new PriceService (and so a new cache) is built for every report and queried once, so the cache can never hit.
+- `_PriceCache.set(symbol, price)` · `core/price_service.py:28`
+  - Stores a price with the current time.
+- `PriceService.__init__(timeout, min_call_interval, cache_ttl)` · `core/price_service.py:52`
+  - Stores the timeout and rate-limit settings, creates the cache, and opens a sync httpx.Client.
+- `PriceService._map_to_id(symbol)` · `core/price_service.py:64`
+  - Maps a symbol (upper-cased) to a CoinGecko id from a small fixed map, or None.
+  - ⚠️ Only CRO/USDC/USDT/WETH/WBTC/DAI are known, so WCRO and other Cronos tokens get no CoinGecko price. That is intentional: unknown symbols return None rather than a guessed coin.
+- `PriceService._respect_rate_limit()` · `core/price_service.py:70`
+  - Blocks with time.sleep until min_call_interval has passed since the last call.
+- `PriceService.get_current_prices(symbols)` · `core/price_service.py:79`
+  - Returns {SYMBOL: price or None} via one CoinGecko simple/price call for known ids, using the cache, and never raises.
+- `PriceService.close()` · `core/price_service.py:144`
+  - Closes the httpx client, ignoring errors.
+- `eod_pnl_enabled()` · `worker.py:1173`
+  - EOD on/off switch: defaults to on when WALLET_ADDRESS is set; EOD_PNL_ENABLED accepts 1, true or yes.
+- `eod_pnl_time()` · `worker.py:1182`
+  - Returns the EOD (hour, minute) from EOD_PNL_HOUR/EOD_PNL_MINUTE, default 23:55, with bad values falling back to the default.
+- `async scheduled_eod_pnl()` · `worker.py:1195`
+  - Daily at the EOD time (Athens) it builds the daily report, optionally appends a Grok market context, skips if a report went out within 22 h, appends the paper line, sends it and records last_eod_run.
+  - ✅ Fixed 2026-11-04 (reviewer pass): the sleep uses seconds_until_local (computed in UTC), so DST can't shift the report.
+
+## /analyze (AI) (8)
+
+- `async _get_grok_live_context(wallet_address)` · `app/main.py:151`
+  - Builds the /analyze prompt context (wallet preview, CRO amount, the top 5 tokens by raw amount, and up to 20 recent-transfer strings), returning placeholder strings on any error.
+  - ✅ Fixed 2026-11-04 (reviewer pass): an outage is reported as 'unavailable', and tokens are ranked by USD with values.
+- `async process_grok_analyze(chat_id)` · `app/main.py:191`
+  - The /analyze handler: builds the live context, formats prompts/claude_wallet_analysis.txt, calls Claude with a 25 s timeout, and replies with the insight or a raw-context fallback.
+  - ⚠️ Never checks load_prompt's '[ERROR]' sentinel (lines 182-190), so with a CWD-relative prompts/ miss the error string is sent to Claude as the prompt. The '25 s hard timeout' isn't hard: SDK max_retries defaults to 2.
+- `async grok_analyze(req)` · `app/main.py:256`
+  - POST /grok/analyze: an unauthenticated JSON endpoint that analyses the body's `wallet` (default WALLET_ADDRESS) with Claude and returns the insight or a raw-context fallback.
+  - ⚠️ No auth at all (lines 236-270): any caller can trigger a paid Claude call plus a full Explorer token discovery for any wallet it names. That burns the CRONOS_EXPLORER_API_KEY rate limit (the owner's /wallet then 429s) and grows _TOKEN_SET_CACHE per wallet. Errors return HTTP 200 with ok:false. Same unchecked '[ERROR]' prompt issue as process_grok_analyze.
+- `is_valid_claude_response(text)` · `core/claude_client.py:27`
+  - Quality gate (aliased as is_valid_grok_response): True only for a string longer than 15 chars that doesn't start with a known Claude error prefix.
+  - ⚠️ A Claude reply to an '[ERROR] Prompt file not found' prompt passes this gate.
+- `load_prompt(filename, **kwargs)` · `core/claude_client.py:36`
+  - Reads prompts/<filename> relative to the current working directory and str.format()s it, returning an '[ERROR] ...' string on failure.
+  - ⚠️ The path is CWD-relative (line 38): running `python /path/run_local.py` from another directory turns every AI prompt into an '[ERROR]' string, which the runtime callers still send to Claude (only the CI script checks).
+- `async call_claude(prompt, timeout)` · `core/claude_client.py:47`
+  - Sends one user prompt to Anthropic (claude-sonnet-4-6, max_tokens 2048, the DeFi-analyst system prompt) and returns the text or an error string; aliased as call_grok.
+  - ⚠️ Builds a new client on every call with the SDK's default max_retries=2 (verified in the installed anthropic 2.4.0), so 'timeout=25.0' can take about 75 s or more.
+- `_addr(v)` · `core/wallet.py:137`
+  - Returns the address from a {address, isContract} dict or a bare string.
+- `async get_recent_transactions(wallet_address, limit)` · `core/wallet.py:707`
+  - Returns up to `limit` compact 'time | SEND/RECEIVE CRO' and 'time | BUY/SELL token' strings from the first page of Explorer v1 native and CRC-20 history, newest first and deduplicated.
+  - ✅ Fixed 2026-11-04 (reviewer pass): endBlock cap and scam filter. Still open: incoming/outgoing transfers are labelled BUY/SELL.
+
+## /paper (simulation) (31)
+
+- `_fmt_price(p)` · `app/commands/paper.py:17`
+  - Formats a price with 4 or 8 decimals depending on its size.
+  - ⚠️ Duplicate of worker._fmt_price.
+- `render_paper_status(mirror, prices, now_utc)` · `app/commands/paper.py:25`
+  - Renders the /paper text from the mirror: staleness warning, balance and realized PnL, open positions with a current or last-observed price and unrealized PnL, the last 10 closed trades and the win rate (from a compact or full state).
+- `async get_paper_status(chat_id)` · `app/commands/paper.py:104`
+  - The /paper handler: reads the in-memory mirror, prices open positions' token addresses with core.wallet.get_token_prices (Cronos-only Dexscreener), and replies with render_paper_status.
+- `_paper_mirror_auth()` · `app/main.py:65`
+  - Returns the first 32 hex chars of sha256(TELEGRAM_BOT_TOKEN), the shared secret for the mirror endpoint.
+  - ⚠️ Duplicate of worker._paper_mirror_auth.
+- `get_paper_mirror()` · `app/main.py:70`
+  - Returns the in-memory paper/signals mirror dict, or None.
+- `set_paper_mirror(state, signals, as_of)` · `app/main.py:78`
+  - Replaces the global mirror with {state, signals (dict or None), as_of}.
+- `async paper_state_mirror(req)` · `app/main.py:233`
+  - POST /internal/paper-state: returns 403 without a token or with a bad X-Paper-Auth hash, 413 above 200 KB and 400 on bad JSON, and otherwise installs the posted state/signals mirror.
+- `parse_pool_prices(body)` · `core/pair_discovery.py:223`
+  - Maps a pools/multi response to {address: base_token_price_usd}, keyed by both the original and the lowercased address and skipping non-positive prices.
+  - ⚠️ Calls .get on the body without a type check (line 230); a 200 with non-dict JSON raises out of fetch_pool_prices (caught by _paper_step), despite 'Never raises'.
+- `async fetch_pool_prices(client, network, addresses, max_retries)` · `core/pair_discovery.py:281`
+  - Fetches current base-token USD prices for one chain's pool addresses through pools/multi, 50 addresses per call.
+  - ⚠️ Uses 50 per call while fetch_pools_by_address uses 30 for the same endpoint (CLAUDE.md says <=30); harmless while PAPER_MAX_OPEN=5.
+- `fresh_state()` · `core/paper_trading.py:72`
+  - Returns a new paper state with the starting balance and empty open/closed lists.
+- `_is_num(v)` · `core/paper_trading.py:77`
+  - True for a finite int or float that isn't a bool.
+- `_valid_open(p)` · `core/paper_trading.py:81`
+  - Checks that an open position has positive numeric entry_price, qty and usd_in plus non-empty pair and token addresses.
+  - ⚠️ A position the worker itself opened with an empty token_address (worker.py:698 allows it) is dropped on the next load, and reconcile_balance quietly refunds its cost, so the trade disappears from the evidence (edge case).
+- `_backup_corrupt(p)` · `core/paper_trading.py:90`
+  - Copies an unreadable paper_state.json to <path>.corrupt-<UTC> before the engine overwrites it, so simulation history is never silently lost.
+- `load_state(path)` · `core/paper_trading.py:106`
+  - Loads paper_state.json, sanitizes balances and positions, re-books impossible gains, reconciles the balance against the trade record, and returns a fresh state if the file is missing or corrupt.
+  - ✅ Fixed 2026-11-04 (reviewer pass): a corrupt file is copied to .corrupt-<UTC> before the fresh state is saved.
+- `should_enter(score, price, open_count, balance_usd, already_open, entry_score, position_usd, max_open)` · `core/paper_trading.py:178`
+  - Returns (ok, reason) for a paper entry: finite score at or above the entry bar, positive price, not already open, a free slot, and enough simulated balance.
+- `open_position(state, pair_address, symbol, token_address, price, score, now_iso, position_usd, chain, flags)` · `core/paper_trading.py:204`
+  - Deducts the position size from the simulated balance and appends an open position (chain, original-case pool address, lowercased token address, entry price, qty, score, risk flags).
+  - ⚠️ Doesn't validate token_address (see _valid_open).
+- `is_bad_tick(entry, price, max_ratio)` · `core/paper_trading.py:229`
+  - True when an exit price is more than max_ratio (default 10) times the entry, so it is treated as a feed glitch.
+  - ✅ Fixed 2026-11-04 (reviewer pass): the docstring now matches the code (SL books the observed price).
+- `check_exit(position, current_price, now_utc, tp_pct, sl_pct, max_hold_hours, max_tick_ratio)` · `core/paper_trading.py:246`
+  - Decides a paper exit: hold on a missing price, a bad price or an above-ratio tick; otherwise take-profit at the +TP% threshold, stop-loss at the observed price, or time-stop at the observed price after the max hold.
+  - ⚠️ The bad-tick return (lines 254-255) runs before the time-stop (264-272), so a position whose price stays above 10x entry never closes (verified: held 72 h at 12x -> None). It holds a slot forever and the win is never recorded.
+- `close_position(state, position, exit_price, reason, now_iso)` · `core/paper_trading.py:298`
+  - Credits qty x exit price to the balance, removes the position by pair address, and appends a closed record with realized PnL in USD and %.
+- `reconcile_balance(state)` · `core/paper_trading.py:319`
+  - Computes the expected balance (starting + realized PnL - open cost basis) and the stored balance's drift from it.
+- `repair_impossible_trades(state, tp_pct)` · `core/paper_trading.py:334`
+  - Re-books any closed trade whose pnl_pct exceeds the TP cap down to +TP%, keeping the original values and a 'corrected' marker.
+  - ⚠️ Runs on every load with the CURRENT PAPER_TP_PCT (lines 117, 319). Lowering TP later (e.g. 25 -> 15) would permanently re-book legitimate past TP wins and label them 'impossible glitch tick'.
+- `group_open_by_chain(open_positions)` · `core/paper_trading.py:370`
+  - Groups open positions by chain, defaulting a missing chain to 'cro'.
+- `win_rate(state)` · `core/paper_trading.py:380`
+  - Returns the percentage of closed trades with pnl_usd > 0, or None when there are none.
+- `total_equity_pnl(state)` · `core/paper_trading.py:388`
+  - Returns realized PnL as balance + open cost basis - starting capital.
+- `compact_paper_state(state, max_closed)` · `core/paper_trading.py:396`
+  - Builds the bounded mirror projection: balance, starting capital, the open positions' display fields, closed count, wins, and the last 10 closed trades.
+- `paper_summary_line(state)` · `core/paper_trading.py:422`
+  - Returns the one-line '🧪 Paper: balance · open · closed · win rate' status.
+- `sanitize_symbol(sym)` · `core/paper_trading.py:431`
+  - Strips Markdown v1 entity characters from a symbol, defaulting to '?'.
+- `_paper_mirror_auth()` · `worker.py:630`
+  - Returns sha256(TELEGRAM_BOT_TOKEN)[:32], sent as the X-Paper-Auth header.
+  - ⚠️ Duplicate of app.main._paper_mirror_auth.
+- `async _push_paper_mirror(client, state)` · `worker.py:635`
+  - Pushes the compact paper state plus the signals snapshot to the bot: a direct set_paper_mirror call when PAPER_MIRROR_URL=inprocess, otherwise an authenticated POST, logging any failure.
+  - ⚠️ Its only caller is _paper_step, so with PAPER_TRADING_ENABLED off /signals is never fed either. The default URL points at the paused Railway bot.
+- `async _paper_step(client, fresh, now_utc)` · `worker.py:681`
+  - Runs one paper-engine step per cycle: loads/repairs the state once (and saves it), opens positions for alerted pools that pass should_enter and the risk gates, prices open positions per chain, closes them on TP/SL/time-stop, sends 🧪 notes, and pushes the mirror.
+  - ✅ Fixed 2026-11-04 (reviewer pass): load_state backs up a corrupt file before this save.
+- `_fmt_price(p)` · `worker.py:941`
+  - Formats a price with 4 or 8 decimals depending on its size.
+
+## /signals + new-pool alerts (32)
+
+- `_label(chain)` · `app/commands/signals.py:14`
+  - Maps a GeckoTerminal network id to a short label (sui-network -> sui).
+  - ⚠️ Duplicate of worker._chain_label.
+- `_fmt_usd(v)` · `app/commands/signals.py:18`
+  - Formats a value as whole dollars, or '$?' if it is not numeric.
+- `render_signals(signals, now_utc)` · `app/commands/signals.py:25`
+  - Renders /signals from the worker's discovery snapshot: staleness, per-chain thresholds, up to 5 recent qualifying pools per chain with risk flags, 'feed unavailable' notes, and a funnel line.
+  - ⚠️ The funnel's 'seen' and 'matured' are per-cycle observation sums (worker.py:793, 827-829), not distinct pools, so they can't be compared with 'passed'/'sent'.
+- `async get_signals(chat_id)` · `app/commands/signals.py:89`
+  - The /signals handler: renders the signals part of the mirror and replies, with an error text on exception.
+  - ⚠️ The snapshot is pushed only from worker._paper_step (worker.py:771), which returns early when PAPER_TRADING_ENABLED is false (worker.py:680-681), so /signals stays 'syncing' forever with paper trading off.
+- `get_signals_mirror()` · `app/main.py:74`
+  - Returns the 'signals' part of the mirror, or None.
+- `chains_enabled()` · `core/pair_discovery.py:52`
+  - Returns the CHAINS_ENABLED list (default cro,solana,sui-network).
+- `min_liquidity_for(chain)` · `core/pair_discovery.py:57`
+  - Returns the per-chain liquidity floor from PAIR_MIN_LIQUIDITY_USD_{CHAIN}, or the built-in default (cro 5000, others 10000).
+  - ⚠️ The global PAIR_MIN_LIQUIDITY_USD that CLAUDE.md documents is parsed at worker.py:62 but never read anywhere.
+- `min_score_for(chain, global_default)` · `core/pair_discovery.py:62`
+  - Returns the per-chain score bar from PAIR_MIN_SCORE_{CHAIN}, or the global default.
+- `is_honeypot_suspect(buys, sells, min_buys)` · `core/pair_discovery.py:70`
+  - True when 1h sells are 0 and 1h buys are at least HONEYPOT_MIN_BUYS (default 5).
+- `is_implausible_liquidity(reserve_usd, vol1h, max_usd, min_vol)` · `core/pair_discovery.py:87`
+  - True when reserve exceeds LIQ_SANITY_MAX_USD ($1M) while 1h volume is under LIQ_SANITY_MIN_VOL_USD ($10k).
+- `_f(x, default)` · `core/pair_discovery.py:104`
+  - Float conversion that maps non-numeric or non-finite values to a default (0.0).
+- `_token_symbol_addr(token_id, included_by_id)` · `core/pair_discovery.py:112`
+  - Resolves a token's (symbol, address) from the JSON:API included block, falling back to parsing the '{network}_{address}' id.
+- `parse_gt_pool(pool, network, included_by_id)` · `core/pair_discovery.py:128`
+  - Normalizes one GeckoTerminal pool into the worker's dict (chain, dex, address, dedup key, symbols, price, URL, liquidity, created_at, plus score_pair-ready volume/txns/priceChange), returning None without an address.
+- `parse_gt_pool._rel_id(name)` · `core/pair_discovery.py:143`
+  - Returns relationships[name].data.id when present.
+- `pool_age_hours(created_at, now_utc)` · `core/pair_discovery.py:188`
+  - Returns the age in hours of an ISO timestamp (naive values treated as UTC), or None if it can't be parsed.
+- `classify_pool(created_at, now_utc, min_age_minutes, newness_window_hours)` · `core/pair_discovery.py:202`
+  - Classifies a pool as pending (younger than the minimum age, or future-dated), mature, expired (past the newness window) or unknown (bad timestamp).
+- `async _iter_multi_bodies(client, network, addresses, chunk_size, max_retries)` · `core/pair_discovery.py:248`
+  - Async generator that GETs pools/multi in address chunks with 429/exception backoff and yields the JSON bodies.
+  - ⚠️ After a 429 exhausts its retries it returns and abandons all remaining chunks (lines 266-267), though the docstring says a failed chunk is skipped.
+- `async fetch_pools_by_address(client, network, addresses, max_retries)` · `core/pair_discovery.py:292`
+  - Fetches full current data for specific pools through pools/multi (30 per call) and normalizes each with parse_gt_pool.
+  - ⚠️ body.get(...) at lines 300-302 is outside any try, so a 200 with non-dict JSON aborts the whole discovery cycle for every chain, despite 'Never raises'.
+- `_mark_fetch(network, ok)` · `core/pair_discovery.py:314`
+  - Records {ok, ts} for the latest new_pools fetch of a network in LAST_FETCH_STATUS.
+- `async fetch_new_pools(client, network, max_retries)` · `core/pair_discovery.py:319`
+  - GETs GeckoTerminal new_pools (first page only) for one network with 429 backoff and returns normalized pools, or [] on failure, recording the fetch status.
+- `_chain_label(chain)` · `worker.py:154`
+  - Maps a network id to a short label (sui-network -> sui).
+- `_md_safe(s)` · `worker.py:158`
+  - Strips Markdown v1 entity characters from an untrusted string, defaulting to '?'.
+- `_pending_ca(v)` · `worker.py:220`
+  - Returns created_at from a pending entry, whether it is a dict or a legacy string.
+- `pending_due_keys(pending, chain, now_utc, min_age_minutes, newness_window_hours)` · `worker.py:264`
+  - Lists a chain's pending keys whose pools are now old enough to score.
+  - ⚠️ Due keys are capped at 30 before empty addresses are filtered out (worker.py:815-817), and pools that never resolve stay pending, so dead pools can occupy force-fetch slots until they expire (24 h).
+- `_expire_pending(pending, now_utc, newness_window_hours)` · `worker.py:279`
+  - Removes pending pools older than the newness window or with unparseable timestamps and returns how many were dropped.
+- `_is_valid_last_seen(ts)` · `worker.py:377`
+  - Returns True if the value parses as an ISO timestamp.
+- `_sync_seen_pairs_from_dict()` · `worker.py:388`
+  - Rebinds the global seen_pairs to the keys of pair_last_seen.
+- `_is_new_or_stale(pair_address)` · `worker.py:398`
+  - Returns True when a pool's last_seen is missing, invalid or older than 1 hour (RESTART_DEDUP_WINDOW_SECONDS), meaning it may alert again.
+  - ⚠️ An alerted pool that leaves the feed for more than 1 h and returns within its 24 h window alerts again, and so does every alerted pool after any downtime longer than 1 h.
+- `_clamp01(x)` · `worker.py:570`
+  - Clamps a value to [0, 1], mapping nan and inf to 0.
+- `score_pair(pair, liq)` · `worker.py:576`
+  - Computes the 0-100 score from 1h volume, buy ratio, 1h price change and liquidity (25 points each) and returns it together with its ingredients.
+- `score_pair._sub(key)` · `worker.py:583`
+  - Returns pair[key] if it is a dict, else {}.
+- `async poll_new_pools()` · `worker.py:782`
+  - Main discovery loop, every DISCOVERY_INTERVAL: per chain it fetches new_pools, holds young pools as pending, force-fetches matured pending pools, scores mature pools above the liquidity floor, flags risks, dedups and queues alerts, then updates funnel/signals, persists pending, runs the paper step, and sends one combined alert.
+  - ⚠️ Pools are marked seen and saved before the send, and the combined message is still hard-cut at 4000 chars (lines 919-920) even though send_telegram now splits safely. One exception aborts the whole cycle for all chains, including the paper step.
+
+## portfolio-move alerts (3)
+
+- `watch_holdings(balances, min_usd, baseline)` · `worker.py:950`
+  - Extracts priced holdings worth at least min_usd (or already in the baseline) from a balances dict, CRO included, with a per-unit price.
+- `detect_portfolio_moves(holdings, baseline, last_alert, now_utc, threshold_pct, cooldown_min)` · `worker.py:982`
+  - Seeds a baseline on first sight and afterwards returns moves of at least the threshold %, subject to a per-token cooldown, rebasing on each alert.
+- `async portfolio_watch()` · `worker.py:1018`
+  - Every PORTFOLIO_WATCH_INTERVAL_MIN (at least 60 s) reads balances, computes moves, and sends one 'Portfolio movers' message, skipping cycles without pricing.
+  - ⚠️ Needs WALLET_ADDRESS. Each cycle also runs the freshness guard (2 extra calls).
+
+## scanner digest (5)
+
+- `_new_chain_stats()` · `worker.py:164`
+  - Returns a zeroed per-chain funnel dict.
+- `record_chain_funnel(all_stats, chain, seen, matured, passed, sent, best)` · `worker.py:169`
+  - Adds one chain's cycle counts (seen, matured, passed, sent) and best score to all_stats[chain].
+  - ⚠️ 'seen' and 'matured' are summed every 5-min cycle (worker.py:793, 827-829), so the same pool is re-counted each cycle (on barren Cronos up to 288x per day), while 'passed'/'sent' count distinct alerts. 'sent' counts passes even when the Telegram send failed.
+- `format_multichain_digest(all_stats, chains)` · `worker.py:188`
+  - Formats the per-chain digest line with seen, matured, passed and best score per chain, plus the total sent.
+- `seconds_until_local(now_local, hour, minute)` · `worker.py:1078`
+  - Seconds until the next given Athens wall-clock time, computed in UTC so a DST change can't shift the daily EOD report or digest by an hour.
+- `async scheduled_scan_digest()` · `worker.py:1090`
+  - Sleeps until SCAN_DIGEST_HOUR Athens time each day, then swaps out chain_stats and sends the per-chain digest.
+  - ✅ Fixed 2026-11-04 (reviewer pass): the sleep uses seconds_until_local (computed in UTC).
+
+## webhook self-heal (8)
+
+- `async _autoset_webhook()` · `app/main.py:42`
+  - FastAPI startup hook that, if WEBHOOK_AUTOSET_ENABLED (default true) and a token are set, resolves the target URL and calls ensure_webhook (check, set, read back), logging the outcome.
+  - ⚠️ Uses the deprecated @app.on_event (the installed FastAPI 0.162 warns). It never registers a Telegram secret_token, so /telegram/webhook can't tell real updates from forged ones.
+- `resolve_webhook_url(webhook_url, app_url, railway_domain, default)` · `core/telegram_webhook.py:22`
+  - Picks the webhook URL by precedence WEBHOOK_URL > APP_URL > RAILWAY_PUBLIC_DOMAIN > canonical, adding https:// and /telegram/webhook when missing.
+- `resolve_webhook_url._with_path(base)` · `core/telegram_webhook.py:27`
+  - Normalizes a base URL: strips it, adds https:// if missing, and appends /telegram/webhook unless already present.
+  - ⚠️ Treats any host that starts with 'http' as already having a scheme (line 31), so e.g. 'httpbot.up.railway.app' stays scheme-less.
+- `needs_restore(info, expected)` · `core/telegram_webhook.py:45`
+  - Drift check: True when the webhook info's url (envelope or bare result) differs from the expected one; a non-dict counts as no drift.
+- `async get_webhook_info(client, token)` · `core/telegram_webhook.py:56`
+  - GETs getWebhookInfo and returns the result dict or None, logging only error types.
+- `async set_webhook(client, token, url, drop_pending)` · `core/telegram_webhook.py:76`
+  - POSTs setWebhook(url, drop_pending_updates) and returns ok && result.
+  - ⚠️ Never sends a secret_token, so the webhook can't authenticate Telegram.
+- `async ensure_webhook(client, token, expected, drop_pending)` · `core/telegram_webhook.py:97`
+  - Reads the webhook, and if it drifted sets it and reads it back; returns ok, restored, failed or skipped.
+- `async webhook_guard()` · `worker.py:1121`
+  - If enabled and a token is set, waits 90 s and then hourly calls ensure_webhook against WEBHOOK_EXPECTED_URL, alerting on a confirmed restore.
+  - ⚠️ On by default for worker.py (WEBHOOK_GUARD_ENABLED=true); run_local turns it off by default.
+
+## Telegram plumbing (14)
+
+- `async send_telegram_message(text, chat_id, reply_markup)` · `app/main.py:87`
+  - Bot-side sender that logs [tg-out], prints in console mode, otherwise splits the text into chunks of up to 4000 chars and POSTs each as legacy Markdown (keyboard on the first), resending a non-200 chunk once as plain text.
+  - ⚠️ Any non-200, including 429, triggers an immediate plain-text resend whose result is not checked.
+- `async health()` · `app/main.py:228`
+  - Serves GET / and GET /health with {ok, service, status: running}.
+- `async handle_command(text, chat_id, run_task)` · `app/main.py:312`
+  - Normalizes the command text and routes it: sends the menu with its keyboard, or schedules the /wallet, /paper, /signals, /daily_pnl or /analyze handler via run_task; unknown commands get a hint.
+  - ✅ Fixed 2026-11-04 (reviewer pass): both inbound paths apply the fail-closed allow-list before routing.
+- `async telegram_webhook(req, background_tasks)` · `app/main.py:337`
+  - POST /telegram/webhook: pulls the text and chat id from message or edited_message and hands them to handle_command with BackgroundTasks, returning 400 on unreadable JSON.
+  - ✅ Fixed 2026-11-04 (reviewer pass): serves only allow-listed chats, failing closed. Still open (owner decision): no Telegram secret token.
+- `normalize_command(text)` · `core/local_mode.py:32`
+  - Lowercases the first word of a '/' message and strips any '@botname' suffix; non-commands become ''.
+  - ⚠️ Strips any @suffix, so in a group the bot also answers commands addressed to other bots.
+- `configured_allowed_chats()` · `core/local_mode.py:50`
+  - Returns the chat allow-list from TELEGRAM_ALLOWED_CHAT_IDS, else TELEGRAM_CHAT_ID; an empty set means both inbound paths serve nobody.
+- `to_tg_markdown(text)` · `core/tg_format.py:20`
+  - Converts **bold** to legacy-Markdown *bold* by replacing every '**' with '*'.
+- `plain_text(text)` · `core/tg_format.py:25`
+  - Builds the plain-text fallback body: converts bold, undoes backslash escapes, and strips every '*' and backtick.
+  - ⚠️ Also removes literal '*' characters (e.g. '5 * 3').
+- `split_message(text, limit)` · `core/tg_format.py:33`
+  - Splits text into chunks of up to 4000 chars on line boundaries, hard-cutting any single over-long line.
+  - ⚠️ Worker callers still hard-cut their own messages at 4000 chars before sending (worker.py:919-920, 1060-1061), so the safe split never gets used there and the cut can land mid-section or mid-link.
+- `legacy_markdown_balanced(text)` · `core/tg_format.py:61` · **TEST-ONLY**
+  - Heuristic check that '*', '_' and backticks are balanced once escapes and [label](url) links are removed.
+  - ⚠️ Only tests/test_audit_fixes.py calls it.
+- `async send_telegram_alert(text, client)` · `core/wallet.py:215`
+  - System-alert sender that logs [tg-out], posts one legacy-Markdown message to TELEGRAM_CHAT_ID, and returns True unless an exception occurred.
+  - ✅ Fixed 2026-11-04 (reviewer pass): console mode, plain-text retry on non-200, and True only if Telegram accepted.
+- `async send_telegram_alert._send(c)` · `core/wallet.py:235`
+  - Posts the alert with legacy Markdown and resends it as plain text if Telegram rejects it; returns whether Telegram accepted it.
+- `async send_telegram(text)` · `worker.py:427`
+  - Worker sender that logs [tg-out], prints in console mode, otherwise splits the text and POSTs each chunk as legacy Markdown, resending a non-200 chunk once as plain text.
+- `async heartbeat()` · `worker.py:559` · **GATED-OFF**
+  - If HEARTBEAT_ENABLED, sends a 'Worker Heartbeat' message every hour; otherwise logs once and returns.
+  - ⚠️ Gated by HEARTBEAT_ENABLED (default false); with defaults it only logs one line and returns.
+
+## standalone runner (17)
+
+- `console_mode()` · `core/local_mode.py:16`
+  - True when CONSOLE_MODE is 1, true or yes.
+  - ✅ Fixed 2026-11-04 (reviewer pass): run_local now uses console_mode() too.
+- `console_print(source, text, chat_id)` · `core/local_mode.py:20`
+  - Prints an outbound message (apikey-redacted, chat id omitted) to stdout between rule lines.
+  - ✅ Fixed 2026-11-04 (reviewer pass): send_telegram_alert honours console mode.
+- `allowed_chat_ids(raw)` · `core/local_mode.py:41`
+  - Parses a comma list of chat ids into a set, where empty means no restriction.
+  - ⚠️ Fail-open by itself (empty = everyone). The callers use configured_allowed_chats() and fail closed when it is empty.
+- `is_chat_allowed(chat_id, allowed)` · `core/local_mode.py:46`
+  - True if the allow-set is empty or contains str(chat_id).
+  - ✅ Fixed 2026-11-04 (reviewer pass): applied on both the webhook and the poller.
+- `extract_updates(payload, offset)` · `core/local_mode.py:57`
+  - Parses a getUpdates payload into [(chat_id, text)] plus the next offset, ignoring malformed updates.
+- `_parse_args(argv)` · `run_local.py:38`
+  - Parses --console, --selftest, --no-worker and --take-over-webhook.
+- `_Tasks.__init__()` · `run_local.py:51`
+  - Creates the set of pending command tasks.
+- `_Tasks.__call__(fn, *args)` · `run_local.py:54`
+  - run_task implementation: schedules fn(*args) as an asyncio task wrapped in _safe and keeps a reference until it finishes.
+- `async _Tasks._safe(fn, *args)` · `run_local.py:60`
+  - Awaits fn(*args) and logs any exception.
+- `async _Tasks.drain(timeout)` · `run_local.py:66`
+  - Waits, with a timeout, for the pending command tasks to finish.
+- `async _console_loop(handle_command, tasks, chat_id)` · `run_local.py:71`
+  - Reads commands from stdin (adding a missing '/'), routes them through handle_command, and exits on EOF or quit/exit.
+  - ⚠️ EOF on stdin (no TTY, e.g. run as a service without a token) returns at once, and _amain then cancels the worker too.
+- `async _selftest(handle_command, tasks, chat_id)` · `run_local.py:88`
+  - Runs each SELFTEST command through handle_command once and drains its tasks.
+  - ⚠️ With keys in .env it makes real Explorer calls and paid Claude calls. (Alerts now print instead of being sent, since 2026-11-04.)
+- `async _reply_setup_hint(client, base, chat_id)` · `run_local.py:96`
+  - Sends an unknown chat a plain-text 'not configured, set TELEGRAM_CHAT_ID=<id>' reply.
+  - ⚠️ Skips the [tg-out] logging rule and answers every message from any chat, with no rate limit.
+- `async _telegram_poll_loop(handle_command, tasks, token, take_over)` · `run_local.py:106`
+  - Refuses to start if a webhook is set (or deletes it with --take-over-webhook after a read-back), then long-polls getUpdates and dispatches allowed chats' commands, failing closed when no allow-list exists.
+  - ⚠️ The startup getWebhookInfo/getMe calls (lines 113-130) are outside any try, and the 409 and refusal paths just return. _amain then cancels the worker and the process exits with status 0, so an ON_FAILURE restart policy never restarts it.
+- `_seed_paper_mirror(bot)` · `run_local.py:165`
+  - If paper_state.json exists, loads it and installs its compact projection as the bot mirror so /paper works from boot.
+  - ⚠️ Seeds with as_of=None, so render_paper_status can't flag the seeded data as stale.
+- `async _amain(args)` · `run_local.py:176`
+  - Imports the bot and worker, seeds the paper mirror, starts worker.main (unless --no-worker or --selftest), then runs the selftest, the console loop or the Telegram poller, cancelling every job once the first one ends.
+  - ✅ Fixed 2026-11-04 (reviewer pass): uses console_mode(). Still open: finished-job exceptions aren't logged, and the process exits 0.
+- `main(argv)` · `run_local.py:200`
+  - CLI entry: parses arguments, forces CONSOLE_MODE=true for --console, --selftest or a missing token, configures logging, and runs _amain.
+  - ✅ Fixed 2026-11-04 (reviewer pass): every sender, including send_telegram_alert, honours console mode.
+
+## persistence (12)
+
+- `data_dir()` · `core/paper_trading.py:57`
+  - Resolves the persistence directory: WORKER_DATA_DIR, else RAILWAY_VOLUME_MOUNT_PATH, else 'data'.
+- `state_path()` · `core/paper_trading.py:65`
+  - Returns <data_dir>/paper_state.json.
+- `save_state(state, path)` · `core/paper_trading.py:160`
+  - Writes the state as JSON atomically (tmp file + os.replace) and returns success without raising.
+- `_addr_recoverable(network, addr)` · `worker.py:230`
+  - Returns False for an empty address, or an all-lowercase address on a case-sensitive network (Solana).
+- `migrate_pending(data)` · `worker.py:244`
+  - Normalizes a loaded pending map to {key: {ca, addr}}, dropping unrecoverable entries, and returns (map, dropped_count).
+- `_volume_configured()` · `worker.py:356`
+  - True when WORKER_DATA_DIR or RAILWAY_VOLUME_MOUNT_PATH is set, i.e. persistence points at a configured directory.
+- `_warn_if_no_volume()` · `worker.py:362`
+  - Logs a long WARNING when neither RAILWAY_VOLUME_MOUNT_PATH nor WORKER_DATA_DIR is set.
+- `load_known_pairs()` · `worker.py:453`
+  - Loads known_pairs.json (a legacy list or {pairs, last_eod_run}) into the pair_last_seen and last_eod_run globals and returns the key set (empty on error).
+- `save_known_pairs(pairs)` · `worker.py:495`
+  - Atomically writes {pairs: {key: {last_seen}}, last_eod_run} to known_pairs.json.
+  - ⚠️ Never prunes, so the file keeps every pool ever alerted and is rewritten in full on each new alert.
+- `load_pending_pools()` · `worker.py:522`
+  - Loads pending_pools.json through migrate_pending, returning {} if it is missing or corrupt.
+- `save_pending_pools(pending)` · `worker.py:541`
+  - Atomically writes the pending-maturity map.
+- `async main()` · `worker.py:1291`
+  - Worker bootstrap: loads known pairs and pending pools, does a save/load round-trip, sends the 'worker is online' message, logs the configuration, then gathers the 7 long-running loops.
+  - ✅ Fixed 2026-11-04 (reviewer pass): uses _volume_configured(), which checks both env vars.
+
+## logging/redaction (4)
+
+- `redact(text)` · `core/log_redaction.py:18`
+  - Masks apikey=/api_key= values in a string; non-strings pass through unchanged.
+  - ⚠️ Does not mask Telegram bot tokens (bot<id>:<secret> in API URLs), although CLAUDE.md says no token can appear in logs; I found no current log line that prints one.
+- `RedactingFilter.filter(record)` · `core/log_redaction.py:29`
+  - Logging filter that rewrites each record's formatted message through redact() and never drops the record.
+- `tg_out_log(logger, text)` · `core/log_redaction.py:44`
+  - Logs an outbound Telegram text at INFO as '[tg-out] ...', redacted, newlines flattened and truncated to 600 chars.
+- `install_log_redaction()` · `core/log_redaction.py:58`
+  - Ensures the root logger has a handler, attaches RedactingFilter to the root handlers once, and sets the httpx/httpcore loggers to WARNING.
+
+## config/env parsing (5)
+
+- `_env_float(name, default)` · `core/pair_discovery.py:36`
+  - Reads a float env var, returning the default when it is missing, non-numeric, non-finite or negative.
+  - ⚠️ Falls back silently (no warning), unlike worker._env_float.
+- `_chain_env_suffix(chain)` · `core/pair_discovery.py:47`
+  - Converts a network id into an env-var suffix (sui-network -> SUI_NETWORK).
+- `_env_pos_float(name, default)` · `core/paper_trading.py:29`
+  - Reads a strictly positive, finite float env var, warning and using the default on bad input.
+- `_env_float(name, default)` · `worker.py:42`
+  - Reads a finite, non-negative float env var, warning and using the default on bad input.
+  - ⚠️ Accepts 0, so DISCOVERY_INTERVAL=0 makes poll_new_pools loop with no sleep against GeckoTerminal's 30/min limit.
+- `eod_pnl_time._int(name, default, lo, hi)` · `worker.py:1186`
+  - Parses an int env var within [lo, hi], else returns the default.
+
+## CI scripts (3)
+
+- `parse_vars(pairs)` · `.github/scripts/call_claude.py:21` · **CI-ONLY**
+  - Turns repeated --var KEY=VALUE arguments into a dict, exiting with code 2 on a malformed pair.
+- `async _main()` · `.github/scripts/call_claude.py:32` · **CI-ONLY**
+  - Parses the CLI, loads and formats prompts/<file> via core.claude_client.load_prompt (exits 1 on an [ERROR] sentinel), calls call_claude and prints the reply for $GITHUB_OUTPUT.
+  - ⚠️ Every CI call runs under the runtime DEFI_SYSTEM_PROMPT (Telegram wallet-analyst persona, Telegram formatting rules; core/claude_client.py:55); prompts/claude_code_review.txt still enforces '**bold**' Markdown v1 and 'UTC for all dates', both superseded by CLAUDE.md.
+- `main()` · `.github/scripts/call_claude.py:49` · **CI-ONLY**
+  - Runs _main under asyncio.run and exits 130 on Ctrl+C.
+
+## legacy/dead (14)
+
+- `parse_vars(var_list)` · `.github/scripts/call_grok.py:40` · **DEAD**
+  - Turns repeated --var KEY=VALUE arguments into a dict, warning about and skipping malformed items.
+  - ⚠️ No workflow runs call_grok.py (only call_claude.py appears in .github/workflows/*.yml).
+- `async _main_async()` · `.github/scripts/call_grok.py:52` · **DEAD**
+  - Parses the CLI, loads a prompt via core.grok_client.load_prompt and calls the real Grok API (api.x.ai), printing the result.
+  - ⚠️ Its documented prompts grok_code_review.txt / grok_health_check.txt are no longer in prompts/ (archived), so even a manual run exits 1.
+- `main()` · `.github/scripts/call_grok.py:93` · **DEAD**
+  - Runs _main_async under asyncio.run and exits 130 on Ctrl+C.
+  - ⚠️ No workflow invokes this script.
+- `async send_telegram_message(text, chat_id)` · `app/commands/base.py:4` · **DEAD**
+  - Thin wrapper that lazily imports and awaits app.main.send_telegram_message (its `'main_send' in locals()` guard is always true).
+  - ⚠️ Nothing imports app.commands.base (app/commands/__init__.py imports only balances, paper and signals).
+- `async get_token_price(token_address)` · `core/dexscreener.py:7` · **DEAD**
+  - Fetches a token's USD price from the first Dexscreener pair on any chain, printing any error.
+  - ⚠️ No module imports core.dexscreener; superseded by core.wallet.get_token_prices.
+- `async get_new_cronos_pairs(known_pairs, limit)` · `core/dexscreener.py:24` · **DEAD**
+  - Queries Dexscreener search?q=cronos and returns up to `limit` pairs not already in known_pairs, adding them to the set.
+  - ⚠️ No importer; the search feed it uses was replaced by GeckoTerminal (core/pair_discovery.py).
+- `_get_covalent_api_key()` · `core/pnl_calculator.py:48` · **DEAD**
+  - Reads COVALENT_API_KEY.
+  - ⚠️ Only called by the dead get_today_transactions.
+- `_get_etherscan_api_key()` · `core/pnl_calculator.py:53` · **DEAD**
+  - Reads ETHERSCAN_API_KEY.
+  - ⚠️ No caller anywhere.
+- `get_today_transactions()` · `core/pnl_calculator.py:58` · **DEAD**
+  - Legacy sync fetch of today's (UTC) Covalent transactions, with the API key in the URL query and errors printed.
+  - ⚠️ Only called by the dead calculate_daily_pnl.
+- `calculate_daily_pnl()` · `core/pnl_calculator.py:91` · **DEAD**
+  - Legacy sync net-delta aggregation over Covalent transfers.
+  - ⚠️ Only imported, never called, by .github/workflows/deploy.yml:41.
+- `_new_scan_stats()` · `worker.py:100` · **TEST-ONLY**
+  - Returns a zeroed single-chain funnel dict.
+  - ⚠️ worker.py:105 calls it at import to build the module global scan_stats, which nothing reads; only tests/test_scan_digest.py uses its result.
+- `record_pair_funnel(stats, seen, cronos, newness, liquidity, below_score, sent, best)` · `worker.py:108` · **TEST-ONLY**
+  - Adds one cycle's single-chain funnel counts and best score (symbol stripped of Markdown characters) to a stats dict.
+  - ⚠️ Superseded by record_chain_funnel; only tests/test_scan_digest.py calls it.
+- `format_scan_digest(stats)` · `worker.py:131` · **TEST-ONLY**
+  - Formats the old single-chain scanner-digest line.
+  - ⚠️ Superseded by format_multichain_digest; only tests/test_scan_digest.py calls it.
+- `async monitor_wallet()` · `worker.py:1149`
+  - Logs 'Wallet check ... (monitoring active)' every 10 minutes and does nothing else; without WALLET_ADDRESS it sleeps once and returns.
+  - ⚠️ A no-op placeholder: the log claims monitoring but no balance or transaction check happens (lines 1138-1143). The real monitoring is portfolio_watch.

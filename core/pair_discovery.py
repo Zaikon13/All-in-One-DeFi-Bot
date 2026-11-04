@@ -306,6 +306,16 @@ async def fetch_pools_by_address(client, network: str, addresses: list,
     return out
 
 
+# network -> {"ok": bool, "ts": iso} of the most recent new_pools fetch, so the
+# worker/`/signals` can say "feed unavailable" instead of a misleading "seen 0".
+LAST_FETCH_STATUS: dict = {}
+
+
+def _mark_fetch(network: str, ok: bool) -> None:
+    from datetime import datetime, timezone
+    LAST_FETCH_STATUS[network] = {"ok": ok, "ts": datetime.now(timezone.utc).isoformat()}
+
+
 async def fetch_new_pools(client, network: str, max_retries: int = 3) -> list:
     """GET new_pools for one network. Returns a list of normalized pool dicts
     (via parse_gt_pool), or [] on any failure. Exponential backoff on HTTP 429.
@@ -320,9 +330,11 @@ async def fetch_new_pools(client, network: str, max_retries: int = 3) -> list:
                     await asyncio.sleep(1.0 * (2 ** attempt))  # 1s,2s,4s
                     continue
                 logging.warning(f"[discovery] {network} 429 after {max_retries} retries")
+                _mark_fetch(network, False)
                 return []
             if r.status_code != 200:
                 logging.warning(f"[discovery] {network} HTTP {r.status_code}")
+                _mark_fetch(network, False)
                 return []
             body = r.json()
             included_by_id = {}
@@ -334,11 +346,13 @@ async def fetch_new_pools(client, network: str, max_retries: int = 3) -> list:
                 norm = parse_gt_pool(pool, network, included_by_id)
                 if norm:
                     out.append(norm)
+            _mark_fetch(network, True)
             return out
         except Exception as e:
             if attempt < max_retries:
                 await asyncio.sleep(1.0 * (2 ** attempt))
                 continue
             logging.warning(f"[discovery] {network} fetch failed: {type(e).__name__}")
+            _mark_fetch(network, False)
             return []
     return []
