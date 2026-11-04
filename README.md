@@ -1,27 +1,31 @@
 # All-in-One DeFi Bot
 
-**Professional DeFi Telegram Bot** specialized for the **Cronos** ecosystem with real-time wallet monitoring, PnL analytics, multi-chain new-pool alerts and a paper-trading **simulation**. It monitors and reports only — it does not execute trades.
+**Professional DeFi Telegram Bot** specialized for the **Cronos** ecosystem with wallet monitoring, daily activity reports, multi-chain new-pool alerts and a paper-trading **simulation**. It monitors and reports only — it does not execute trades.
 
-## Current Features
+## What it does
 
-- Real-time wallet monitoring & transaction tracking
-- Daily PnL reports via Telegram (`/daily_pnl`)
-- Grok-powered AI analysis
-- Automated GitHub Actions workflows (Sync Check, Health Check, Code Review)
-- Modular Web + Worker architecture on Railway
+- `/wallet` — Cronos wallet balances with USD values (Cronos Explorer + Dexscreener)
+- `/daily_pnl` — the day's wallet activity: net tokens in − out per token (this is
+  *not* realized profit/loss — there is no cost basis), plus an optional AI note
+- `/analyze` — Claude's plain-language read of recent balances and transfers
+- `/signals` + alerts — new pools on Cronos / Solana / Sui (GeckoTerminal), scored 0-100
+- `/paper` — paper-trading **simulation** of the scanner's 🔥 picks (no real money)
+- Portfolio-move alerts on held tokens (≥10% move) and a daily scanner digest
 
-## Live Services
+## Status (2026-11-04)
 
-- **Web**: https://bot-production-3d9c.up.railway.app
-- **Telegram Bot**: [@AllInOneDeFiBot](https://t.me/AllInOneDeFiBot)
+- Hosting on Railway is paused, so the hosted bot (and its webhook URL) is down.
+- `run_local.py` (below) runs everything in one process anywhere, without Railway.
+- Full audit of errors and inconsistencies: `reviews/2026-11-04-full-audit.md`.
 
-## GitHub Actions Workflows (All Clean)
+## CI
 
-| Workflow | Status | Description |
-|----------|--------|-------------|
-| Sync Check | ✅ Green | Full repo sync + uncommitted changes check |
-| Health Check Report | ✅ Green | Railway monitoring + Grok analysis + auto Issue |
-| Grok Code Review | ✅ Ready | Automated PR reviews with Grok-4.3 |
+| Workflow | What it does |
+|----------|--------------|
+| CI (`ci.yml`) | import smoke test + pytest — the only gating check |
+| Claude Code Review | advisory PR review (needs `ANTHROPIC_API_KEY` secret) |
+| Claude Health Check | manual only — pings the hosted bot, opens at most one issue |
+| Sync Check / Dependency Check / Deploy validation | informational |
 
 ## Quick Start — standalone (no Railway needed)
 

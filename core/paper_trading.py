@@ -384,7 +384,7 @@ def compact_paper_state(state: dict, max_closed: int = 10) -> dict:
     opens = [p for p in (state.get("open") or []) if isinstance(p, dict)]
     wins = sum(1 for c in closed if (c.get("pnl_usd") or 0) > 0)
     open_keys = ("symbol", "chain", "pair_address", "token_address",
-                 "entry_price", "qty", "usd_in")
+                 "entry_price", "qty", "usd_in", "last_price", "last_price_ts")
     closed_keys = ("symbol", "pnl_usd", "pnl_pct", "exit_reason", "closed_at")
     return {
         "balance_usd": state.get("balance_usd"),

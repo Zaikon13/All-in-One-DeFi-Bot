@@ -76,6 +76,7 @@ WALLET_DISCOVERY_TTL_HOURS = float(os.getenv("WALLET_DISCOVERY_TTL_HOURS", "6"))
 WALLET_BALANCE_REFRESH_HOURS = float(os.getenv("WALLET_BALANCE_REFRESH_HOURS", "6"))
 WALLET_PRICE_MAX_STALE_HOURS = float(os.getenv("WALLET_PRICE_MAX_STALE_HOURS", "24"))
 WALLET_BALANCE_CONCURRENCY = int(os.getenv("WALLET_BALANCE_CONCURRENCY", "8"))
+DISCOVERY_RETRY_SECONDS = 900  # re-walk an incomplete cold discovery after 15 min
 _V2_MAX_RETRIES = int(os.getenv("WALLET_V2_MAX_RETRIES", "3"))
 
 
@@ -218,7 +219,8 @@ async def send_telegram_alert(text, client=None):
         logging.warning("[alert] Telegram not configured; cannot send freshness alert")
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    from core.tg_format import to_tg_markdown
+    payload = {"chat_id": chat_id, "text": to_tg_markdown(text), "parse_mode": "Markdown"}
     try:
         if client is not None:
             await client.post(url, json=payload, timeout=15.0)
@@ -327,6 +329,21 @@ async def _v2_get(client, params: dict):
     return None
 
 
+def parse_raw_balance(raw):
+    """tokenbalance `result` -> int raw units, or None when it is not a number.
+    Etherscan-style APIs report errors as HTTP 200 + status "0" with the error
+    TEXT in `result` (e.g. "Max rate limit reached"). _to_int() turned that into
+    0, i.e. a *confirmed* zero, and the no-vanish logic then deleted a real
+    holding from /wallet. A non-numeric result is a FAILED read. Pure."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if raw >= 0 else None
+    if isinstance(raw, str) and raw.strip().isdigit():
+        return int(raw.strip())
+    return None
+
+
 def _absorb_transfer_rows(rows, contracts) -> int:
     """Add any new {contract: (symbol, decimals, name)} from tokentx rows; return newest block seen."""
     newest = 0
@@ -353,25 +370,43 @@ async def _discover_token_set(client, wallet_address: str) -> dict:
     entry = _TOKEN_SET_CACHE.get(w)
 
     async def _page(n):
+        """rows (possibly []) on success; None when the read FAILED (HTTP error,
+        429 after backoff, or a status-0 error string in `result`)."""
         res = await _v2_get(client, {"module": "account", "action": "tokentx",
                                      "address": wallet_address, "page": n,
                                      "offset": 100, "sort": "desc"})
-        return res if isinstance(res, list) else []
+        return res if isinstance(res, list) else None
 
-    if entry is None:
+    # A cold walk that hit failed pages is cached as INCOMPLETE and re-walked after
+    # DISCOVERY_RETRY_SECONDS — before, a failed page looked like "end of history",
+    # so tokens on that page were never discovered and never shown (until restart).
+    incomplete_retry = (entry is not None and entry.get("complete") is False
+                        and (time.time() - entry.get("discovered_ts", 0.0)) >= DISCOVERY_RETRY_SECONDS)
+    if entry is None or incomplete_retry:
         # cold: walk the full history once, in parallel batches, then cache it
-        contracts: dict = {}
-        newest_block = 0
+        contracts: dict = dict((entry or {}).get("contracts") or {})  # retry keeps what we had
+        newest_block = (entry or {}).get("newest_block", 0)
         MAX_PAGES = 80
+        failed = 0
         for start in range(1, MAX_PAGES + 1, 10):
             batch = await asyncio.gather(*[_page(n) for n in range(start, min(start + 10, MAX_PAGES + 1))])
-            if not any(batch):
-                break
-            for rows in batch:
+            failed += sum(1 for rows in batch if rows is None)
+            ok_rows = [rows for rows in batch if rows]
+            for rows in ok_rows:
                 newest_block = max(newest_block, _absorb_transfer_rows(rows, contracts))
-        _TOKEN_SET_CACHE[w] = {"contracts": contracts, "newest_block": newest_block,
-                               "discovered_ts": time.time()}
-        logging.info(f"[wallet] cold token discovery: {len(contracts)} distinct tokens")
+            # stop at the true end of history: a successfully-read EMPTY page
+            if any(rows == [] for rows in batch):
+                break
+            if not ok_rows:  # every page in this batch failed -> source trouble, stop
+                break
+        if entry is None:
+            entry = {}
+            _TOKEN_SET_CACHE[w] = entry
+        entry.update({"contracts": contracts, "newest_block": newest_block,
+                      "discovered_ts": time.time(), "complete": failed == 0})
+        logging.info(f"[wallet] cold token discovery: {len(contracts)} distinct tokens"
+                     + (f" — INCOMPLETE ({failed} page(s) failed; retry in "
+                        f"{DISCOVERY_RETRY_SECONDS // 60} min)" if failed else ""))
         return contracts
 
     # TTL: which-tokens-held changes rarely; skip the warm re-scan while the
@@ -384,8 +419,12 @@ async def _discover_token_set(client, wallet_address: str) -> dict:
     cached_newest = entry["newest_block"]
     max_new = cached_newest
     page = 1
+    warm_failed = False
     while page <= 6:
         rows = await _page(page)
+        if rows is None:
+            warm_failed = True  # retry on the next call instead of waiting a full TTL
+            break
         if not rows:
             break
         fresh = [it for it in rows if _to_int(it.get("blockNumber")) > cached_newest]
@@ -394,7 +433,8 @@ async def _discover_token_set(client, wallet_address: str) -> dict:
             break  # caught up to the cached tip
         page += 1
     entry["newest_block"] = max_new
-    entry["discovered_ts"] = time.time()
+    if not warm_failed:
+        entry["discovered_ts"] = time.time()
     return contracts
 
 
@@ -516,8 +556,10 @@ async def get_wallet_balances(wallet_address: str):
         for contract, raw in results:
             meta = candidates.get(contract)
             decimals = meta[1] if meta else 18
+            raw = parse_raw_balance(raw)
             if raw is None:
-                # failed read (429/backoff exhausted): keep last known, don't evict
+                # failed read (429/backoff exhausted, or a status-0 error text such as
+                # "Max rate limit reached" in `result`): keep last known, don't evict
                 amt = last_amounts.get(contract)
                 if amt is None:
                     continue

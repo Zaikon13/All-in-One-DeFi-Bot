@@ -257,7 +257,7 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   `claude_wallet_analysis.txt` (+ CI's `claude_code_review.txt`, `claude_health_check.txt`).
   Grok-era prompts were archived to `archive/prompts/` — except `grok_market_analysis.txt`,
   which stays because gated `core/market_analysis.py` (default off) still loads it.
-- **Railway** — 3 services: `bot`, `web-gpl6`, `worker`. Worker has a 5GB volume at `/data`.
+- **Railway** — PAUSED by the owner (unpaid, 2026-11). Was: `bot` (web) + `worker` (5GB volume at `/data`); `web-gpl6` was deleted in July. Health checks against it 404 — the scheduled health-check workflow was removed after it opened ~190 duplicate issues. `run_local.py` is the no-Railway way to run everything.
 
 ## Current AI-provider state (Claude-only as of 2026-07-04)
 
@@ -285,7 +285,7 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 - **UTC** for all internal timestamps and time filters. One deliberate exception: the **daily PnL
   reporting day boundary is Europe/Athens** (`REPORT_TZ` in `core/pnl_calculator.py`), matching the
   worker's Athens-scheduled EOD send, so the report covers the owner's local day. (2026-07-05)
-- **Telegram formatting** — Markdown v1 only: `**bold**` and simple `-`/`•` bullets. No tables, no code blocks (they break Telegram rendering).
+- **Telegram formatting** — Telegram *legacy* Markdown (`parse_mode="Markdown"`): bold is `*single*`. Renderers may write `**bold**` — the send layer (`core/tg_format.to_tg_markdown`) converts it, because legacy Markdown reads `**x**` as an empty span (nothing was ever bold before 2026-11-04). A bare `_` (e.g. `/daily_pnl` in text) opens italics and 400s the whole message — escape it as `\_` in static text; every sender retries as plain text on a 400 and splits messages over 4096 chars. Simple `-`/`•` bullets only; no tables, no code blocks.
 - **Never hardcode or commit secrets.** Secrets live in Railway variables and GitHub secrets only.
 - **Outbound Telegram is logged.** Every send (`worker.send_telegram`, `app.main.send_telegram_message`,
   `core.wallet.send_telegram_alert`) logs the rendered text at INFO with prefix `[tg-out]`, truncated
@@ -325,11 +325,22 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   legacy entries at load (proved live: original-case addr → 1 row, lowercased → 0). New pending
   entries already store original case, so maturation proceeds once the poison is cleared. (2026-07-24)
 
+- ✅ Full audit 2026-11-04 (`reviews/2026-11-04-full-audit.md`): `/start` menu never delivered (flat
+  keyboard + bare `_` in `/daily_pnl` → Telegram 400); `**bold**` never rendered; >4096-char replies
+  silently failed; error-text `tokenbalance` results deleted real holdings from /wallet; failed discovery
+  pages were cached as "end of history"; /paper had no current price for Solana/Sui positions; daily
+  report showed a fake "Avg Cost" (always = current price) and a mislabeled "Total Portfolio Value";
+  sync CoinGecko lookup blocked the event loop and guessed coin ids from symbols; hourly heartbeat spam;
+  EOD default hour 0 reported the empty just-started day; health-check workflow spammed issues; dead
+  `telegram/` package (shadowed the pip package), `app/health.py`, `app/github_webhook.py` deleted.
+
 **Still open:**
+- **SECURITY:** a real-looking `ETHERSCAN_API_KEY` value sits in PUBLIC git history (`.env.example`,
+  commits cc23605 / 9acdbd3, removed in 68278da). The key is no longer used by the live code, but it must
+  be revoked at Etherscan by the owner. Rewriting public history does not un-leak it.
 - Worker start-command drift: `Procfile` + `railway.toml` use `python -u worker.py`, but the `Dockerfile`
   `CMD` is `python worker.py` (no `-u`); confirm `WORKER.md` agrees.
-- Orphaned / dead code: `telegram/handlers.py`, `app/health.py`, `app/github_webhook.py`, a dead `main.py`
-  stub, and a local `telegram/` package that shadows the pip `telegram` package.
+- Dead `main.py` stub (kept: the CI smoke test imports it).
 - Leftover gated Grok code: `core/grok_client.py`, `core/market_analysis.py`, `.github/scripts/call_grok.py`,
   `prompts/grok_market_analysis.txt` (other grok prompts archived 2026-07-05) — retiring these is a
   separate approved-later step.
@@ -395,7 +406,9 @@ Deploy: Railway (project + environment IDs are in the deployment docs / plan). E
 | `PAPER_STARTING_USD`, `PAPER_ENTRY_SCORE`, `PAPER_POSITION_USD`, `PAPER_MAX_OPEN`, `PAPER_TP_PCT`, `PAPER_SL_PCT`, `PAPER_MAX_HOLD_HOURS` | worker (optional) | simulated capital / entry score bar / position size / max concurrent / take-profit % / stop-loss % / time-stop hours (defaults 1000 / 70 / 50 / 5 / 25 / 15 / 24) |
 | `PAPER_MAX_TICK_RATIO` | worker (optional) | exit ticks above this multiple of entry are rejected as bad feed data (hold, never book) — stops a glitch tick booking a fake gain (default 10) |
 | `SCAN_DIGEST_ENABLED`, `SCAN_DIGEST_HOUR` | worker (optional) | daily scanner-funnel digest on/off + Athens hour (default true / 21) |
-| `EOD_PNL_ENABLED`, `EOD_PNL_HOUR` | worker (optional) | automatic EOD PnL send (default off, hour 0 Athens). **With the Athens reporting boundary, hour 0 fires on the just-started (empty) day — set `EOD_PNL_HOUR=23` on Railway before enabling.** |
+| `EOD_PNL_ENABLED`, `EOD_PNL_HOUR`, `EOD_PNL_MINUTE` | worker (optional) | automatic end-of-day wallet report — default ON when `WALLET_ADDRESS` is set, at 23:55 Europe/Athens (2026-11-04; the old default 00:00 reported the just-started empty day) |
+| `HEARTBEAT_ENABLED` | worker (optional) | hourly "💓 Worker Heartbeat" message (default **false** since 2026-11-04 — 24 msgs/day buried real alerts; the startup message + daily digest are the sign of life) |
+| `CONSOLE_MODE`, `TELEGRAM_ALLOWED_CHAT_IDS` | run_local.py (optional) | print replies instead of sending / chats allowed to command the polling bot (default `TELEGRAM_CHAT_ID`; none set → fail closed) |
 | `ETHERSCAN_API_KEY` | legacy | no longer used by the live data path (deprecated sync Covalent helper only) |
 
 ## Working with Claude Code on this repo

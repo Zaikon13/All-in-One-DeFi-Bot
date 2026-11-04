@@ -56,13 +56,23 @@ def render_paper_status(mirror: dict | None, prices: dict | None = None,
         msg += "- none — waiting for a 🔥-tier pair (patience IS the strategy)\n"
     for p in opens:
         cp = prices.get(p.get("token_address"))
+        note = ""
+        if not cp and p.get("last_price"):
+            # the worker's own last observed pool price (any chain); the bot-side
+            # lookup above is Cronos-only, so Solana/Sui positions rely on this
+            cp = p.get("last_price")
+            try:
+                age = (now_utc - datetime.fromisoformat(str(p.get("last_price_ts")))).total_seconds() / 60.0
+                note = f" (as of {age:.0f} min ago)"
+            except Exception:
+                note = " (last seen)"
         line = f"- **{p.get('symbol','?')}**: in {_fmt_price(p.get('entry_price', 0))}"
         if cp:
             unreal = p.get("qty", 0) * cp - p.get("usd_in", 0)
             pct = (cp - p["entry_price"]) / p["entry_price"] * 100.0 if p.get("entry_price") else 0.0
-            line += f" · now {_fmt_price(cp)} · unrealized {unreal:+,.2f} USD ({pct:+.1f}%)"
+            line += f" · now {_fmt_price(cp)}{note} · unrealized {unreal:+,.2f} USD ({pct:+.1f}%)"
         else:
-            line += " · current price unknown this minute"
+            line += " · current price unknown"
         msg += line + "\n"
 
     # Closed count / recent list / win rate come from EITHER the compact mirror

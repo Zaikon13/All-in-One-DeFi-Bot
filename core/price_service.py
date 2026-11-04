@@ -61,9 +61,11 @@ class PriceService:
         self.cache = _PriceCache(ttl_seconds=cache_ttl)
         self.client = httpx.Client(timeout=timeout)
 
-    def _map_to_id(self, symbol: str) -> str:
-        upper = symbol.upper()
-        return self.ID_MAP.get(upper, upper.lower())
+    def _map_to_id(self, symbol: str):
+        """Known symbols only. Guessing `symbol.lower()` as a CoinGecko id priced
+        unrelated coins that happen to share the id (and Cronos tokens share
+        symbols with scams), so an unknown symbol is reported as None instead."""
+        return self.ID_MAP.get(symbol.upper())
 
     def _respect_rate_limit(self) -> None:
         now = time.time()
@@ -98,6 +100,9 @@ class PriceService:
                 continue
 
             cg_id = self._map_to_id(sym)
+            if cg_id is None:
+                result[sym] = None  # unknown symbol -> honestly unpriced
+                continue
             ids_to_fetch.append(cg_id)
             id_to_symbol[cg_id] = sym
             result[sym] = None  # default: graceful fallback

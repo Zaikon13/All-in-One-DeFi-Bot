@@ -98,7 +98,7 @@ async def get_all_balances(chat_id: str):
     from core.wallet import get_wallet_balances
 
     if not WALLET_ADDRESS:
-        await send_telegram_message("❌ WALLET_ADDRESS not set.", chat_id)
+        await send_telegram_message("❌ Wallet address not configured (set WALLET\\_ADDRESS).", chat_id)
         return
 
     await send_telegram_message("📡 Fetching wallet balances...", chat_id)

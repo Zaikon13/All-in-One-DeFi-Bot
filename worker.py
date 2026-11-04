@@ -421,20 +421,25 @@ def _is_new_or_stale(pair_address: str) -> bool:
 async def send_telegram(text: str):
     tg_out_log(logger, text)
     from core.local_mode import console_mode, console_print
+    from core.tg_format import to_tg_markdown, plain_text, split_message
     if console_mode():
-        console_print("worker", text, TELEGRAM_CHAT_ID)
+        console_print("worker", plain_text(text), TELEGRAM_CHAT_ID)
         return
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"})
-            if r.status_code != 200:
-                # a stray Markdown entity (untrusted token symbols) 400s the whole
-                # message; resend as plain text so the alert is never silently lost.
-                logger.warning(f"Telegram Markdown send HTTP {r.status_code}; resending as plain text")
-                await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text})
+            # Telegram caps a message at 4096 chars -> split on line boundaries
+            for chunk in split_message(text):
+                r = await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID,
+                                                 "text": to_tg_markdown(chunk),  # **x** -> *x*
+                                                 "parse_mode": "Markdown"})
+                if r.status_code != 200:
+                    # a stray Markdown entity (untrusted token symbols) 400s the whole
+                    # message; resend as plain text so the alert is never silently lost.
+                    logger.warning(f"Telegram Markdown send HTTP {r.status_code}; resending as plain text")
+                    await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": plain_text(chunk)})
     except Exception as e:
         logger.error(f"Telegram error: {e}")
 
@@ -539,9 +544,18 @@ def save_pending_pools(pending: dict):
         logger.error(f"Failed to save pending_pools: {e}")
 
 
+# Hourly heartbeat = 24 Telegram messages a day that bury the real alerts. Opt-in
+# since 2026-11-04 (HEARTBEAT_ENABLED); the startup "online" message and the daily
+# scanner digest (21:00 Athens) already prove the worker is alive.
+HEARTBEAT_ENABLED = os.getenv("HEARTBEAT_ENABLED", "false").lower() in ("1", "true", "yes")
+
+
 async def heartbeat():
+    if not HEARTBEAT_ENABLED:
+        logger.info("heartbeat: off (HEARTBEAT_ENABLED=false) — daily digest is the sign of life")
+        return
     while True:
-        ts = datetime.now().strftime("%H:%M")
+        ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
         msg = f"💓 **Worker Heartbeat**\n\n**Time:** {ts}\n**Status:** Online\n**Next:** in 1 hour"
         await send_telegram(msg)
         await asyncio.sleep(HEARTBEAT_INTERVAL)
@@ -726,6 +740,11 @@ async def _paper_step(client, fresh, now_utc):
             for pos in list(paper_state["open"]):
                 pa = pos.get("pair_address") or ""
                 cp = prices.get(pa) or prices.get(pa.lower())
+                if cp is not None and not paper.is_bad_tick(pos.get("entry_price"), cp):
+                    # remembered for /paper: the bot's own price lookup is Cronos-only,
+                    # so Solana/Sui positions otherwise always showed "price unknown"
+                    pos["last_price"] = cp
+                    pos["last_price_ts"] = now_utc.isoformat()
                 res = paper.check_exit(pos, cp, now_utc)
                 if res is None:
                     if cp is None:
@@ -1136,15 +1155,37 @@ async def monitor_wallet():
 # Lazy import of the PnL reporter inside the send block (protects worker startup if
 # COVALENT/ETHERSCAN keys not present in worker service env; top-level in pnl_calculator
 # has hard guards).
+def eod_pnl_enabled() -> bool:
+    """Automatic end-of-day wallet report. Default: ON when a wallet is configured
+    (it is the bot's headline feature); EOD_PNL_ENABLED=false turns it off."""
+    raw = os.getenv("EOD_PNL_ENABLED")
+    if raw is None or raw.strip() == "":
+        return bool(WALLET_ADDRESS)
+    return raw.strip().lower() in ("1", "true", "yes")
+
+
+def eod_pnl_time() -> tuple:
+    """(hour, minute) Europe/Athens for the automatic EOD report. Default 23:55.
+    The report covers the Athens calendar day, so the old default (00:00) always
+    reported the just-started, empty day. Bad values fall back to the default."""
+    def _int(name, default, lo, hi):
+        try:
+            v = int(str(os.getenv(name, default)).strip())
+            return v if lo <= v <= hi else default
+        except (TypeError, ValueError):
+            return default
+    return _int("EOD_PNL_HOUR", 23, 0, 23), _int("EOD_PNL_MINUTE", 55, 0, 59)
+
+
 async def scheduled_eod_pnl():
     global last_eod_run
     athens = ZoneInfo("Europe/Athens")
-    enabled = os.getenv("EOD_PNL_ENABLED", "false").lower() == "true"
-    hour = int(os.getenv("EOD_PNL_HOUR", "0"))
+    enabled = eod_pnl_enabled()
+    hour, minute = eod_pnl_time()
 
     while True:
         now = datetime.now(athens)
-        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if now >= target:
             target += timedelta(days=1)
         sleep_s = max(60, (target - datetime.now(athens)).total_seconds())
@@ -1211,11 +1252,11 @@ async def scheduled_eod_pnl():
                     try:
                         last_dt = datetime.fromisoformat(last_eod_run.replace("Z", "+00:00"))
                         delta_s = (now_utc - last_dt).total_seconds()
-                        if delta_s < 23 * 3600:
-                            logger.info(f"EOD PnL: delta={delta_s:.0f}s since last_eod_run; 23h guard decision=skip (restart hardening per Review 2026-06-08 cond. 3 + Phase 2)")
+                        if delta_s < 22 * 3600:  # 22h: a DST-spring day is only 23h long
+                            logger.info(f"EOD PnL: delta={delta_s:.0f}s since last_eod_run; 22h guard decision=skip (restart hardening per Review 2026-06-08 cond. 3 + Phase 2)")
                             do_send = False
                         else:
-                            logger.info(f"EOD PnL: delta={delta_s:.0f}s since last_eod_run; 23h guard decision=send")
+                            logger.info(f"EOD PnL: delta={delta_s:.0f}s since last_eod_run; 22h guard decision=send")
                     except Exception:
                         logger.info("EOD PnL: malformed last_eod_run ts; treating as send (defensive, continue-on-error per Review 2026-06-08 cond. 3)")
                         pass  # malformed ts -> treat as send (defensive, continue-on-error)
@@ -1272,9 +1313,9 @@ async def main():
     await send_telegram("✅ **All-in-One-DeFi-Bot worker is online.**")
 
     # EOD PnL schedule (Review Agent 2026-06-06)
-    eod_enabled = os.getenv("EOD_PNL_ENABLED", "false").lower() == "true"
-    eod_hour = int(os.getenv("EOD_PNL_HOUR", "0"))
-    logger.info(f"EOD PnL scheduled for {eod_hour:02d}:00 Europe/Athens (enabled={eod_enabled})")
+    eod_enabled = eod_pnl_enabled()
+    eod_hour, eod_minute = eod_pnl_time()
+    logger.info(f"EOD report scheduled for {eod_hour:02d}:{eod_minute:02d} Europe/Athens (enabled={eod_enabled})")
 
     # Review Agent 2026-06-09 (Phase 2, per reviews/2026-06-08-worker-persistence-first-inc.md cond. 6 + reviews/2026-06-09-worker-persistence-phase1.md + reviews/2026-06-09-worker-persistence-phase2.md):
     # Startup sanity for EOD PnL (logging-only decision after long downtime; no immediate/auto send, no behavior/timing change).

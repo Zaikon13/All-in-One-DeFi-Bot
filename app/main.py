@@ -17,12 +17,12 @@ from core.wallet import get_wallet_balances, get_recent_transactions
 from core.log_redaction import install_log_redaction, tg_out_log
 from core.telegram_webhook import resolve_webhook_url, ensure_webhook
 from core.local_mode import console_mode, console_print, normalize_command
+from core.tg_format import to_tg_markdown, plain_text, split_message
 
 # Config
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WALLET_ADDRESS = os.getenv('WALLET_ADDRESS')
-WEBHOOK_BASE_URL = os.getenv('WEBHOOK_URL') or os.getenv('APP_URL') or "https://web-gpl6-production.up.railway.app"
 RAILWAY_SERVICE_NAME = os.getenv('RAILWAY_SERVICE_NAME', 'unknown')
 
 install_log_redaction()  # Part D: strip apikey= from logs (log-only)
@@ -87,27 +87,31 @@ async def send_telegram_message(text: str, chat_id: str = None, reply_markup=Non
     tg_out_log(logging.getLogger("app.main"), text)
     cid = chat_id or CHAT_ID
     if console_mode():
-        console_print("bot", text, cid)
+        console_print("bot", plain_text(text), cid)  # readable, as Telegram renders it
         return
     if not (BOT_TOKEN and cid):
         return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    # Telegram caps a message at 4096 chars (400 above that) -> split on lines.
+    chunks = split_message(text)
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            payload = {
-                "chat_id": cid,
-                "text": text,
-                "parse_mode": "Markdown"
-            }
-            if reply_markup:
-                payload["reply_markup"] = reply_markup
-            r = await client.post(url, json=payload)
-            if r.status_code != 200:
-                # A stray Markdown entity (token symbols, '_' in names) 400s the
-                # whole message; resend as plain text so the reply is never lost.
-                logging.warning(f"Telegram Markdown send HTTP {r.status_code}; resending as plain text")
-                payload.pop("parse_mode", None)
-                await client.post(url, json=payload)
+            for i, chunk in enumerate(chunks):
+                payload = {
+                    "chat_id": cid,
+                    "text": to_tg_markdown(chunk),  # **bold** -> *bold* (legacy Markdown)
+                    "parse_mode": "Markdown"
+                }
+                if reply_markup and i == 0:
+                    payload["reply_markup"] = reply_markup
+                r = await client.post(url, json=payload)
+                if r.status_code != 200:
+                    # A stray Markdown entity (token symbols, '_' in names) 400s the
+                    # whole message; resend as plain text so the reply is never lost.
+                    logging.warning(f"Telegram Markdown send HTTP {r.status_code}; resending as plain text")
+                    payload.pop("parse_mode", None)
+                    payload["text"] = plain_text(chunk)
+                    await client.post(url, json=payload)
     except Exception as e:
         logging.error(f"Send message error: {e}")
 
@@ -126,7 +130,7 @@ async def process_daily_pnl(chat_id: str):
     Broken inline Explorer + PnLCalculator import removed (was non-functional).
     """
     if not WALLET_ADDRESS:
-        await send_telegram_message("WALLET_ADDRESS not configured", chat_id)
+        await send_telegram_message("❌ Wallet address not configured (set WALLET\\_ADDRESS).", chat_id)
         return
     await send_telegram_message("🔄 Generating daily PnL report...", chat_id)
     try:
@@ -171,7 +175,7 @@ async def process_grok_analyze(chat_id: str):
     (Thinking message sent *immediately* in webhook handler before background_tasks.add_task per Review Agent 2026-06-04.)
     """
     if not WALLET_ADDRESS:
-        await send_telegram_message("WALLET_ADDRESS not configured", chat_id)
+        await send_telegram_message("❌ Wallet address not configured (set WALLET\\_ADDRESS).", chat_id)
         return
     try:
         ctx = await _get_grok_live_context(WALLET_ADDRESS)
@@ -192,12 +196,12 @@ async def process_grok_analyze(chat_id: str):
                 f"Live data fetched for {ctx['preview']}.\n\n"
                 f"**Balances:**\n{ctx['balances']}\n\n"
                 f"**Recent activity:**\n{ctx['txs']}\n\n"
-                "(Grok insight temporarily unavailable - raw context shown above)",
+                "(AI insight temporarily unavailable - raw context shown above)",
                 chat_id,
             )
     except Exception as e:
         logging.exception("grok analyze error")
-        await send_telegram_message("Error generating live Grok analysis. Please try again.", chat_id)
+        await send_telegram_message("Error generating the AI analysis. Please try again.", chat_id)
 
 
 @app.get("/")
@@ -257,7 +261,7 @@ async def grok_analyze(req: Request):
                     f"Live data for {ctx['preview']}.\n\n"
                     f"**Balances:**\n{ctx['balances']}\n\n"
                     f"**Recent activity:**\n{ctx['txs']}\n\n"
-                    "(Grok insight unavailable this time - raw context shown)"
+                    "(AI insight unavailable this time - raw context shown)"
                 ),
                 "live_context_used": True,
             }
@@ -271,7 +275,7 @@ START_MENU = """**👋 Welcome to All-in-One DeFi Bot!**
 **Available Commands:**
 
 • /wallet — wallet balances with USD (also /balances, /bal)
-• /daily_pnl — daily PnL report
+• /daily\\_pnl — daily wallet activity (also /pnl)
 • /analyze — AI analysis of the wallet (also /grok-analyze)
 • /paper — 🧪 simulated trading status
 • /signals — 🔎 live multi-chain discovery feed
