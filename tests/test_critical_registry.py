@@ -42,13 +42,12 @@ CRITICAL = [  # (module, function) — mirrors docs/CRITICAL_FUNCTIONS.md
     ("run_local", "_amain"), ("core.claude_client", "call_claude"),
 ]
 
-# Critical functions with NO test yet (2026-11-04). The Test Guardian closes these; when one
-# gets covered, remove it here (test_known_gaps_are_still_gaps enforces that).
-KNOWN_GAPS = {
-    "_aggregate_pnl", "fetch_new_pools", "fetch_pool_prices", "_paper_step",
-    "scheduled_eod_pnl", "scheduled_scan_digest", "portfolio_watch", "call_claude",
-    "main",  # worker.main (the gather of all loops)
-}
+# Critical functions with NO test yet. The Test Guardian closes these; when one gets
+# covered, remove it here (test_known_gaps_are_still_gaps enforces that).
+# 2026-11-04: the original nine gaps (_aggregate_pnl, fetch_new_pools, fetch_pool_prices,
+# _paper_step, scheduled_eod_pnl, scheduled_scan_digest, portfolio_watch, call_claude,
+# worker.main) were closed by tests/test_critical_*.py.
+KNOWN_GAPS = set()
 
 THIS = os.path.basename(__file__)
 

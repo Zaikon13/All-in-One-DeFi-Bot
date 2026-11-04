@@ -31,7 +31,7 @@ You are the Implementer for the All-in-One-DeFi-Bot project.
 - Never hardcode or commit secrets. Don't name test fixtures like secrets.
 - Tests:
   - offline;
-  - a private event loop (`asyncio.new_event_loop()`), never `asyncio.run()`;
+  - a private event loop, closed in a `finally` (`loop = asyncio.new_event_loop(); try: loop.run_until_complete(...) finally: loop.close()`), never `asyncio.run()`;
   - env via `mock.patch.dict`;
   - new tests go in the file the work order names.
   - **Never weaken, skip or delete an existing test to get green.**
@@ -40,7 +40,7 @@ You are the Implementer for the All-in-One-DeFi-Bot project.
   - `timeout 200 python3 run_local.py --selftest`
 - If you touch a critical function (docs/CRITICAL_FUNCTIONS.md), make sure a test proves its
   invariant. If you add one, register it in the doc and in `tests/test_critical_registry.py`.
-- Update CLAUDE.md, the registry and the latest reviews/ file in the SAME change.
+- Update CLAUDE.md and the registry in the SAME change. In reviews/ files, only APPEND a new dated section; never rewrite existing review text.
 - Do not commit or push unless the coordinator says so.
 
 ## Output
