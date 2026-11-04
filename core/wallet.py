@@ -31,6 +31,9 @@ import httpx
 # ---------------------------------------------------------------------------
 
 EXPLORER_BASE = "https://explorer-api.cronos.org/mainnet/api/v1"
+# Upper block bound for v1 list calls. The old 8-digit literal became a real cap
+# once the chain tip passed it (~2026-10), hiding every newer transaction.
+EXPLORER_END_BLOCK = 2_147_483_647  # int32 max; chain tip passed 99,999,999 ~2026-10
 
 # Alert when the newest wallet block is more than this many blocks behind the
 # live chain tip. Cronos runs ~0.45 s/block, so ~200k blocks ~= 1 day. Override
@@ -98,7 +101,9 @@ def _select_balance_contracts(candidates, entry, now, refresh_seconds):
 def _update_held(entry, to_check, amount_by_contract, dust, is_full, now):
     """Pure-ish: fold this cycle's balances into the cache's held_set / balance_seen /
     last_full_ts. On a full sweep held_set is recomputed from scratch; on an
-    incremental cycle only the re-checked contracts are updated."""
+    incremental cycle only the re-checked contracts are updated. Only reads that
+    RESOLVED to an amount count as seen: a failed first read stays "never checked"
+    so the next incremental cycle retries it (instead of hiding it for hours)."""
     checked = set(to_check)
     nonzero = {c for c in checked if amount_by_contract.get(c, 0.0) >= dust}
     if is_full:
@@ -107,7 +112,8 @@ def _update_held(entry, to_check, amount_by_contract, dust, is_full, now):
     else:
         held = set(entry.get("held_set") or set())
         entry["held_set"] = (held - checked) | nonzero
-    entry["balance_seen"] = (entry.get("balance_seen") or set()) | checked
+    entry["balance_seen"] = ((entry.get("balance_seen") or set())
+                             | {c for c in checked if c in amount_by_contract})
 
 # --- USD pricing via Dexscreener (2026-07-05) ---
 # Dexscreener's token endpoint knows Cronos micro-caps that CoinGecko doesn't.
@@ -213,21 +219,36 @@ async def send_telegram_alert(text, client=None):
         tg_out_log(logging.getLogger("core.wallet"), text)
     except Exception:
         pass
+    from core.local_mode import console_mode, console_print
+    from core.tg_format import plain_text, to_tg_markdown
+    if console_mode():  # local runner: print, never call Telegram
+        console_print("alert", plain_text(text))
+        return True
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not (token and chat_id):
         logging.warning("[alert] Telegram not configured; cannot send freshness alert")
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    from core.tg_format import to_tg_markdown
     payload = {"chat_id": chat_id, "text": to_tg_markdown(text), "parse_mode": "Markdown"}
+
+    async def _send(c):
+        # True only when Telegram accepted the alert, so a rejected send can't
+        # arm the stale-alert throttle. A Markdown 400 is retried as plain text.
+        r = await c.post(url, json=payload, timeout=15.0)
+        if r.status_code == 200:
+            return True
+        logging.warning(f"[alert] Telegram Markdown send HTTP {r.status_code}; resending as plain text")
+        r2 = await c.post(url, json={"chat_id": chat_id, "text": plain_text(text)}, timeout=15.0)
+        if r2.status_code != 200:
+            logging.error(f"[alert] Telegram plain-text resend HTTP {r2.status_code}")
+        return r2.status_code == 200
+
     try:
         if client is not None:
-            await client.post(url, json=payload, timeout=15.0)
-        else:
-            async with httpx.AsyncClient(timeout=15.0) as c:
-                await c.post(url, json=payload)
-        return True
+            return await _send(client)
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            return await _send(c)
     except Exception as e:
         logging.error(f"[alert] Telegram send failed: {e}")
         return False
@@ -623,6 +644,7 @@ async def get_wallet_balances(wallet_address: str):
         max_stale_s = WALLET_PRICE_MAX_STALE_HOURS * 3600
         price_cache = entry.setdefault("last_prices", {})  # contract -> {"price","ts"}
         now_p = time.time()
+        cro_stale = False
 
         def _resolve_price(contract, fresh):
             """(price|None, stale_bool, age_hours). Fresh updates the cache; a miss
@@ -658,8 +680,7 @@ async def get_wallet_balances(wallet_address: str):
             priced = bool(cro_usd is not None or any(d.get("usd") is not None for d in token_details))
             if priced:
                 usd_total = (cro_usd or 0.0) + sum(d["usd"] for d in token_details if d.get("usd") is not None)
-            if cro_stale:
-                price_stale_count += 1
+            # (a stale CRO price is already counted once inside _resolve_price)
         except Exception as e:
             logging.error(f"[wallet] USD enrichment failed (amounts-only fallback): {e}")
 
@@ -679,6 +700,7 @@ async def get_wallet_balances(wallet_address: str):
             "priced": priced,
             "price_stale_count": price_stale_count,
             "price_stale_oldest_h": round(price_stale_oldest_h, 1),
+            "cro_price_stale": bool(cro_stale),  # CRO row shows "· last known"
         }
 
 
@@ -695,7 +717,7 @@ async def get_recent_transactions(wallet_address: str, limit: int = 20) -> list[
         rows = await explorer_get(
             client,
             "account/getTxsByAddress",
-            {"address": wallet_address, "startBlock": 0, "endBlock": 99999999},
+            {"address": wallet_address, "startBlock": 0, "endBlock": EXPLORER_END_BLOCK},
         ) or []
         for it in rows[:limit]:
             ts = _to_int(it.get("timestamp"))
@@ -711,10 +733,16 @@ async def get_recent_transactions(wallet_address: str, limit: int = 20) -> list[
         rows = await explorer_get(
             client,
             "account/getCRC20TransferByAddress",
-            {"address": wallet_address, "startBlock": 0, "endBlock": 99999999},
+            {"address": wallet_address, "startBlock": 0, "endBlock": EXPLORER_END_BLOCK},
         ) or []
+        scam_skipped = 0
         for it in rows[:limit]:
             meta = it.get("tokenMetadata") or {}
+            # same scam/airdrop name filter as /wallet (never echo a phishing "symbol")
+            if _looks_like_scam(meta.get("tokenSymbol") or "",
+                                meta.get("tokenName") or meta.get("name") or ""):
+                scam_skipped += 1
+                continue
             sym = meta.get("tokenSymbol") or "???"
             dec = _to_int(meta.get("decimals"), 18)
             ts = _to_int(it.get("timestamp"))
@@ -725,6 +753,8 @@ async def get_recent_transactions(wallet_address: str, limit: int = 20) -> list[
             h = (it.get("transactionHash") or "")[:8]
             tstr = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%m-%d %H:%M") if ts else "--"
             collected.append((ts, f"{tstr} | {ttyp} {val:.4f} {sym} {h}..."))
+        if scam_skipped:
+            logging.info(f"[wallet] recent activity: skipped {scam_skipped} scam/airdrop token transfer(s)")
 
     collected.sort(key=lambda x: x[0], reverse=True)
     seen_s, result = set(), []

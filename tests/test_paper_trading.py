@@ -141,6 +141,9 @@ class TestStateIO(unittest.TestCase):
             self.assertEqual(st["open"], [])
         finally:
             os.unlink(p)
+            import glob  # load_state now backs the corrupt file up (2026-11-04); clean it
+            for bak in glob.glob(p + ".corrupt-*"):
+                os.unlink(bak)
 
     def test_roundtrip(self):
         d = tempfile.mkdtemp()

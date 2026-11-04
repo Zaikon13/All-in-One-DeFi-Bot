@@ -67,7 +67,8 @@ def _render_usd(wallet_address: str, balances: dict) -> str:
         msg += f"**Total portfolio value: {_fmt_usd(usd_total)}**{note}\n\n"
 
     if cro_usd is not None:
-        msg += f"🌟 **CRO**: `{cro:,.4f}` — {_fmt_usd(cro_usd)}\n\n"
+        cro_mark = " · last known" if balances.get("cro_price_stale") else ""
+        msg += f"🌟 **CRO**: `{cro:,.4f}` — {_fmt_usd(cro_usd)}{cro_mark}\n\n"
     else:
         msg += f"🌟 **CRO**: `{cro:,.4f}` — price unknown\n\n"
 

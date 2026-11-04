@@ -38,6 +38,15 @@ class TestPureHelpers(unittest.TestCase):
         self.assertFalse(is_chat_allowed("999", allowed))
         self.assertTrue(is_chat_allowed("999", allowed_chat_ids("")))  # no restriction
 
+    def test_configured_allowed_chats_prefers_explicit_list(self):
+        from core.local_mode import configured_allowed_chats
+        with mock.patch.dict(os.environ, {"TELEGRAM_ALLOWED_CHAT_IDS": "1,2", "TELEGRAM_CHAT_ID": "9"}):
+            self.assertEqual(configured_allowed_chats(), {"1", "2"})
+        with mock.patch.dict(os.environ, {"TELEGRAM_ALLOWED_CHAT_IDS": "", "TELEGRAM_CHAT_ID": "9"}):
+            self.assertEqual(configured_allowed_chats(), {"9"})
+        with mock.patch.dict(os.environ, {"TELEGRAM_ALLOWED_CHAT_IDS": "", "TELEGRAM_CHAT_ID": ""}):
+            self.assertEqual(configured_allowed_chats(), set())  # empty -> callers fail closed
+
     def test_extract_updates(self):
         payload = {"ok": True, "result": [
             {"update_id": 10, "message": {"text": "/wallet", "chat": {"id": 1}}},

@@ -47,6 +47,13 @@ def is_chat_allowed(chat_id, allowed: set) -> bool:
     return not allowed or str(chat_id) in allowed
 
 
+def configured_allowed_chats() -> set:
+    """The chat allow-list shared by the webhook and the local poller, read from
+    env at call time: TELEGRAM_ALLOWED_CHAT_IDS, else TELEGRAM_CHAT_ID. Callers
+    treat an EMPTY set as fail-closed (serve nobody)."""
+    return allowed_chat_ids(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS") or os.getenv("TELEGRAM_CHAT_ID"))
+
+
 def extract_updates(payload: dict, offset: int) -> tuple[list, int]:
     """getUpdates JSON -> ([(chat_id, text)], next_offset). Pure; tolerant of junk."""
     out = []

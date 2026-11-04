@@ -105,9 +105,9 @@ async def _reply_setup_hint(client, base, chat_id):
 
 async def _telegram_poll_loop(handle_command, tasks, token, take_over):
     import httpx
-    from core.local_mode import allowed_chat_ids, extract_updates, is_chat_allowed
+    from core.local_mode import configured_allowed_chats, extract_updates, is_chat_allowed
 
-    allowed = allowed_chat_ids(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS") or os.getenv("TELEGRAM_CHAT_ID"))
+    allowed = configured_allowed_chats()
     base = f"https://api.telegram.org/bot{token}"
     async with httpx.AsyncClient(timeout=70) as client:
         info = (await client.get(f"{base}/getWebhookInfo")).json()
@@ -137,6 +137,12 @@ async def _telegram_poll_loop(handle_command, tasks, token, take_over):
                 if resp.status_code == 409:
                     logger.error("getUpdates 409: a webhook or another poller owns this token; stopping")
                     return
+                if resp.status_code in (401, 404):
+                    logger.error("getUpdates HTTP %s — bot token rejected; stopping", resp.status_code)
+                    return
+                if resp.status_code != 200:
+                    # 429 / 5xx: back off (the except below) instead of hot-looping
+                    raise RuntimeError(f"getUpdates HTTP {resp.status_code}")
                 updates, offset = extract_updates(resp.json(), offset)
                 for chat_id, text in updates:
                     if not allowed:
@@ -180,7 +186,8 @@ async def _amain(args):
     if args.selftest:
         await _selftest(bot.handle_command, tasks, chat_id)
         return
-    if os.getenv("CONSOLE_MODE", "").lower() == "true":
+    from core.local_mode import console_mode
+    if console_mode():  # same parse as every sender (1/true/yes)
         jobs.append(asyncio.create_task(_console_loop(bot.handle_command, tasks, chat_id)))
     else:
         jobs.append(asyncio.create_task(

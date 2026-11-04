@@ -74,3 +74,35 @@ fail-closed chat allow-list, "feed unavailable" honesty in `/signals`, and the C
 - The repo is **public**, so GitHub Actions and CodeQL are free. Nothing here needs GitHub Pro.
 - Railway: everything can run as **one** service (`python -u run_local.py`) instead of two.
   It does not need a public URL or a separate web service.
+
+## Reviewer pass (2026-11-04, PR #224)
+
+A function-by-function investigation plus an external-API check found more bugs. The reviewer
+approved the items below. Tests are in `tests/test_reviewer_pass.py` (offline).
+
+**Landed**
+
+| # | Fix | Where |
+|---|-----|-------|
+| 1 | `endBlock: 99999999` → shared `EXPLORER_END_BLOCK = 2_147_483_647`. The chain tip passed 99,999,999 around 2026-10, so if v1 honours `endBlock` as an upper filter, `/daily_pnl`, the EOD report and `/analyze` silently lost every newer transaction. **A live check of the v1 semantics is still pending.** | `core/wallet.py`, `core/pnl_calculator.py` |
+| 2 | The webhook now enforces the same fail-closed chat allow-list as the poller (`configured_allowed_chats`, read per request; refusals still answer 200) | `core/local_mode.py`, `app/main.py`, `run_local.py` |
+| 10 | `send_telegram_alert` honours console mode, retries as plain text on a non-200, and returns True only when Telegram accepted the alert (a rejected send no longer arms the 6 h throttle) | `core/wallet.py` |
+| P1 | Poller: getUpdates 401/404 stops it; any other non-200 backs off instead of hot-looping | `run_local.py` |
+| 4 | EOD and digest sleeps are computed in UTC (`seconds_until_local`), so they are DST-correct | `worker.py` |
+| 3 | A corrupt or non-object `paper_state.json` is copied to `.corrupt-<UTC>` before the worker's next save overwrites it (simulation persistence only; no entry, exit or booking rule changed) | `core/paper_trading.py` |
+| 6 | The scam-name filter now also covers the daily report and `/analyze` recent activity | `core/pnl_calculator.py`, `core/wallet.py` |
+| 7 | `/analyze`: an outage reaches the AI as "unavailable", not "CRO 0"; tokens are ranked by USD value, with ≈$ amounts | `app/main.py` |
+| 11 | A stale CRO price is counted once (it was counted twice) and the CRO row is marked "· last known" | `core/wallet.py`, `app/commands/balances.py` |
+| 12 | A failed first `tokenbalance` read is not marked seen, so the next cycle retries it | `core/wallet.py` |
+| 16, 20 | `CONSOLE_MODE=1` picks the console loop in `run_local`; the startup "ephemeral" warning respects `WORKER_DATA_DIR` | `run_local.py`, `worker.py` |
+| 23 | Stale comments fixed; report trade times are labelled "UTC" (the report day is Athens) | several |
+
+**Deferred** (not in this PR): R2 (newest-first sort-order guard in the PnL pager), R3 (Dexscreener
+`/tokens/v1` migration, after a live shape check), R4 (`pools/multi` chunk 50 → 30), R5–R8, and
+findings #8, #9, #13–15, #17, #18, #21, #22, #24, #25.
+
+**Owner decisions** (open): a Telegram webhook secret token; auth for `/grok/analyze`, or deleting
+it; the booking rule for positions stuck above 10× entry (#5); a CoinGecko demo key.
+
+Until the deferred #8 is fixed, **do not lower `PAPER_TP_PCT`**: `repair_impossible_trades`
+re-books every closed trade against the current TP on each load.

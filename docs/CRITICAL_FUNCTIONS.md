@@ -28,7 +28,8 @@ Selection rule: a function is critical if a defect in it causes one of these:
 | `core/wallet.py` `send_telegram_alert` | data-source alerts | same as above; returns True only if Telegram accepted |
 | `core/tg_format.py` `to_tg_markdown`, `split_message`, `plain_text` | formatting for all three senders | lossless split on line boundaries; fallback text has no markers |
 | `app/main.py` `handle_command` | routes every command | every menu command reaches its handler; unknown → hint |
-| `app/main.py` `telegram_webhook` | inbound when hosted | serves only allow-listed chats; always 200 |
+| `app/main.py` `telegram_webhook` | inbound when hosted | serves only allow-listed chats; fails closed when none set; refusals answer 200 |
+| `core/local_mode.py` `configured_allowed_chats` | the allow-list both inbound paths use | `TELEGRAM_ALLOWED_CHAT_IDS` else `TELEGRAM_CHAT_ID`; empty → nobody served |
 | `run_local.py` `_telegram_poll_loop` | inbound when standalone | never steals a webhook; fails closed; never hot-loops |
 | `core/telegram_webhook.py` `ensure_webhook` | self-heal when hosted | "restored" only after a confirming read-back |
 
@@ -64,6 +65,7 @@ Selection rule: a function is critical if a defect in it causes one of these:
 |---|---|---|
 | `worker.py` `main` | starts every loop | each loop catches its own errors; one crash doesn't stop the others |
 | `worker.py` `scheduled_eod_pnl`, `scheduled_scan_digest` | daily messages | fire once per Athens day at the configured time, also across DST |
+| `worker.py` `seconds_until_local` | the sleep both schedulers use | computed in UTC, so a DST change can't shift a daily message by an hour |
 | `worker.py` `portfolio_watch`, `detect_portfolio_moves` | price-move alerts | first sighting only seeds; cooldown respected; never alerts on restart |
 | `run_local.py` `_amain` | the standalone runtime | console mode ↔ no Telegram; the poller and the worker start together |
 | `core/claude_client.py` `call_claude` | AI text | timeout; any failure → an error prefix that callers detect |

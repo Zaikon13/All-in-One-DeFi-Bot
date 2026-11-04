@@ -39,7 +39,7 @@ class PriceService:
     COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price"
 
     # Minimal mapping for common Cronos ecosystem tokens (symbol upper -> CoinGecko id).
-    # Extend as more symbols appear in real trades. Falls back to lowercased symbol as id if unknown.
+    # Extend as more symbols appear in real trades. Unknown symbols return None (no guessing).
     ID_MAP: Dict[str, str] = {
         "CRO": "crypto-com-chain",
         "USDC": "usd-coin",

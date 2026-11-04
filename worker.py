@@ -353,9 +353,15 @@ KNOWN_PAIRS_FILE = os.path.join(PERSISTENCE_BASE, "known_pairs.json")
 PENDING_POOLS_FILE = os.path.join(PERSISTENCE_BASE, "pending_pools.json")
 
 
+def _volume_configured() -> bool:
+    """True when persistence points at a configured dir (WORKER_DATA_DIR or the
+    Railway volume), i.e. the same two vars PERSISTENCE_BASE honours."""
+    return bool(os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or os.getenv("WORKER_DATA_DIR"))
+
+
 def _warn_if_no_volume():
     """Emit loud WARNING on every load/save and at startup if no volume (per Review)."""
-    if not (os.getenv("RAILWAY_VOLUME_MOUNT_PATH") or os.getenv("WORKER_DATA_DIR")):
+    if not _volume_configured():
         logger.warning(
             f"RAILWAY VOLUME NOT DETECTED: persistence at {KNOWN_PAIRS_FILE} uses ephemeral 'data/' (or base). "
             "pairs/last_seen/last_eod_run are NOT durable across redeploys or container replacements. "
@@ -1069,11 +1075,24 @@ async def portfolio_watch():
         await asyncio.sleep(interval_s)
 
 
+def seconds_until_local(now_local, hour, minute=0) -> float:
+    """Pure: real seconds from now_local (an aware local datetime) until the next
+    hour:minute wall-clock time in the same zone. The difference is taken in UTC:
+    subtracting two aware datetimes that share a ZoneInfo is wall-clock
+    arithmetic and ignores a DST change in between (the EOD fired at 00:55 after
+    spring-forward and reported the empty new day)."""
+    target = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now_local >= target:
+        target += timedelta(days=1)
+    return (target.astimezone(timezone.utc) - now_local.astimezone(timezone.utc)).total_seconds()
+
+
 async def scheduled_scan_digest():
     """Send ONE scanner-funnel summary per day at SCAN_DIGEST_HOUR Europe/Athens
     (default 21:00) and reset the counters. In-memory only: a restart restarts the
-    counting window (the digest then covers time since restart). DST-safe target
-    recomputation each loop, same pattern as scheduled_eod_pnl. Never crashes."""
+    counting window (the digest then covers time since restart). DST-safe: the
+    sleep is recomputed each loop and measured in UTC (seconds_until_local), same
+    as scheduled_eod_pnl. Never crashes."""
     global chain_stats
     if not SCAN_DIGEST_ENABLED:
         logger.info("scanner digest: disabled (SCAN_DIGEST_ENABLED=false)")
@@ -1081,11 +1100,7 @@ async def scheduled_scan_digest():
     athens = ZoneInfo("Europe/Athens")
     logger.info(f"scanner digest: on — daily at {SCAN_DIGEST_HOUR:02d}:00 Europe/Athens (per-chain)")
     while True:
-        now = datetime.now(athens)
-        target = now.replace(hour=SCAN_DIGEST_HOUR, minute=0, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        await asyncio.sleep(max(60.0, (target - datetime.now(athens)).total_seconds()))
+        await asyncio.sleep(max(60.0, seconds_until_local(datetime.now(athens), SCAN_DIGEST_HOUR, 0)))
         try:
             snap, chain_stats = chain_stats, {}
             msg = format_multichain_digest(snap, chains_enabled())
@@ -1149,7 +1164,7 @@ async def monitor_wallet():
 # each cycle (DST-safe for Europe/Athens), if now past target hour then schedule next day,
 # avoid dups/misses especially post-Railway restart, max(60s) sleep, continue on error.
 # Reuses core.pnl_calculator.get_daily_pnl_report() *exactly* (no modifications allowed).
-# Automatic path ONLY adds the "📊 **Automatic EOD PnL Report**" header.
+# Automatic path ONLY adds the "📊 **Automatic end-of-day wallet report**" header.
 # Manual /daily_pnl (app/main.py process_daily_pnl) remains 100% untouched and primary.
 # Env: EOD_PNL_ENABLED (default false), EOD_PNL_HOUR (0-23, default 0).
 # Lazy import of the PnL reporter inside the send block (protects worker startup if
@@ -1184,11 +1199,8 @@ async def scheduled_eod_pnl():
     hour, minute = eod_pnl_time()
 
     while True:
-        now = datetime.now(athens)
-        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-        sleep_s = max(60, (target - datetime.now(athens)).total_seconds())
+        # DST-correct: real seconds to the next Athens hour:minute, measured in UTC
+        sleep_s = max(60, seconds_until_local(datetime.now(athens), hour, minute))
         await asyncio.sleep(sleep_s)
 
         if enabled:
@@ -1268,7 +1280,7 @@ async def scheduled_eod_pnl():
                             report = f"{report}\n\n{paper.paper_summary_line(st)}"
                         except Exception as pe:
                             logger.error(f"paper: EOD line failed (report unchanged): {pe}")
-                    await send_telegram(f"📊 **Automatic EOD PnL Report**\n\n{report}")
+                    await send_telegram(f"📊 **Automatic end-of-day wallet report**\n\n{report}")
                     last_eod_run = now_utc.isoformat()
                     save_known_pairs(seen_pairs)  # persist EOD state (atomic + volume warn)
             except Exception as e:
@@ -1291,9 +1303,10 @@ async def main():
     logger.info(f"Persistence file: {KNOWN_PAIRS_FILE} (evolved: pairs+last_seen+last_eod_run; supports RAILWAY_VOLUME_MOUNT_PATH fallback 'data/')")
 
     # Review Agent 2026-06-08: startup durability status + path logging for ops visibility (ephemeral warning already emitted by load)
-    if not os.getenv("RAILWAY_VOLUME_MOUNT_PATH"):
+    if not _volume_configured():
         logger.warning(
-            "Startup: no RAILWAY_VOLUME_MOUNT_PATH -> persistence is ephemeral (data lost on redeploy). "
+            "Startup: neither WORKER_DATA_DIR nor RAILWAY_VOLUME_MOUNT_PATH is set -> "
+            "persistence is ephemeral (data lost on redeploy). "
             "See full caveat in code + reviews/2026-06-08-worker-persistence-first-inc.md. "
             "# Review Agent 2026-06-09 (Phase 1 extension): Phase 1 improvements (dict source-of-truth + "
             "RESTART_DEDUP_WINDOW_SECONDS time-window) are in-process / local-restart hardening only. "

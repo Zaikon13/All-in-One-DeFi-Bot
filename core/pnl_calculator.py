@@ -21,7 +21,7 @@ from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 from core.price_service import PriceService
 
 # Live Cronos Explorer v1 client + data-freshness guard (replaces the frozen keyless feed).
-from core.wallet import explorer_get, check_data_freshness, note_fetch_failure
+from core.wallet import explorer_get, check_data_freshness, note_fetch_failure, EXPLORER_END_BLOCK, _looks_like_scam
 
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
 
@@ -153,7 +153,7 @@ def format_pnl_report(data: Dict) -> str:
     for token in data["tokens"]:
         lines.append(f"**{token['symbol']}** ({token['trades']} trades)")
         for t in token["trades_list"]:
-            lines.append(f"{t['time']} | {t['type']} {t['amount']} {token['symbol']}")
+            lines.append(f"{t['time']} UTC | {t['type']} {t['amount']} {token['symbol']}")
         lines.append(f"**Net:** {token['net']:+.4f} {token['symbol']}")
 
         # Review Agent 2026-06-09: Phase 1 current price enrichment display (additive, optional).
@@ -560,6 +560,7 @@ async def get_today_transactions_async() -> Tuple[List[Dict], bool]:
     fetch_ok = True
     newest_block = None
     newest_ts = None
+    scam_skipped = 0
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -569,7 +570,7 @@ async def get_today_transactions_async() -> Tuple[List[Dict], bool]:
             ):
                 session = None
                 for page in range(1, 11):  # cap ~10 pages (~200 rows) per endpoint
-                    params = {"address": WALLET_ADDRESS, "startBlock": 0, "endBlock": 99999999}
+                    params = {"address": WALLET_ADDRESS, "startBlock": 0, "endBlock": EXPLORER_END_BLOCK}
                     if session:
                         params["session"] = session
                     env = await explorer_get(client, path, params, full=True)
@@ -599,6 +600,14 @@ async def get_today_transactions_async() -> Tuple[List[Dict], bool]:
                             newest_ts = ts
                         tx_date = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(REPORT_TZ).strftime("%Y-%m-%d") if ts else ""
                         if tx_date == today:
+                            if action == "tokentx":
+                                # same scam/airdrop name filter as /wallet: a phishing-URL
+                                # "symbol" must never reach the report or the AI prompt
+                                meta = item.get("tokenMetadata") or {}
+                                if _looks_like_scam(meta.get("tokenSymbol") or "",
+                                                    meta.get("tokenName") or meta.get("name") or ""):
+                                    scam_skipped += 1
+                                    continue
                             synth = _normalize_etherscan_item(_adapt_explorer_row(item, action), action)
                             if synth:
                                 collected.append(synth)
@@ -623,6 +632,8 @@ async def get_today_transactions_async() -> Tuple[List[Dict], bool]:
                     await note_fetch_failure(client)
                 except Exception:
                     pass
+        if scam_skipped:
+            logging.info(f"Cronos Explorer: skipped {scam_skipped} scam/airdrop token transfer(s) for {today}")
         logging.info(f"Cronos Explorer fetch complete: {len(collected)} tx for {today} (fetch_ok={fetch_ok})")
         return collected, fetch_ok
     except Exception as e:
@@ -646,7 +657,7 @@ async def calculate_daily_pnl_async() -> Dict:
 
 
 # Review Agent 2026-06-09: Private best-effort enrichment for Phase 1.
-# Implements current price valuation + simple average cost (using current price for buys in the day).
+# Implements current price valuation of each token's net flow (no cost basis).
 # This is additive only: new fields are added to token dicts; the original net-delta shape
 # from _aggregate_pnl is never modified.
 # The function must remain best-effort and non-blocking (Condition 3).
@@ -655,9 +666,6 @@ def _enrich_with_current_prices(data: dict) -> dict:
 
     For each token that has a current price:
     - position_value_usd = current_price * net_amount
-    - If the day's trades_list contains BUY trades:
-        - (avg_cost_usd was removed 2026-11-04: it always equalled the current price)
-          (simple average cost approximation; see comment below)
 
     New fields are stored directly in the token dicts (additive).
     A root-level total_portfolio_value_usd may also be added.
@@ -732,7 +740,7 @@ async def get_daily_pnl_report() -> str:
     """Generate daily PnL report with optional Grok AI enhancement + reliable fallback.
 
     Flow:
-    - Fetch via async Etherscan V2 (production path; command path unified 2026-06-06).
+    - Fetch via the async Cronos Explorer v1 path (get_today_transactions_async).
     - If no meaningful txs: clean message.
     - Attempt Grok via core.grok_client.call_grok with HARD TIMEOUT (addresses prior High review feedback on timeout control).
     - Use compact prompt from prompts/claude_daily_pnl.txt + summarized data.
@@ -743,8 +751,9 @@ async def get_daily_pnl_report() -> str:
 
     LIMITATIONS (honest, per task scope and GROK_COORDINATION.md PnL priority):
     - This is NET DELTA ONLY (buys - sells per token for the day). NOT true realized USD PnL.
-    - No cost basis, no entry/exit price tracking, no USD valuation of the deltas.
-    - Data source: Etherscan V2 / CronoScan (unified across webhook and Telegram command post-2026-06-06).
+    - No cost basis, no entry/exit price tracking.
+    - Data source: Cronos Explorer v1; USD value of net flow at current CoinGecko
+      prices for known symbols only.
     - Full EOD scheduling / persistence / advanced cost basis out of scope for this small increment.
     """
     # Initial fetch (async safe)

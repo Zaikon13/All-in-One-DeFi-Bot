@@ -16,7 +16,8 @@ from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 from core.wallet import get_wallet_balances, get_recent_transactions
 from core.log_redaction import install_log_redaction, tg_out_log
 from core.telegram_webhook import resolve_webhook_url, ensure_webhook
-from core.local_mode import console_mode, console_print, normalize_command
+from core.local_mode import (console_mode, console_print, normalize_command,
+                              configured_allowed_chats, is_chat_allowed)
 from core.tg_format import to_tg_markdown, plain_text, split_message
 
 # Config
@@ -132,7 +133,7 @@ async def process_daily_pnl(chat_id: str):
     if not WALLET_ADDRESS:
         await send_telegram_message("❌ Wallet address not configured (set WALLET\\_ADDRESS).", chat_id)
         return
-    await send_telegram_message("🔄 Generating daily PnL report...", chat_id)
+    await send_telegram_message("🔄 Generating daily wallet report...", chat_id)
     try:
         # Core async path (Grok-enhanced with safe fallback). Reuses core/ logic.
         from core.pnl_calculator import get_daily_pnl_report
@@ -157,11 +158,29 @@ async def _get_grok_live_context(wallet_address: str) -> dict:
         balances = await get_wallet_balances(wallet_address)
         recent = await get_recent_transactions(wallet_address, 20)  # limit=20 per Review Agent 2026-06-04 helper spec
         preview = f"{wallet_address[:6]}...{wallet_address[-4:]}"
-        b_lines = [f"CRO: {balances.get('cro', 0):,.4f}"]
-        for sym, amt in sorted((balances.get("tokens") or {}).items(), key=lambda x: -x[1])[:5]:
-            if amt > 0.0001:
-                b_lines.append(f"• {sym}: {amt:,.4f}")
-        bsum = "\n".join(b_lines)
+        if not balances.get("ok", True):
+            # an Explorer outage must not reach the AI as "CRO 0, no tokens" (2026-11-04)
+            bsum = ("Balances unavailable right now (data source error) - "
+                    "do not treat this as an empty wallet.")
+        else:
+            cro_usd = balances.get("cro_usd")
+            b_lines = [f"CRO: {balances.get('cro', 0) or 0:,.4f}"
+                       + (f" (≈ ${cro_usd:,.2f})" if cro_usd is not None else "")]
+            details = balances.get("token_details")
+            if details is not None:
+                # top 5 by USD value (priced first), then by amount — not by raw unit count
+                rows = sorted((d for d in details if (d.get("amount") or 0) > 0.0001),
+                              key=lambda d: (d.get("usd") is None, -(d.get("usd") or 0),
+                                             -(d.get("amount") or 0)))
+                for d in rows[:5]:
+                    usd = d.get("usd")
+                    b_lines.append(f"• {d.get('symbol', '?')}: {d.get('amount') or 0:,.4f}"
+                                   + (f" (≈ ${usd:,.2f})" if usd is not None else ""))
+            else:  # older balance shape without token_details
+                for sym, amt in sorted((balances.get("tokens") or {}).items(), key=lambda x: -x[1])[:5]:
+                    if amt > 0.0001:
+                        b_lines.append(f"• {sym}: {amt:,.4f}")
+            bsum = "\n".join(b_lines)
         tsum = "\n".join(f"• {t}" for t in recent) if recent else "No recent transactions found."
         return {"preview": preview, "balances": bsum, "txs": tsum}
     except Exception as e:
@@ -325,6 +344,16 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         return JSONResponse({"ok": False}, status_code=400)
 
     if text:
+        # Same fail-closed allow-list as the local poller (2026-11-04), read at
+        # request time. Refusals still answer 200 so Telegram does not retry.
+        allowed = configured_allowed_chats()
+        if not allowed:
+            logging.warning(f"[webhook] no TELEGRAM_CHAT_ID / TELEGRAM_ALLOWED_CHAT_IDS set — "
+                            f"message from chat {chat_id} not served (fail closed)")
+            return JSONResponse({"ok": True})
+        if not is_chat_allowed(chat_id, allowed):
+            logging.info(f"[webhook] ignoring message from non-allowed chat {chat_id}")
+            return JSONResponse({"ok": True})
         await handle_command(text, chat_id, background_tasks.add_task)
     return JSONResponse({"ok": True})
 
