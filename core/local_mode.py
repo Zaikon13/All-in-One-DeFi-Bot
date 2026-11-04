@@ -18,11 +18,14 @@ def console_mode() -> bool:
 
 
 def console_print(source: str, text: str, chat_id=None) -> None:
-    """Print an outbound message in full (console mode replaces the Telegram send)."""
+    """Print an outbound message in full (console mode replaces the Telegram send).
+    Same redaction as the [tg-out] log line (apikey/api_key masked), and the chat
+    id is never echoed, so console output can't leak a credential."""
+    from core.log_redaction import redact
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    target = f" → chat {chat_id}" if chat_id else ""
     bar = "─" * 60
-    sys.stdout.write(f"\n{bar}\n📨 [{ts} UTC] {source}{target}\n{text}\n{bar}\n")
+    body = redact(str(text))
+    sys.stdout.write(f"\n{bar}\n📨 [{ts} UTC] {source}\n{body}\n{bar}\n")
     sys.stdout.flush()
 
 

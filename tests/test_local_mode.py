@@ -54,6 +54,18 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual(extract_updates(None, 5), ([], 5))
 
 
+class TestConsolePrintRedacts(unittest.TestCase):
+    def test_apikey_masked(self):
+        import io
+        from core.local_mode import console_print
+        buf = io.StringIO()
+        with mock.patch("sys.stdout", buf):
+            console_print("bot", "url ?apikey=SECRET123&x=1", "999")
+        out = buf.getvalue()
+        self.assertNotIn("SECRET123", out)
+        self.assertNotIn("999", out)
+
+
 class TestHandleCommand(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
