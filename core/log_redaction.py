@@ -11,7 +11,7 @@ import logging
 import re
 
 # apikey / api_key value up to the next & , whitespace, quote, or end.
-_SECRET_RE = re.compile(r"(?i)(api_?key=)[^&\s'\"]+")
+_APIKEY_RE = re.compile(r"(?i)(api_?key=)[^&\s'\"]+")
 _REDACTED = r"\1***"
 
 
@@ -19,7 +19,7 @@ def redact(text):
     """Return text with any apikey/api_key value masked. Safe on non-str."""
     if not isinstance(text, str):
         return text
-    return _SECRET_RE.sub(_REDACTED, text)
+    return _APIKEY_RE.sub(_REDACTED, text)
 
 
 class RedactingFilter(logging.Filter):
