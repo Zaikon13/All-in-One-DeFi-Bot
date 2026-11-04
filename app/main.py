@@ -16,6 +16,7 @@ from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 from core.wallet import get_wallet_balances, get_recent_transactions
 from core.log_redaction import install_log_redaction, tg_out_log
 from core.telegram_webhook import resolve_webhook_url, ensure_webhook
+from core.local_mode import console_mode, console_print, normalize_command
 
 # Config
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -73,11 +74,24 @@ def get_signals_mirror() -> dict | None:
     return (_paper_mirror or {}).get("signals") if _paper_mirror else None
 
 
+def set_paper_mirror(state: dict, signals: dict | None = None, as_of: str | None = None):
+    """Install the paper/signals mirror. Used by the HTTP endpoint and, in the
+    single-process local runner (run_local.py), directly by the worker."""
+    global _paper_mirror
+    _paper_mirror = {"state": state,
+                     "signals": signals if isinstance(signals, dict) else None,
+                     "as_of": as_of}
+
+
 async def send_telegram_message(text: str, chat_id: str = None, reply_markup=None):
     tg_out_log(logging.getLogger("app.main"), text)
     cid = chat_id or CHAT_ID
+    if console_mode():
+        console_print("bot", text, cid)
+        return
     if not (BOT_TOKEN and cid):
         return
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             payload = {
@@ -87,9 +101,13 @@ async def send_telegram_message(text: str, chat_id: str = None, reply_markup=Non
             }
             if reply_markup:
                 payload["reply_markup"] = reply_markup
-            await client.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json=payload)
+            r = await client.post(url, json=payload)
+            if r.status_code != 200:
+                # A stray Markdown entity (token symbols, '_' in names) 400s the
+                # whole message; resend as plain text so the reply is never lost.
+                logging.warning(f"Telegram Markdown send HTTP {r.status_code}; resending as plain text")
+                payload.pop("parse_mode", None)
+                await client.post(url, json=payload)
     except Exception as e:
         logging.error(f"Send message error: {e}")
 
@@ -204,9 +222,7 @@ async def paper_state_mirror(req: Request):
     try:
         payload = json.loads(body)
         if isinstance(payload, dict) and isinstance(payload.get("state"), dict):
-            _paper_mirror = {"state": payload["state"],
-                             "signals": payload.get("signals") if isinstance(payload.get("signals"), dict) else None,
-                             "as_of": payload.get("as_of")}
+            set_paper_mirror(payload["state"], payload.get("signals"), payload.get("as_of"))
             return {"ok": True}
     except Exception:
         pass
@@ -250,57 +266,62 @@ async def grok_analyze(req: Request):
         return {"ok": False, "error": str(e)}
 
 
+START_MENU = """**👋 Welcome to All-in-One DeFi Bot!**
+
+**Available Commands:**
+
+• /wallet — wallet balances with USD (also /balances, /bal)
+• /daily_pnl — daily PnL report
+• /analyze — AI analysis of the wallet (also /grok-analyze)
+• /paper — 🧪 simulated trading status
+• /signals — 🔎 live multi-chain discovery feed
+• /help — this menu"""
+
+# Telegram requires keyboard = array of ROWS (arrays of buttons). The old flat
+# list made Telegram reject the whole /start reply (400), so the menu never showed.
+START_KEYBOARD = {
+    "keyboard": [["/wallet", "/daily_pnl"], ["/paper", "/signals"], ["/analyze"]],
+    "resize_keyboard": True,
+    "one_time_keyboard": False,
+}
+
+
+async def handle_command(text: str, chat_id: str, run_task) -> None:
+    """Route one incoming command. Shared by the webhook and the local poller.
+    `run_task(fn, *args)` schedules the slow work (BackgroundTasks on the webhook,
+    asyncio tasks in run_local.py)."""
+    cmd = normalize_command(text)
+    if cmd in ("/start", "/help", "/menu"):
+        await send_telegram_message(START_MENU, chat_id, reply_markup=START_KEYBOARD)
+    elif cmd in ("/balances", "/wallet", "/bal", "/balance"):
+        run_task(get_all_balances, chat_id)
+    elif cmd == "/paper":
+        from app.commands import get_paper_status
+        run_task(get_paper_status, chat_id)
+    elif cmd == "/signals":
+        from app.commands import get_signals
+        run_task(get_signals, chat_id)
+    elif cmd in ("/daily_pnl", "/dailypnl", "/pnl"):
+        run_task(process_daily_pnl, chat_id)
+    elif cmd in ("/grok-analyze", "/analyze"):
+        await send_telegram_message("🔄 Generating live AI analysis...", chat_id)
+        run_task(process_grok_analyze, chat_id)
+    else:
+        await send_telegram_message("Unknown command. Type /start for the menu.", chat_id)
+
+
 @app.post("/telegram/webhook")
 async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
     try:
         payload = await req.json()
         message = payload.get("message") or payload.get("edited_message") or {}
-        text = (message.get("text") or "").strip().lower()
+        text = (message.get("text") or "").strip()
         chat_id = str((message.get("chat") or {}).get("id", ""))
-    except:
+    except Exception:
         return JSONResponse({"ok": False}, status_code=400)
 
-    if text.startswith("/start"):
-        menu = """**👋 Welcome to All-in-One DeFi Bot!**
-
-**Available Commands:**
-
-• /daily_pnl — Advanced daily PnL report
-• /balances — Full wallet balances with USD
-• /wallet — Same as /balances
-• /bal — Quick balance check
-• /grok-analyze — AI-powered analysis
-• /paper — 🧪 simulated trading status
-• /signals — 🔎 live multi-chain discovery feed"""
-        reply_markup = {
-            "keyboard": ["/daily_pnl", "/balances", "/grok-analyze"],
-            "resize_keyboard": True,
-            "one_time_keyboard": False
-        }
-        await send_telegram_message(menu, chat_id, reply_markup=reply_markup)
-
-    elif text in ("/balances", "/wallet", "/bal", "/balance"):
-        background_tasks.add_task(get_all_balances, chat_id)
-
-    elif text == "/paper":
-        from app.commands import get_paper_status
-        background_tasks.add_task(get_paper_status, chat_id)
-
-    elif text == "/signals":
-        from app.commands import get_signals
-        background_tasks.add_task(get_signals, chat_id)
-
-    elif text in ("/daily_pnl", "/dailypnl"):
-        background_tasks.add_task(process_daily_pnl, chat_id)
-
-    elif text == "/grok-analyze":
-        # Per Review Agent 2026-06-04: immediate thinking msg + background dispatch (matches balances/daily_pnl pattern)
-        await send_telegram_message("🔄 Generating live Grok analysis...", chat_id)
-        background_tasks.add_task(process_grok_analyze, chat_id)
-
-    else:
-        await send_telegram_message("Unknown command. Type /start for the menu.", chat_id)
-
+    if text:
+        await handle_command(text, chat_id, background_tasks.add_task)
     return JSONResponse({"ok": True})
 
 

@@ -1,6 +1,6 @@
 # All-in-One DeFi Bot
 
-**Professional DeFi Telegram Bot** specialized for the **Cronos** ecosystem with real-time wallet monitoring, PnL analytics, smart alerts, and trading capabilities.
+**Professional DeFi Telegram Bot** specialized for the **Cronos** ecosystem with real-time wallet monitoring, PnL analytics, multi-chain new-pool alerts and a paper-trading **simulation**. It monitors and reports only — it does not execute trades.
 
 ## Current Features
 
@@ -23,18 +23,45 @@
 | Health Check Report | ✅ Green | Railway monitoring + Grok analysis + auto Issue |
 | Grok Code Review | ✅ Ready | Automated PR reviews with Grok-4.3 |
 
-## Quick Start (Local)
+## Quick Start — standalone (no Railway needed)
+
+`run_local.py` runs the bot **and** the worker in one process. No public URL, no
+webhook, no volume to rent: Telegram is reached by long-polling and state lives
+in `./data/`.
 
 ```bash
 git clone https://github.com/Zaikon13/All-in-One-DeFi-Bot.git
 cd All-in-One-DeFi-Bot
 pip install -r requirements.txt
+cp .env.example .env        # fill in what you have (see below)
 
-# Run Web
-uvicorn app:app --host 0.0.0.0 --port 8000
+python run_local.py --selftest   # run every command once, replies printed here, then exit
+python run_local.py --console    # full bot + worker; type /wallet, /signals, /paper ... replies print here
+python run_local.py              # real Telegram (polling) — needs TELEGRAM_BOT_TOKEN
+```
 
-# Run Worker (in another terminal)
-python -u worker.py
+What each feature needs:
+
+| Feature | Needs |
+|---|---|
+| `/signals`, new-pool alerts, `/paper` simulation | nothing (keyless GeckoTerminal) |
+| `/wallet`, portfolio-move alerts | `WALLET_ADDRESS`, `CRONOS_EXPLORER_API_KEY` |
+| `/daily_pnl` | the above (+ `ANTHROPIC_API_KEY` for the AI insight) |
+| `/analyze` | the above + `ANTHROPIC_API_KEY` |
+| Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (also the allow-list of who may talk to the bot) |
+
+**Telegram token safety:** if the token already has a webhook (it is served by
+another bot/service), the runner **refuses to start** rather than steal it. Use a
+**new** bot from @BotFather, or pass `--take-over-webhook` deliberately.
+
+Without a token (or with `--console`) nothing is sent to Telegram — every message
+is printed to the terminal instead.
+
+### Classic split (Railway: web + worker)
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000   # web (webhook)
+python -u worker.py                               # worker
 ```
 
 ## Deployment

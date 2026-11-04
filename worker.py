@@ -420,6 +420,10 @@ def _is_new_or_stale(pair_address: str) -> bool:
 
 async def send_telegram(text: str):
     tg_out_log(logger, text)
+    from core.local_mode import console_mode, console_print
+    if console_mode():
+        console_print("worker", text, TELEGRAM_CHAT_ID)
+        return
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -610,6 +614,15 @@ def _paper_mirror_auth() -> str:
 
 async def _push_paper_mirror(client, state: dict):
     """Best-effort POST of the paper state to the bot service. Never raises."""
+    if PAPER_MIRROR_URL == "inprocess":
+        # single-process local runner (run_local.py): bot + worker share memory
+        try:
+            from app.main import set_paper_mirror
+            set_paper_mirror(paper.compact_paper_state(state), signals_state,
+                             datetime.now(timezone.utc).isoformat())
+        except Exception as e:
+            logger.info(f"paper: in-process mirror failed (non-fatal): {e}")
+        return
     if not (PAPER_MIRROR_URL and TELEGRAM_BOT_TOKEN):
         return
     try:
@@ -849,6 +862,7 @@ async def poll_new_pools():
                                        "min_score": min_score_for(c, PAIR_MIN_SCORE)} for c in _chs},
                     "funnel": {c: dict(chain_stats.get(c) or _new_chain_stats()) for c in _chs},
                     "recent": recent_signals[-_RECENT_SIGNALS_MAX:],
+                    "feed": {c: dict(disc.LAST_FETCH_STATUS.get(c) or {}) for c in _chs},
                     "as_of": now_utc.isoformat(),
                 }
 

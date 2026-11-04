@@ -193,6 +193,21 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   (`app/commands/signals.py`, pure `render_signals` + tests) shows the live feed per chain with
   score/tier/age/liq/vol1h/buys-sells/DEX, the active thresholds, and a per-chain funnel line —
   honest 'none this window' with funnel numbers when nothing qualifies. Added to the /start menu.
+- **Standalone runner (2026-11-04)** — `run_local.py` runs bot + worker in ONE process with
+  Telegram long-polling (getUpdates) instead of a webhook, so no Railway / public URL is needed
+  (state in `./data/`). `--console` / no token → `CONSOLE_MODE=true`: every outbound message is
+  printed (`core/local_mode.console_print`) and Telegram is never called; `--selftest` runs each
+  command once and exits. Defaults it sets: `WEBHOOK_AUTOSET_ENABLED=false`,
+  `WEBHOOK_GUARD_ENABLED=false`, `PAPER_MIRROR_URL=inprocess` (worker calls
+  `app.main.set_paper_mirror` directly, no HTTP). **Never steals a token:** if the token already
+  has a webhook (e.g. the Grok-run bot) the poller REFUSES unless `--take-over-webhook`, and even
+  then only polls after a read-back confirms the webhook is gone. Polling answers only
+  `TELEGRAM_ALLOWED_CHAT_IDS` (default `TELEGRAM_CHAT_ID`). Command routing is shared:
+  `app.main.handle_command` serves both the webhook and the poller (strips `@botname`, adds
+  `/analyze` + `/help` aliases). Fixed with it: the `/start` reply keyboard was a flat list
+  (Telegram 400 → the menu never arrived), and bot replies now fall back to plain text on a
+  Markdown 400 like the worker. `/signals` now says "feed unavailable" when the last GeckoTerminal
+  fetch failed (`core.pair_discovery.LAST_FETCH_STATUS`) instead of a misleading "seen 0".
 - **core/** — shared helpers. `claude_client.py` (AI calls), `wallet.py`, `pnl_calculator.py`,
   `price_service.py`, Dexscreener access. **Reuse these; do not duplicate their logic in `app/` or `worker/`.**
 - **Blockchain data source (2026-06-21, balances rev. 2026-06-24).** Live, keyed Cronos Explorer API
@@ -331,6 +346,9 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
 
 ```bash
 pip install -r requirements.txt        # install (must include python-dotenv)
+python run_local.py --selftest         # standalone: every command once, printed, exit
+python run_local.py --console          # standalone bot + worker, replies printed (no Telegram)
+python run_local.py                    # standalone with Telegram polling (needs a token with NO webhook)
 uvicorn app.main:app --reload          # run web service locally
 python -u worker.py                    # run worker locally
 ```
