@@ -13,3 +13,6 @@
 *.pdf  binary
 *.zip  binary
 *.gz   binary
+
+# Windows batch files need CRLF (cmd.exe mis-parses labels/goto in LF-only .bat files).
+*.bat text eol=crlf
