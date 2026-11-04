@@ -106,6 +106,7 @@ async def _reply_setup_hint(client, base, chat_id):
 async def _telegram_poll_loop(handle_command, tasks, token, take_over):
     import httpx
     from core.local_mode import configured_allowed_chats, extract_updates, is_chat_allowed
+    from core.log_redaction import log_safe
 
     allowed = configured_allowed_chats()
     base = f"https://api.telegram.org/bot{token}"
@@ -148,11 +149,11 @@ async def _telegram_poll_loop(handle_command, tasks, token, take_over):
                     if not allowed:
                         # fail closed: with no allow-list nobody gets wallet data;
                         # tell the sender which id to configure instead
-                        logger.warning(f"no TELEGRAM_CHAT_ID set — message from chat {chat_id} not served")
+                        logger.warning(f"no TELEGRAM_CHAT_ID set — message from chat {log_safe(chat_id)} not served")
                         await _reply_setup_hint(client, base, chat_id)
                         continue
                     if not is_chat_allowed(chat_id, allowed):
-                        logger.info(f"ignoring message from non-allowed chat {chat_id}")
+                        logger.info(f"ignoring message from non-allowed chat {log_safe(chat_id)}")
                         continue
                     await handle_command(text, chat_id, tasks)
                 backoff = 2

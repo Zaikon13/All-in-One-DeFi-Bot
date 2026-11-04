@@ -14,7 +14,7 @@ import json
 # (Review Agent 2026-06-04: switch for timeout/quality support; balances/tx for live grok-analyze)
 from core.claude_client import call_grok, load_prompt, is_valid_grok_response
 from core.wallet import get_wallet_balances, get_recent_transactions
-from core.log_redaction import install_log_redaction, tg_out_log
+from core.log_redaction import install_log_redaction, tg_out_log, log_safe
 from core.telegram_webhook import resolve_webhook_url, ensure_webhook
 from core.local_mode import (console_mode, console_print, normalize_command,
                               configured_allowed_chats, is_chat_allowed)
@@ -349,10 +349,10 @@ async def telegram_webhook(req: Request, background_tasks: BackgroundTasks):
         allowed = configured_allowed_chats()
         if not allowed:
             logging.warning(f"[webhook] no TELEGRAM_CHAT_ID / TELEGRAM_ALLOWED_CHAT_IDS set — "
-                            f"message from chat {chat_id} not served (fail closed)")
+                            f"message from chat {log_safe(chat_id)} not served (fail closed)")
             return JSONResponse({"ok": True})
         if not is_chat_allowed(chat_id, allowed):
-            logging.info(f"[webhook] ignoring message from non-allowed chat {chat_id}")
+            logging.info(f"[webhook] ignoring message from non-allowed chat {log_safe(chat_id)}")
             return JSONResponse({"ok": True})
         await handle_command(text, chat_id, background_tasks.add_task)
     return JSONResponse({"ok": True})
