@@ -124,6 +124,40 @@ class TestSignalsFeedHonesty(unittest.TestCase):
         self.assertNotIn("feed unavailable", render_signals(sig, now_utc=now))
 
 
+class TestPollerFailsClosedWithoutAllowList(unittest.TestCase):
+    def test_no_chat_id_means_no_command_is_served(self):
+        import httpx
+        import run_local
+        sent, served = [], []
+
+        def handler(request):
+            name = request.url.path.rsplit("/", 1)[-1]
+            if name == "getWebhookInfo":
+                return httpx.Response(200, json={"ok": True, "result": {"url": ""}})
+            if name == "getUpdates":
+                if served or sent:  # second poll: end the loop deterministically
+                    return httpx.Response(409, json={"ok": False})
+                return httpx.Response(200, json={"ok": True, "result": [
+                    {"update_id": 1, "message": {"text": "/wallet", "chat": {"id": 777}}}]})
+            if name == "sendMessage":
+                sent.append(request.content.decode())
+            return httpx.Response(200, json={"ok": True, "result": {}})
+
+        async def handle(text, chat_id, tasks):
+            served.append(text)
+
+        real = httpx.AsyncClient
+        with mock.patch.dict(os.environ, {}), \
+                mock.patch("httpx.AsyncClient",
+                           lambda **kw: real(transport=httpx.MockTransport(handler), **kw)):
+            os.environ.pop("TELEGRAM_CHAT_ID", None)
+            os.environ.pop("TELEGRAM_ALLOWED_CHAT_IDS", None)
+            # the handler's 409 on the second poll ends the loop deterministically
+            _run(run_local._telegram_poll_loop(handle, None, "T", False))
+        self.assertEqual(served, [])
+        self.assertTrue(sent and "TELEGRAM_CHAT_ID=777" in sent[0])
+
+
 class TestPollerNeverStealsWebhook(unittest.TestCase):
     """A token already served by a webhook (e.g. the Grok-run bot) must make the
     local poller REFUSE, never call deleteWebhook unless explicitly told to."""

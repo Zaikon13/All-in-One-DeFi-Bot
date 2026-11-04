@@ -93,6 +93,16 @@ async def _selftest(handle_command, tasks, chat_id):
     print("\n✅ selftest finished — every command produced a reply above.", flush=True)
 
 
+async def _reply_setup_hint(client, base, chat_id):
+    try:
+        await client.post(f"{base}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": f"This bot is not configured yet. Set TELEGRAM_CHAT_ID={chat_id} "
+                    "(only that chat will be served) and restart run_local.py."})
+    except Exception as e:
+        logger.warning(f"setup hint send failed: {e}")
+
+
 async def _telegram_poll_loop(handle_command, tasks, token, take_over):
     import httpx
     from core.local_mode import allowed_chat_ids, extract_updates, is_chat_allowed
@@ -117,7 +127,7 @@ async def _telegram_poll_loop(handle_command, tasks, token, take_over):
             logger.warning("webhook %s deleted (read-back confirmed) — polling takes over", hook)
         me = (await client.get(f"{base}/getMe")).json().get("result") or {}
         logger.info(f"Telegram polling as @{me.get('username', '?')} — allowed chats: "
-                    f"{', '.join(sorted(allowed)) or 'ANY (set TELEGRAM_CHAT_ID to restrict)'}")
+                    f"{', '.join(sorted(allowed)) or 'NONE — set TELEGRAM_CHAT_ID (unknown chats get a setup hint only)'}")
         offset, backoff = 0, 2
         while True:
             try:
@@ -129,6 +139,12 @@ async def _telegram_poll_loop(handle_command, tasks, token, take_over):
                     return
                 updates, offset = extract_updates(resp.json(), offset)
                 for chat_id, text in updates:
+                    if not allowed:
+                        # fail closed: with no allow-list nobody gets wallet data;
+                        # tell the sender which id to configure instead
+                        logger.warning(f"no TELEGRAM_CHAT_ID set — message from chat {chat_id} not served")
+                        await _reply_setup_hint(client, base, chat_id)
+                        continue
                     if not is_chat_allowed(chat_id, allowed):
                         logger.info(f"ignoring message from non-allowed chat {chat_id}")
                         continue

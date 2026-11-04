@@ -202,7 +202,8 @@ reports balances, daily PnL, and new Dexscreener pairs. Deployed on Railway via 
   `app.main.set_paper_mirror` directly, no HTTP). **Never steals a token:** if the token already
   has a webhook (e.g. the Grok-run bot) the poller REFUSES unless `--take-over-webhook`, and even
   then only polls after a read-back confirms the webhook is gone. Polling answers only
-  `TELEGRAM_ALLOWED_CHAT_IDS` (default `TELEGRAM_CHAT_ID`). Command routing is shared:
+  `TELEGRAM_ALLOWED_CHAT_IDS` (default `TELEGRAM_CHAT_ID`); with neither set it FAILS CLOSED —
+  no command is served, the sender only gets a hint naming their chat id to configure. Command routing is shared:
   `app.main.handle_command` serves both the webhook and the poller (strips `@botname`, adds
   `/analyze` + `/help` aliases). Fixed with it: the `/start` reply keyboard was a flat list
   (Telegram 400 → the menu never arrived), and bot replies now fall back to plain text on a
