@@ -87,16 +87,17 @@ def _valid_open(p) -> bool:
             and bool(p.get("pair_address")) and bool(p.get("token_address")))
 
 
-def _backup_corrupt(p: str) -> str | None:
-    """COPY (never move) an unreadable state file to <p>.corrupt-<UTC> before the
-    engine's next save replaces it, so simulation evidence is never silently
-    lost. Returns the backup path or None. Never raises."""
+def _backup_corrupt(p: str, why: str = "unreadable") -> str | None:
+    """COPY (never move) an unreadable — or load-cleaned — state file to
+    <p>.corrupt-<UTC> before the engine's next save replaces it, so simulation
+    evidence is never silently lost. `why` names the cause in the log. Returns
+    the backup path or None. Never raises."""
     try:
         if not os.path.exists(p):
             return None
         dst = f"{p}.corrupt-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
         shutil.copyfile(p, dst)
-        logging.error(f"[paper] unreadable state file backed up to {dst}")
+        logging.error(f"[paper] state file ({why}) backed up to {dst}")
         return dst
     except Exception as e:
         logging.error(f"[paper] corrupt-state backup failed: {e}")
@@ -109,7 +110,9 @@ def load_state(path: str | None = None) -> dict:
     are dropped with a log (a hand-edited zombie position must not wedge the
     engine or hold a slot forever); numeric fields accept int or float. An
     unreadable or non-object file is first copied to <p>.corrupt-<UTC> (2026-11-04),
-    because the worker saves right after loading and would overwrite it."""
+    because the worker saves right after loading and would overwrite it. Round 2
+    (2026-11-04): a file the load had to CLEAN (a dropped or non-numeric field,
+    a dropped row/position) is backed up the same way, with the reasons logged."""
     p = path or state_path()
     logging.info(f"[paper] loading state from {p}")
     try:
@@ -120,17 +123,30 @@ def load_state(path: str | None = None) -> dict:
             _backup_corrupt(p)
             return fresh_state()
         st = fresh_state()
+        reasons = []  # anything the load had to drop/ignore -> back the file up
         for k in ("balance_usd", "starting_usd"):
             if _is_num(raw.get(k)):
                 st[k] = float(raw[k])
+            elif k in raw:
+                reasons.append(f"{k} not a number")
         if isinstance(raw.get("closed"), list):
             st["closed"] = [c for c in raw["closed"] if isinstance(c, dict)]
+            if len(st["closed"]) != len(raw["closed"]):
+                reasons.append(f"dropped {len(raw['closed']) - len(st['closed'])} malformed closed row(s)")
+            bad_pnl = sum(1 for c in st["closed"] if "pnl_usd" in c and not _is_num(c["pnl_usd"]))
+            if bad_pnl:
+                reasons.append(f"{bad_pnl} closed row(s) with a non-numeric pnl_usd")
+        elif "closed" in raw:
+            reasons.append("closed is not a list")
         if isinstance(raw.get("open"), list):
             good = [q for q in raw["open"] if _valid_open(q)]
             dropped = len(raw["open"]) - len(good)
             if dropped:
                 logging.warning(f"[paper] dropped {dropped} malformed open position(s) on load")
+                reasons.append(f"dropped {dropped} malformed open position(s)")
             st["open"] = good
+        elif "open" in raw:
+            reasons.append("open is not a list")
         # Integrity pass (2026-08-10): re-book any impossible glitch-gains, then
         # reconcile the balance against the trade record so a corrupted balance
         # (e.g. the +43,137% fake profit) can never silently persist, and a
@@ -148,6 +164,10 @@ def load_state(path: str | None = None) -> dict:
             logging.warning(
                 f"[paper] re-booked {rep['corrected']} impossible trade(s) on load "
                 f"(removed ${rep['removed_usd']:.2f})")
+        if reasons:
+            why = "cleaned on load: " + "; ".join(reasons)
+            logging.warning(f"[paper] state {why} — keeping a copy of the original file")
+            _backup_corrupt(p, why=why)  # a COPY; the original bytes survive the next save
         return st
     except FileNotFoundError:
         return fresh_state()
@@ -321,13 +341,22 @@ def reconcile_balance(state: dict) -> tuple:
     expected = starting + sum(realized pnl) - open cost basis. drift = the stored
     balance minus that expected value; a nonzero drift means the stored balance
     was corrupted (e.g. a glitch-inflated gain). Pure; never raises."""
-    starting = float(state.get("starting_usd") or 0)
+    def _num0(v) -> float:
+        # a bad row ("n/a", None, inf) counts as 0 instead of raising (a raise
+        # here used to reset the whole simulation to its starting capital)
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        return f if math.isfinite(f) else 0.0
+
+    starting = _num0(state.get("starting_usd"))
     closed = state.get("closed") or []
     opens = state.get("open") or []
-    sum_pnl = sum(float(c.get("pnl_usd") or 0) for c in closed if isinstance(c, dict))
-    open_basis = sum(float(p.get("usd_in") or 0) for p in opens if isinstance(p, dict))
+    sum_pnl = sum(_num0(c.get("pnl_usd")) for c in closed if isinstance(c, dict))
+    open_basis = sum(_num0(p.get("usd_in")) for p in opens if isinstance(p, dict))
     expected = starting + sum_pnl - open_basis
-    drift = float(state.get("balance_usd") or 0) - expected
+    drift = _num0(state.get("balance_usd")) - expected
     return expected, drift
 
 
@@ -346,13 +375,13 @@ def repair_impossible_trades(state: dict, tp_pct=None) -> dict:
             continue
         try:
             pct = float(c.get("pnl_pct"))
+            if not math.isfinite(pct) or pct <= tp_pct + 1e-9:
+                continue  # within the cap (or a loss) -> leave untouched
+            usd_in = float(c.get("usd_in") or 0)
+            entry = float(c.get("entry_price") or 0)
+            old_pnl = float(c.get("pnl_usd") or 0)
         except (TypeError, ValueError):
-            continue
-        if not math.isfinite(pct) or pct <= tp_pct + 1e-9:
-            continue  # within the cap (or a loss) -> leave untouched
-        usd_in = float(c.get("usd_in") or 0)
-        entry = float(c.get("entry_price") or 0)
-        old_pnl = float(c.get("pnl_usd") or 0)
+            continue  # an unconvertible row is skipped, never raises
         new_pnl = usd_in * tp_pct / 100.0
         removed += (old_pnl - new_pnl)
         c.setdefault("original_pnl_usd", old_pnl)       # keep the audit trail once

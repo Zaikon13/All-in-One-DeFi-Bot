@@ -1,6 +1,7 @@
 # Critical-function tests (docs/CRITICAL_FUNCTIONS.md, Tier 4):
 #   worker.py `main` (worker.main) — starts every loop via asyncio.gather.
 #   Invariant: each loop catches its own errors; one crash doesn't stop the others.
+#   worker.py `_supervise` (round 2): a crashed loop is logged and restarted with backoff.
 # Offline: persistence, Telegram and every network seam are mocked. No real time:
 # loops yield with asyncio.sleep(0) (the real one, captured below) and the test
 # drives the event loop for a bounded number of ticks, then cancels everything.
@@ -126,10 +127,9 @@ class TestWorkerMainSupervision(_MainHarness):
             if name != "portfolio_watch":
                 self.assertGreater(self.ticks[name], 50, name)
 
-    @unittest.expectedFailure
     def test_one_crashing_loop_does_not_stop_the_others(self):
         """Invariant: one crash doesn't stop the others.
-        BUG (finding): main() awaits asyncio.gather(...) WITHOUT
+        Was a BUG (fixed round 2, TGd1: each loop runs under _supervise): main() awaited asyncio.gather(...) WITHOUT
         return_exceptions and without a per-loop supervisor. The first loop
         exception escapes gather, main() raises, and `asyncio.run(main())` (the
         __main__ entry) then cancels every other loop: one crash in any loop (here
@@ -138,6 +138,29 @@ class TestWorkerMainSupervision(_MainHarness):
         still ticking at that moment — main has already exited."""
         done, exc = self.drive_with(self.fake_loops(crash="heartbeat"))
         self.assertFalse(done, f"main() exited ({exc!r}) while the other loops were still alive")
+
+    def test_supervise_restarts_a_crashed_loop(self):
+        """Round 2 TGd1: _supervise logs a crash at ERROR, backs off 30 s, then
+        restarts the loop; a loop that returns is not restarted. Mutation that
+        breaks it: dropping the while-loop (no restart) or the except (crash escapes)."""
+        calls = []
+
+        async def factory():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("first run blows up")
+
+        sleep = mock.AsyncMock()
+        loop = asyncio.new_event_loop()
+        try:
+            with mock.patch.object(worker.asyncio, "sleep", new=sleep), \
+                    self.assertLogs("worker", level="ERROR") as logs:
+                loop.run_until_complete(worker._supervise("x", factory))
+        finally:
+            loop.close()
+        self.assertEqual(len(calls), 2)
+        sleep.assert_awaited_once_with(30.0)
+        self.assertTrue(any("x crashed" in m for m in logs.output), logs.output)
 
 
 class TestRealLoopsSurviveTheirOwnFailures(_MainHarness):

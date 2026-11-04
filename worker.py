@@ -424,30 +424,46 @@ def _is_new_or_stale(pair_address: str) -> bool:
     return False
 
 
-async def send_telegram(text: str):
+async def send_telegram(text: str) -> bool:
+    """Send to the owner's chat. Returns True only if Telegram accepted EVERY
+    chunk (console mode: True). A chunk that fails both the Markdown send and
+    the plain-text resend — or raises — is logged at ERROR and makes the result
+    False; the remaining chunks are still sent."""
     tg_out_log(logger, text)
     from core.local_mode import console_mode, console_print
     from core.tg_format import to_tg_markdown, plain_text, split_message
     if console_mode():
         console_print("worker", plain_text(text), TELEGRAM_CHAT_ID)
-        return
+        return True
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
-        return
+        logger.warning("Telegram NOT sent: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set")
+        return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    ok = True
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             # Telegram caps a message at 4096 chars -> split on line boundaries
             for chunk in split_message(text):
-                r = await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID,
-                                                 "text": to_tg_markdown(chunk),  # **x** -> *x*
-                                                 "parse_mode": "Markdown"})
-                if r.status_code != 200:
+                try:
+                    r = await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID,
+                                                     "text": to_tg_markdown(chunk),  # **x** -> *x*
+                                                     "parse_mode": "Markdown"})
+                    if r.status_code == 200:
+                        continue
                     # a stray Markdown entity (untrusted token symbols) 400s the whole
                     # message; resend as plain text so the alert is never silently lost.
                     logger.warning(f"Telegram Markdown send HTTP {r.status_code}; resending as plain text")
-                    await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": plain_text(chunk)})
+                    r2 = await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": plain_text(chunk)})
+                    if r2.status_code != 200:
+                        logger.error(f"Telegram send FAILED (HTTP {r.status_code} then {r2.status_code}); chunk lost")
+                        ok = False
+                except Exception as e:
+                    logger.error(f"Telegram send FAILED ({type(e).__name__}: {e}); chunk lost")
+                    ok = False
     except Exception as e:
         logger.error(f"Telegram error: {e}")
+        ok = False
+    return ok
 
 
 def load_known_pairs() -> set:
@@ -755,10 +771,10 @@ async def _paper_step(client, fresh, now_utc):
                 if res is None:
                     if cp is None:
                         # spec: never exit on missing data; say so in the LOG only
-                        logger.info(f"paper: no price for {pos['symbol']} this cycle; holding")
+                        logger.info(f"paper: no price for {pos.get('symbol','?')} this cycle; holding")
                     elif paper.is_bad_tick(pos.get("entry_price"), cp):
                         # a single garbage tick must never book a trade
-                        logger.warning(f"paper: ⚠️ ignored absurd price {cp} for {pos['symbol']} "
+                        logger.warning(f"paper: ⚠️ ignored absurd price {cp} for {pos.get('symbol','?')} "
                                        f"(entry {pos.get('entry_price')}); holding, not booking")
                     continue
                 reason, exit_price = res
@@ -767,13 +783,13 @@ async def _paper_step(client, fresh, now_utc):
                 paper.save_state(paper_state)
                 arrow = "📈" if closed["pnl_usd"] >= 0 else "📉"
                 await send_telegram(
-                    f"🧪 **PAPER SELL** — {closed['symbol']} [{_chain_label(closed.get('chain','cro'))}] ({reason})\n"
+                    f"🧪 **PAPER SELL** — {closed.get('symbol','?')} [{_chain_label(closed.get('chain','cro'))}] ({reason})\n"
                     f"- {_fmt_price(closed['entry_price'])} → {_fmt_price(closed['exit_price'])} "
                     f"({closed['pnl_pct']:+.1f}%) {arrow}\n"
                     f"- Realized: {closed['pnl_usd']:+,.2f} USD on ${closed['usd_in']:,.0f}\n"
                     f"- Simulated balance: ${paper_state['balance_usd']:,.2f}"
                 )
-                logger.info(f"paper: SELL {closed['symbol']} {reason} pnl {closed['pnl_usd']:+.2f}")
+                logger.info(f"paper: SELL {closed.get('symbol','?')} {reason} pnl {closed['pnl_usd']:+.2f}")
         await _push_paper_mirror(client, paper_state)
     except Exception as e:
         logger.error(f"paper step error (scanner unaffected): {e}", exc_info=True)
@@ -791,88 +807,92 @@ async def poll_new_pools():
         try:
             now_utc = datetime.now(timezone.utc)
             fresh = []  # (norm, liq, age_h, sc) — norm doubles as the pair-shaped dict
+            cycle_keys = set()  # keys selected this cycle; marked seen only AFTER the send
             async with httpx.AsyncClient(timeout=25) as client:
                 for chain in chains_enabled():
-                    pools = await fetch_new_pools(client, chain)
-                    min_liq = min_liquidity_for(chain)
-                    min_score = min_score_for(chain, PAIR_MIN_SCORE)
-                    cy_seen = len(pools)
-                    cy_matured = cy_passed = 0
-                    cy_best = None
-                    matured_norms = []  # pools to score this cycle (from new_pools + force-fetch)
-                    for norm in pools:
-                        key = norm["key"]
-                        cls = classify_pool(norm.get("created_at"), now_utc,
-                                            PAIR_MIN_AGE_MINUTES, PAIR_NEWNESS_WINDOW_HOURS)
-                        if cls == "pending":
-                            pending_pools[key] = {"ca": norm.get("created_at") or now_utc.isoformat(),
-                                                  "addr": norm.get("pairAddress") or ""}
-                            continue
-                        pending_pools.pop(key, None)
-                        if cls == "mature":
-                            matured_norms.append(norm)
+                    try:
+                        pools = await fetch_new_pools(client, chain)
+                        min_liq = min_liquidity_for(chain)
+                        min_score = min_score_for(chain, PAIR_MIN_SCORE)
+                        cy_seen = len(pools)
+                        cy_matured = cy_passed = 0
+                        cy_best = None
+                        matured_norms = []  # pools to score this cycle (from new_pools + force-fetch)
+                        for norm in pools:
+                            key = norm["key"]
+                            cls = classify_pool(norm.get("created_at"), now_utc,
+                                                PAIR_MIN_AGE_MINUTES, PAIR_NEWNESS_WINDOW_HOURS)
+                            if cls == "pending":
+                                pending_pools[key] = {"ca": norm.get("created_at") or now_utc.isoformat(),
+                                                      "addr": norm.get("pairAddress") or ""}
+                                continue
+                            pending_pools.pop(key, None)
+                            if cls == "mature":
+                                matured_norms.append(norm)
 
-                    # Solana maturity fix (2026-07-24): fast chains push a pool out of
-                    # the new_pools window before it reaches min age, so it is never
-                    # re-observed. Force-fetch the pending pools that have now matured
-                    # directly via pools/multi (<=30/call, one call per chain per cycle);
-                    # a fetch miss leaves them pending to retry next cycle (never dropped).
-                    due = pending_due_keys(pending_pools, chain, now_utc,
-                                           PAIR_MIN_AGE_MINUTES, PAIR_NEWNESS_WINDOW_HOURS)[:30]
-                    if due:
-                        addrs = [pending_pools[k]["addr"] for k in due if pending_pools[k].get("addr")]
-                        forced = await disc.fetch_pools_by_address(client, chain, addrs) if addrs else []
-                        got = {n["key"] for n in forced}
-                        for n in forced:
-                            matured_norms.append(n)
-                        for k in got:
-                            pending_pools.pop(k, None)  # scored now; un-fetched stay pending
-                        logger.info(f"[discovery] {chain}: force-fetched {len(due)} due pending, "
-                                    f"{len(forced)} matured via direct fetch")
+                        # Solana maturity fix (2026-07-24): fast chains push a pool out of
+                        # the new_pools window before it reaches min age, so it is never
+                        # re-observed. Force-fetch the pending pools that have now matured
+                        # directly via pools/multi (<=30/call, one call per chain per cycle);
+                        # a fetch miss leaves them pending to retry next cycle (never dropped).
+                        due = pending_due_keys(pending_pools, chain, now_utc,
+                                               PAIR_MIN_AGE_MINUTES, PAIR_NEWNESS_WINDOW_HOURS)[:30]
+                        if due:
+                            addrs = [pending_pools[k]["addr"] for k in due if pending_pools[k].get("addr")]
+                            forced = await disc.fetch_pools_by_address(client, chain, addrs) if addrs else []
+                            got = {n["key"] for n in forced}
+                            for n in forced:
+                                matured_norms.append(n)
+                            for k in got:
+                                pending_pools.pop(k, None)  # scored now; un-fetched stay pending
+                            logger.info(f"[discovery] {chain}: force-fetched {len(due)} due pending, "
+                                        f"{len(forced)} matured via direct fetch")
 
-                    for norm in matured_norms:
-                        key = norm["key"]
-                        cy_matured += 1
-                        liq = norm["liquidity_usd"]
-                        if liq < min_liq:
-                            continue
-                        sc = score_pair(norm, liq)  # scoring math UNCHANGED
-                        # risk flags (2026-07-24): informational only, scoring untouched
-                        norm["suspicious"] = disc.is_honeypot_suspect(sc["buys"], sc["sells"])
-                        norm["implausible_liq"] = disc.is_implausible_liquidity(liq, sc["vol1h"])
-                        sym = (norm.get("baseToken") or {}).get("symbol", "?")
-                        if cy_best is None or sc["score"] > cy_best[0]:
-                            cy_best = (sc["score"], sym)
-                        if sc["score"] < min_score:
-                            if key in seen_pairs:
+                        for norm in matured_norms:
+                            key = norm["key"]
+                            cy_matured += 1
+                            liq = norm["liquidity_usd"]
+                            if liq < min_liq:
+                                continue
+                            sc = score_pair(norm, liq)  # scoring math UNCHANGED
+                            # risk flags (2026-07-24): informational only, scoring untouched
+                            norm["suspicious"] = disc.is_honeypot_suspect(sc["buys"], sc["sells"])
+                            norm["implausible_liq"] = disc.is_implausible_liquidity(liq, sc["vol1h"])
+                            sym = (norm.get("baseToken") or {}).get("symbol", "?")
+                            if cy_best is None or sc["score"] > cy_best[0]:
+                                cy_best = (sc["score"], sym)
+                            if sc["score"] < min_score:
+                                if key in seen_pairs:
+                                    pair_last_seen[key] = now_utc.isoformat()
+                                continue
+                            if key in cycle_keys:
+                                continue  # already selected this cycle (e.g. feed + force-fetch)
+                            if key not in seen_pairs or _is_new_or_stale(key):
+                                cycle_keys.add(key)
+                                age_h = pool_age_hours(norm.get("created_at"), now_utc) or 0.0
+                                fresh.append((norm, liq, age_h, sc))
+                                cy_passed += 1
+                                recent_signals.append({
+                                    "chain": chain,
+                                    "symbol": _md_safe((norm.get("baseToken") or {}).get("symbol", "?")),
+                                    "quote": _md_safe((norm.get("quoteToken") or {}).get("symbol", "?")),
+                                    "dex": _md_safe(norm.get("dex", "?")),
+                                    "score": sc["score"],
+                                    "tier": "🔥" if sc["score"] >= PAIR_SCORE_STRONG else "👀",
+                                    "age_h": round(age_h, 1), "liquidity": liq,
+                                    "vol1h": sc["vol1h"], "buys": sc["buys"], "sells": sc["sells"],
+                                    "suspicious": bool(norm.get("suspicious")),
+                                    "implausible_liq": bool(norm.get("implausible_liq")),
+                                    "ts": now_utc.isoformat(),
+                                })
+                            else:
                                 pair_last_seen[key] = now_utc.isoformat()
-                            continue
-                        if key not in seen_pairs or _is_new_or_stale(key):
-                            seen_pairs.add(key)
-                            pair_last_seen[key] = now_utc.isoformat()
-                            _sync_seen_pairs_from_dict()
-                            save_known_pairs(seen_pairs)
-                            age_h = pool_age_hours(norm.get("created_at"), now_utc) or 0.0
-                            fresh.append((norm, liq, age_h, sc))
-                            cy_passed += 1
-                            recent_signals.append({
-                                "chain": chain,
-                                "symbol": _md_safe((norm.get("baseToken") or {}).get("symbol", "?")),
-                                "quote": _md_safe((norm.get("quoteToken") or {}).get("symbol", "?")),
-                                "dex": _md_safe(norm.get("dex", "?")),
-                                "score": sc["score"],
-                                "tier": "🔥" if sc["score"] >= PAIR_SCORE_STRONG else "👀",
-                                "age_h": round(age_h, 1), "liquidity": liq,
-                                "vol1h": sc["vol1h"], "buys": sc["buys"], "sells": sc["sells"],
-                                "suspicious": bool(norm.get("suspicious")),
-                                "implausible_liq": bool(norm.get("implausible_liq")),
-                                "ts": now_utc.isoformat(),
-                            })
-                        else:
-                            pair_last_seen[key] = now_utc.isoformat()
-                    record_chain_funnel(chain_stats, chain, seen=cy_seen,
-                                        matured=cy_matured, passed=cy_passed,
-                                        sent=cy_passed, best=cy_best)
+                        record_chain_funnel(chain_stats, chain, seen=cy_seen,
+                                            matured=cy_matured, passed=cy_passed,
+                                            sent=cy_passed, best=cy_best)
+                    except Exception as e:
+                        # one chain's failure (feed, parse, force-fetch) never stops the others
+                        logger.error(f"Discovery error [{chain}] (other chains continue): {e}", exc_info=True)
 
                 _expire_pending(pending_pools, now_utc, PAIR_NEWNESS_WINDOW_HOURS)
                 save_pending_pools(pending_pools)
@@ -925,6 +945,15 @@ async def poll_new_pools():
                     if len(combined) > 4000:
                         combined = combined[:4000].rstrip() + "\n\n(truncated)"
                     await send_telegram(combined)
+                    # Mark seen only now, after the send (a crash earlier in the cycle
+                    # leaves them unseen, so they alert next cycle instead of being lost).
+                    # Marked whatever the send returns: send_telegram logs a failure, and
+                    # marking stops a repeat paper entry for the same pool next cycle.
+                    for k in {n["key"] for n, _, _, _ in fresh}:
+                        seen_pairs.add(k)
+                        pair_last_seen[k] = now_utc.isoformat()
+                    _sync_seen_pairs_from_dict()
+                    save_known_pairs(seen_pairs)
                     logger.info("New pool alert sent (1 message, %d pool(s)): %s",
                                 len(fresh),
                                 ", ".join(f"{n['chain']}:{(n.get('baseToken') or {}).get('symbol','?')}"
@@ -1099,8 +1128,15 @@ async def scheduled_scan_digest():
         return
     athens = ZoneInfo("Europe/Athens")
     logger.info(f"scanner digest: on — daily at {SCAN_DIGEST_HOUR:02d}:00 Europe/Athens (per-chain)")
+    last_sent_utc = None  # once-per-day guard (in memory), same 22h rule as the EOD report
     while True:
         await asyncio.sleep(max(60.0, seconds_until_local(datetime.now(athens), SCAN_DIGEST_HOUR, 0)))
+        now_utc = datetime.now(timezone.utc)
+        if last_sent_utc is not None and (now_utc - last_sent_utc).total_seconds() < 22 * 3600:
+            # an early wake (clock behind the sleep) re-wakes ~60s later at the same hour
+            logger.info("scanner digest: already sent within 22h (early wake); skipping")
+            continue
+        last_sent_utc = now_utc  # set BEFORE the try: a failed send/format still counts as today's
         try:
             snap, chain_stats = chain_stats, {}
             msg = format_multichain_digest(snap, chains_enabled())
@@ -1280,12 +1316,40 @@ async def scheduled_eod_pnl():
                             report = f"{report}\n\n{paper.paper_summary_line(st)}"
                         except Exception as pe:
                             logger.error(f"paper: EOD line failed (report unchanged): {pe}")
-                    await send_telegram(f"📊 **Automatic end-of-day wallet report**\n\n{report}")
-                    last_eod_run = now_utc.isoformat()
-                    save_known_pairs(seen_pairs)  # persist EOD state (atomic + volume warn)
+                    text = f"📊 **Automatic end-of-day wallet report**\n\n{report}"
+                    ok = await send_telegram(text)
+                    if not ok:
+                        logger.error("EOD report send failed; retrying once in 300s")
+                        await asyncio.sleep(300)
+                        ok = await send_telegram(text)
+                    if ok:
+                        # EOD state only on delivery: an undelivered report must not
+                        # be recorded as sent (the 22h guard would hide the miss)
+                        last_eod_run = now_utc.isoformat()
+                        save_known_pairs(seen_pairs)  # persist EOD state (atomic + volume warn)
+                    else:
+                        logger.error("EOD report NOT delivered (send failed twice); last_eod_run unchanged")
             except Exception as e:
                 logger.error(f"EOD PnL error: {e}")
                 await send_telegram("❌ Automatic EOD PnL report failed. Check logs.")
+
+
+async def _supervise(name, factory, first_delay_s=30.0, max_delay_s=600.0):
+    """Run one background loop; if it crashes, log it and restart it with
+    exponential backoff (30 s doubling to 10 min) so one loop's bug can never
+    stop the others or end main(). A loop that RETURNS (feature disabled) is
+    not restarted. The inner task keeps the loop's own coroutine name (logs,
+    tests that attribute sleeps per loop)."""
+    delay = first_delay_s
+    while True:
+        try:
+            await asyncio.create_task(factory(), name=name)
+            logger.info(f"{name}: loop ended (disabled or finished)")
+            return
+        except Exception:
+            logger.exception(f"{name} crashed; restarting in {delay:.0f}s (other loops unaffected)")
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, max_delay_s)
 
 
 async def main():
@@ -1377,15 +1441,17 @@ async def main():
     else:
         logger.info("paper: disabled (PAPER_TRADING_ENABLED=false)")
 
-    await asyncio.gather(
-        heartbeat(),
-        poll_new_pools(),
-        monitor_wallet(),
-        scheduled_eod_pnl(),
-        portfolio_watch(),
-        scheduled_scan_digest(),
-        webhook_guard()
-    )
+    # each loop runs under _supervise: a crash is logged and that loop restarted
+    # with backoff; the others keep running (names resolve here, at call time)
+    await asyncio.gather(*(_supervise(n, f) for n, f in (
+        ("heartbeat", heartbeat),
+        ("poll_new_pools", poll_new_pools),
+        ("monitor_wallet", monitor_wallet),
+        ("scheduled_eod_pnl", scheduled_eod_pnl),
+        ("portfolio_watch", portfolio_watch),
+        ("scheduled_scan_digest", scheduled_scan_digest),
+        ("webhook_guard", webhook_guard),
+    )))
 
 
 if __name__ == "__main__":

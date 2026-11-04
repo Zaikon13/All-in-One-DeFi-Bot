@@ -42,7 +42,10 @@ class _FakeClient:
 
     async def post(self, url, json=None, **kw):
         self.posts.append(json)
-        return _Resp(self.codes.pop(0) if self.codes else 200)
+        code = self.codes.pop(0) if self.codes else 200
+        if isinstance(code, BaseException):  # scripted transport failure
+            raise code
+        return _Resp(code)
 
 
 # --- Telegram formatting --------------------------------------------------------
@@ -123,6 +126,93 @@ class TestWorkerSender(unittest.TestCase):
             _run(worker.send_telegram("🚀 **New Pool** a_b"))
         self.assertEqual(fake.posts[0]["text"], "🚀 *New Pool* a_b")
         self.assertEqual(fake.posts[1]["text"], "🚀 New Pool a_b")
+
+
+# --- Round 2 TG2 (2026-11-04): both senders report whether Telegram accepted ----
+
+_TWO_CHUNKS = "a" * 3000 + "\n" + "b" * 3000  # split_message -> 2 chunks
+
+
+class _SenderResultContract:
+    """Shared cases; subclasses provide send(text, codes, env, chat) -> (result, posts)
+    and LOGGER (the logger name assertLogs should watch)."""
+
+    def test_200_is_true(self):
+        ok, posts = self.send("hi", [200])
+        self.assertIs(ok, True)
+        self.assertEqual(len(posts), 1)
+
+    def test_markdown_400_then_plain_200_is_true(self):
+        ok, posts = self.send("hi", [400, 200])
+        self.assertIs(ok, True)
+        self.assertEqual(len(posts), 2)
+
+    def test_both_rejected_is_false_and_logged(self):
+        with self.assertLogs(self.LOGGER, level="ERROR") as logs:
+            ok, posts = self.send("hi", [403, 403])
+        self.assertIs(ok, False)
+        self.assertTrue(any("FAILED" in m for m in logs.output), logs.output)
+
+    def test_exception_on_first_chunk_still_sends_second(self):
+        import httpx
+        with self.assertLogs(self.LOGGER, level="ERROR"):
+            ok, posts = self.send(_TWO_CHUNKS, [httpx.ConnectError("down")])
+        self.assertIs(ok, False)
+        self.assertEqual(len(posts), 2)               # chunk 1 attempt + chunk 2
+        self.assertTrue(posts[1]["text"].startswith("b"), posts[1]["text"][:10])
+
+    def test_missing_chat_id_is_false_with_warning(self):
+        with self.assertLogs(self.LOGGER, level="WARNING") as logs:
+            ok, posts = self.send("hi", [], chat=None)
+        self.assertIs(ok, False)
+        self.assertEqual(posts, [])
+        self.assertTrue(any("NOT sent" in m for m in logs.output), logs.output)
+
+    def test_console_mode_is_true_without_posting(self):
+        import io
+        with mock.patch("sys.stdout", io.StringIO()):
+            ok, posts = self.send("hi", [], env={"CONSOLE_MODE": "true"})
+        self.assertIs(ok, True)
+        self.assertEqual(posts, [])
+
+
+class TestBotSenderResult(_SenderResultContract, unittest.TestCase):
+    LOGGER = None  # app.main logs via the root logger
+
+    def send(self, text, codes, env=None, chat="1"):
+        import app.main as main
+        fake = _FakeClient(codes)
+        with mock.patch.dict(os.environ, env or {"CONSOLE_MODE": "false"}), \
+                mock.patch.object(main, "BOT_TOKEN", "T"), \
+                mock.patch.object(main, "CHAT_ID", None), \
+                mock.patch("httpx.AsyncClient", lambda **kw: fake):
+            ok = _run(main.send_telegram_message(text, chat))
+        return ok, fake.posts
+
+    def test_keyboard_stays_on_chunk_zero(self):
+        import app.main as main
+        fake = _FakeClient([])
+        with mock.patch.dict(os.environ, {"CONSOLE_MODE": "false"}), \
+                mock.patch.object(main, "BOT_TOKEN", "T"), \
+                mock.patch("httpx.AsyncClient", lambda **kw: fake):
+            ok = _run(main.send_telegram_message(_TWO_CHUNKS, "1", reply_markup={"k": 1}))
+        self.assertIs(ok, True)
+        self.assertIn("reply_markup", fake.posts[0])
+        self.assertNotIn("reply_markup", fake.posts[1])
+
+
+class TestWorkerSenderResult(_SenderResultContract, unittest.TestCase):
+    LOGGER = "worker"
+
+    def send(self, text, codes, env=None, chat="1"):
+        import worker
+        fake = _FakeClient(codes)
+        with mock.patch.dict(os.environ, env or {"CONSOLE_MODE": "false"}), \
+                mock.patch.object(worker, "TELEGRAM_BOT_TOKEN", "T"), \
+                mock.patch.object(worker, "TELEGRAM_CHAT_ID", chat), \
+                mock.patch("httpx.AsyncClient", lambda **kw: fake):
+            ok = _run(worker.send_telegram(text))
+        return ok, fake.posts
 
 
 # --- Worker defaults ---------------------------------------------------------------

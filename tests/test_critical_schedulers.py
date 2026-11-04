@@ -42,6 +42,8 @@ class _VirtualTime:
         self.early_s = early_s
         self.sleeps = []
         self.sent = []  # (athens wall time, text)
+        self.send_results = []  # scripted send_telegram results (then True)
+        self.eod_state_at_send = []  # worker.last_eod_run as seen by each send
         clock = self
 
         class FakeDateTime(datetime):
@@ -59,6 +61,8 @@ class _VirtualTime:
 
     async def send(self, text):
         self.sent.append((self.now.astimezone(ATHENS), text))
+        self.eod_state_at_send.append(worker.last_eod_run)
+        return self.send_results.pop(0) if self.send_results else True
 
     def run(self, coro_fn):
         patches = [mock.patch.object(worker, "datetime", self.datetime),
@@ -157,6 +161,35 @@ class TestEodSchedule(_EodHarness):
         self.assertIn("REPORT-BODY", sent[1][1])
         self.assertEqual(sent[1][0].date(), datetime(2026, 6, 11).date())
 
+    def test_undelivered_report_is_retried_once_then_recorded(self):
+        """Round 2 TG2: EOD state only on delivery. A rejected send is retried once
+        300 s later; the retry's success sets last_eod_run. Mutation that breaks
+        it: ignoring send_telegram's result (no retry)."""
+        vt = _VirtualTime(_athens(2026, 6, 10, 12), max_sleeps=2)
+        vt.send_results = [False, True]
+        sent = self.reports(vt.run(worker.scheduled_eod_pnl))
+        # the 23:55 report, then its one retry 300 s later (00:00 Athens)
+        self.assertEqual([t for t, _ in sent], [_athens(2026, 6, 10, 23, 55), _athens(2026, 6, 11, 0, 0)])
+        self.assertEqual(sent[0][1], sent[1][1])
+        self.assertEqual(vt.sleeps[-1], 300)
+        self.assertIsNotNone(worker.last_eod_run)
+        worker.save_known_pairs.assert_called_once()
+
+    def test_report_never_delivered_is_not_recorded_as_sent(self):
+        """Round 2 TG2: two rejected sends → last_eod_run stays None (not saved),
+        and the next day's report still goes out. Mutation that breaks it:
+        setting last_eod_run before/regardless of the send result."""
+        vt = _VirtualTime(_athens(2026, 6, 10, 12), max_sleeps=3)
+        vt.send_results = [False, False]
+        with self.assertLogs("worker", level="ERROR") as logs:
+            sent = self.reports(vt.run(worker.scheduled_eod_pnl))
+        # 23:55 send + its 300 s retry (both rejected), then the next day's report
+        self.assertEqual([t for t, _ in sent], [_athens(2026, 6, 10, 23, 55), _athens(2026, 6, 11, 0, 0),
+                                                _athens(2026, 6, 11, 23, 55)])
+        self.assertEqual(vt.eod_state_at_send, [None, None, None])  # day 1 never recorded
+        self.assertTrue(any("EOD report NOT delivered" in m for m in logs.output), logs.output)
+        self.assertEqual(worker.save_known_pairs.call_count, 1)    # only day 2's delivery
+
     def test_disabled_never_sends(self):
         """Invariant support: EOD_PNL_ENABLED=false → the loop idles, never sends."""
         with mock.patch.dict(os.environ, {"EOD_PNL_ENABLED": "false"}):
@@ -229,11 +262,10 @@ class TestScanDigestSchedule(_DigestHarness):
             self.assertEqual(vt.run(worker.scheduled_scan_digest), [])
         self.assertEqual(vt.sleeps, [])
 
-    @unittest.expectedFailure
     def test_early_wake_does_not_double_send(self):
         """Invariant: ONCE per Athens day. Same scenario the EOD loop survives: the
         wall clock is 2s behind the sleep, so the loop wakes at 20:59:58.
-        BUG (finding): scheduled_scan_digest sends unconditionally after every
+        Was a BUG (fixed round 2, TGd3: in-memory 22h guard): scheduled_scan_digest sent unconditionally after every
         sleep and has no once-per-day guard (scheduled_eod_pnl has last_eod_run).
         The next sleep is max(60, 2s) = 60s, so a SECOND digest goes out at
         21:00:56 the same evening — every day the clock runs early."""

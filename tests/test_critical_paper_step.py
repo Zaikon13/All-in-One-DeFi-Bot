@@ -180,6 +180,30 @@ class TestPaperBugIsContained(_PaperHarness):
         self.assertEqual(self.sent, [])
         self.assertTrue(any("scanner unaffected" in m for m in logs.output))
 
+    def test_symbol_less_position_without_price_completes(self):
+        """Round 2 SIM2: _valid_open doesn't require `symbol`; such a position used
+        to KeyError on the 'no price' log every cycle, skipping the mirror push.
+        Mutation that breaks it: pos['symbol'] instead of pos.get('symbol', '?')."""
+        pos = _open_pos("PoolNoSym")
+        del pos["symbol"]
+        self.state["open"] = [pos]
+        with self.assertNoLogs("worker", level="ERROR"):
+            self.step([])
+        self.assertEqual(len(self.state["open"]), 1)
+        self.mirror.assert_awaited_once()
+
+    def test_symbol_less_position_exit_sends_its_note(self):
+        """Round 2 SIM2 (exit path): close_position copies the position, so the SELL
+        note must not index closed['symbol'] either."""
+        pos = _open_pos("PoolNoSym", entry=1.0)
+        del pos["symbol"]
+        self.state["open"] = [pos]
+        self.prices.return_value = {"PoolNoSym": 1.30}  # +30% -> take-profit
+        with self.assertNoLogs("worker", level="ERROR"):
+            self.step([])
+        self.assertEqual(len(self.sells()), 1, self.sent)
+        self.mirror.assert_awaited_once()
+
     def test_price_feed_crash_does_not_raise(self):
         """Invariant: a paper bug never breaks the scanner — even if the exit price
         feed raises (it is documented never to)."""
@@ -259,6 +283,88 @@ class TestScannerSurvivesPaperBug(_PaperHarness):
         alerts = [m for m in self.sent if "New Pool Detected" in m]
         self.assertEqual(len(alerts), 1, self.sent)
         self.assertEqual(self.buys(), [])
+
+
+class TestScannerIsolationAndMarkAfterSend(_PaperHarness):
+    """Round 2 RT4 (2026-11-04): one chain's failure never stops the others, and a
+    pool is marked seen only AFTER the cycle's alert send — a crash earlier in the
+    cycle must not swallow the alert forever."""
+
+    def setUp(self):
+        super().setUp()
+        self.save = mock.MagicMock()
+
+    def _state_patches(self, chains, fetch):
+        return [
+            mock.patch.object(worker, "chains_enabled", lambda: list(chains)),
+            mock.patch.object(worker, "fetch_new_pools", new=fetch),
+            mock.patch.object(worker, "pending_pools", {}),
+            mock.patch.object(worker, "seen_pairs", set()),
+            mock.patch.object(worker, "pair_last_seen", {}),
+            mock.patch.object(worker, "recent_signals", []),
+            mock.patch.object(worker, "signals_state", {}),
+            mock.patch.object(worker, "chain_stats", {}),
+            mock.patch.object(worker, "save_known_pairs", new=self.save),
+            mock.patch.object(worker, "save_pending_pools", new=mock.MagicMock()),
+            mock.patch.object(worker, "PAIR_MIN_SCORE", 35.0),
+            mock.patch.object(worker.httpx, "AsyncClient", _offline_client),
+            mock.patch.object(worker.asyncio, "sleep", new=mock.AsyncMock(side_effect=_StopLoop())),
+            mock.patch.dict(os.environ, {"PAIR_MIN_LIQUIDITY_USD_CRO": "5000", "PAIR_MIN_SCORE_CRO": ""}),
+        ]
+
+    def _start(self, patches):
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _cycle(self):
+        with self.assertRaises(_StopLoop):
+            _run(worker.poll_new_pools())
+
+    def alerts(self):
+        return [m for m in self.sent if "New Pool Detected" in m]
+
+    def test_failing_chain_does_not_stop_the_next(self):
+        """Mutation that breaks it: removing the per-chain try/except (the solana
+        error then aborts the whole cycle and cro is never scored)."""
+        norm = _qualifying_norm(datetime.now(timezone.utc))
+
+        async def fetch(client, chain):
+            if chain == "solana":
+                raise RuntimeError("solana feed exploded")
+            return [norm]
+
+        self._start(self._state_patches(["solana", "cro"], fetch))
+        with self.assertLogs("worker", level="ERROR") as logs:
+            self._cycle()
+        self.assertEqual(len(self.alerts()), 1, self.sent)
+        self.assertTrue(any("Discovery error [solana]" in m for m in logs.output), logs.output)
+
+    def test_marked_seen_only_after_the_send(self):
+        """Mutation that breaks it: marking/saving the key inside the scoring loop
+        (cycle 1 then persists it as seen, and cycle 2 never alerts)."""
+        norm = _qualifying_norm(datetime.now(timezone.utc))
+        key = norm["key"]
+        self._start(self._state_patches(["cro"], mock.AsyncMock(return_value=[norm])))
+
+        # cycle 1: the cycle crashes after selection, before the send
+        with mock.patch.object(worker, "_expire_pending", side_effect=RuntimeError("late crash")):
+            self._cycle()
+        self.assertEqual(self.alerts(), [])
+        self.assertNotIn(key, worker.seen_pairs)
+        self.save.assert_not_called()
+
+        # cycle 2: same state, no crash -> the alert is delivered, then marked + saved once
+        self._cycle()
+        self.assertEqual(len(self.alerts()), 1, self.sent)
+        self.assertIn(key, worker.seen_pairs)
+        self.assertEqual(self.save.call_count, 1)
+
+        # cycle 3: already seen -> nothing new is sent
+        before = len(self.sent)
+        self._cycle()
+        self.assertEqual(len(self.sent), before, self.sent[before:])
+        self.assertEqual(len(self.alerts()), 1)
 
 
 if __name__ == "__main__":

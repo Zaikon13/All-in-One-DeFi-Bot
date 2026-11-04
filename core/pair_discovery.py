@@ -109,14 +109,25 @@ def _f(x, default=0.0):
         return default
 
 
+def _s(x) -> str:
+    """Total str coercion for untrusted feed fields: a str is stripped, an
+    int/float (never a bool) is stringified, anything else is "". A numeric
+    symbol (e.g. 420) or a dict-valued address must never raise .strip()."""
+    if isinstance(x, str):
+        return x.strip()
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        return str(x).strip()
+    return ""
+
+
 def _token_symbol_addr(token_id, included_by_id):
     """Resolve a token's (symbol, address) from the JSON:API included[] block,
     falling back to the '{network}_{address}' id when the token isn't included."""
-    inc = included_by_id.get(token_id) if token_id else None
+    inc = included_by_id.get(token_id) if isinstance(token_id, str) else None
     if isinstance(inc, dict):
         a = inc.get("attributes") or {}
-        addr = (a.get("address") or "").strip()
-        sym = (a.get("symbol") or "").strip()
+        addr = _s(a.get("address"))
+        sym = _s(a.get("symbol"))
         if addr or sym:
             return sym or "?", addr
     # fallback: id looks like "cro_0x..." / "solana_ABC" / "sui-network_0x..."
@@ -127,16 +138,26 @@ def _token_symbol_addr(token_id, included_by_id):
 
 def parse_gt_pool(pool: dict, network: str, included_by_id: dict) -> dict | None:
     """Normalize one GeckoTerminal pool into the shape the rest of the worker
-    uses. Returns None if it lacks an address (unusable). Pure; never raises.
+    uses. Returns None if it lacks an address (unusable). Pure; NEVER raises:
+    a malformed pool (inf counts, non-string fields, odd ids) is logged and
+    skipped, so one poison pool can't abort the whole page / chain / cycle.
 
     The returned dict is BOTH the alert/paper metadata AND a score_pair-ready
     payload (volume.h1 / txns.h1 / priceChange.h1), so scoring math is unchanged.
     """
+    try:
+        return _parse_gt_pool(pool, network, included_by_id)
+    except Exception as e:
+        logging.warning(f"[discovery] {network}: skipped malformed pool ({type(e).__name__})")
+        return None
+
+
+def _parse_gt_pool(pool: dict, network: str, included_by_id: dict) -> dict | None:
     if not isinstance(pool, dict):
         return None
     attrs = pool.get("attributes") if isinstance(pool.get("attributes"), dict) else {}
     rels = pool.get("relationships") if isinstance(pool.get("relationships"), dict) else {}
-    address = (attrs.get("address") or "").strip()
+    address = _s(attrs.get("address"))
     if not address:
         return None
 
@@ -149,7 +170,7 @@ def parse_gt_pool(pool: dict, network: str, included_by_id: dict) -> dict | None
     dex = _rel_id("dex") or "?"
 
     # name like "WOOF / WCRO" is a good symbol fallback
-    name = (attrs.get("name") or "").strip()
+    name = _s(attrs.get("name"))
     if base_sym == "?" and " / " in name:
         base_sym = name.split(" / ", 1)[0].strip() or "?"
     if quote_sym == "?" and " / " in name:
@@ -159,11 +180,9 @@ def parse_gt_pool(pool: dict, network: str, included_by_id: dict) -> dict | None
     pc = attrs.get("price_change_percentage") if isinstance(attrs.get("price_change_percentage"), dict) else {}
     tx = attrs.get("transactions") if isinstance(attrs.get("transactions"), dict) else {}
     tx1h = tx.get("h1") if isinstance(tx.get("h1"), dict) else {}
-    try:
-        buys = int(tx1h.get("buys") or 0)
-        sells = int(tx1h.get("sells") or 0)
-    except (TypeError, ValueError):
-        buys = sells = 0
+    # via _f first: int(inf) raises OverflowError, int(nan) ValueError
+    buys = max(0, int(_f(tx1h.get("buys"))))
+    sells = max(0, int(_f(tx1h.get("sells"))))
 
     return {
         "chain": network,
@@ -227,11 +246,13 @@ def parse_pool_prices(body: dict) -> dict:
     the position lookup robust regardless of how the address was stored. Pure;
     skips pools with no usable positive price. Never raises."""
     out = {}
-    for pool in ((body or {}).get("data") or []):
+    if not isinstance(body, dict) or not isinstance(body.get("data"), list):
+        return out
+    for pool in body["data"]:
         a = pool.get("attributes") if isinstance(pool, dict) else None
         if not isinstance(a, dict):
             continue
-        addr = (a.get("address") or "").strip()
+        addr = _s(a.get("address"))
         if not addr:
             continue
         try:
@@ -297,9 +318,14 @@ async def fetch_pools_by_address(client, network: str, addresses: list,
     new_pools window turns over before a pool reaches min age). Never raises."""
     out = []
     async for body in _iter_multi_bodies(client, network, addresses, 30, max_retries):
+        if not isinstance(body, dict):
+            continue
         inc = {x["id"]: x for x in (body.get("included") or [])
-               if isinstance(x, dict) and x.get("id")}
-        for pool in (body.get("data") or []):
+               if isinstance(x, dict) and isinstance(x.get("id"), str)}
+        data = body.get("data")
+        if not isinstance(data, list):
+            continue
+        for pool in data:
             n = parse_gt_pool(pool, network, inc)
             if n:
                 out.append(n)
@@ -337,9 +363,12 @@ async def fetch_new_pools(client, network: str, max_retries: int = 3) -> list:
                 _mark_fetch(network, False)
                 return []
             body = r.json()
+            if not isinstance(body, dict):
+                # -> the retry / mark-failed path below (never a silent "seen 0")
+                raise ValueError("non-object body")
             included_by_id = {}
             for inc in (body.get("included") or []):
-                if isinstance(inc, dict) and inc.get("id"):
+                if isinstance(inc, dict) and isinstance(inc.get("id"), str):
                     included_by_id[inc["id"]] = inc
             out = []
             for pool in (body.get("data") or []):

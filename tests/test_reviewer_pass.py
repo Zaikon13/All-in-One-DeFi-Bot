@@ -436,9 +436,10 @@ class TestRunnerConsoleFlag(unittest.TestCase):
              mock.patch.object(run_local, "_console_loop", console), \
              mock.patch.object(run_local, "_telegram_poll_loop", poller), \
              mock.patch.object(run_local, "_seed_paper_mirror"):
-            _run(run_local._amain(Namespace(no_worker=True, selftest=False, take_over_webhook=False)))
+            rc = _run(run_local._amain(Namespace(no_worker=True, selftest=False, take_over_webhook=False)))
         console.assert_awaited_once()
         poller.assert_not_called()
+        self.assertEqual(rc, 0)  # round 2 RT1: a console loop that ends = clean exit
 
 
 class TestVolumeConfigured(unittest.TestCase):

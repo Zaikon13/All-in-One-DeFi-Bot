@@ -217,6 +217,163 @@ class TestPollerNeverStealsWebhook(unittest.TestCase):
         self.assertIn("deleteWebhook", calls)
         self.assertNotIn("getUpdates", calls)
 
+    def test_failed_readback_is_not_confirmation(self):
+        """Round 2 TG5: a read-back that is itself an error (429, no result) must
+        not count as 'webhook gone'. Mutation that breaks it: reading the url from
+        `.get("result") or {}` (an error body then looks like an empty url)."""
+        import httpx
+        import run_local
+        calls, infos = [], [
+            {"ok": True, "result": {"url": "https://other.example/hook"}},
+            {"ok": False, "error_code": 429, "description": "Too Many Requests"},
+        ]
+
+        def handler(request):
+            calls.append(request.url.path.rsplit("/", 1)[-1])
+            if calls[-1] == "getWebhookInfo":
+                return httpx.Response(200, json=infos.pop(0))
+            return httpx.Response(200, json={"ok": True, "result": True})
+
+        real = httpx.AsyncClient
+        with mock.patch("httpx.AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw)), \
+                self.assertLogs("run_local", level="ERROR") as logs:
+            async def go():
+                await asyncio.wait_for(
+                    run_local._telegram_poll_loop(None, None, "T", True), timeout=2)
+            _run(go())  # returns (refuses); a timeout here would mean it started polling
+        self.assertEqual(calls, ["getWebhookInfo", "deleteWebhook", "getWebhookInfo"])
+        self.assertNotIn("getUpdates", calls)
+        self.assertTrue(any("not confirmed" in m for m in logs.output), logs.output)
+
+
+class TestRunnerExitCode(unittest.TestCase):
+    """Round 2 RT1: _amain returns the exit code; a crashed or stopped worker /
+    poller is logged and exits 1 (never a silent exit 0)."""
+
+    def _amain(self, **patches):
+        from argparse import Namespace
+        import run_local
+        ns = Namespace(no_worker=patches.pop("no_worker", False), selftest=False,
+                       take_over_webhook=False)
+        ctx = [mock.patch.dict(os.environ, {"CONSOLE_MODE": "false"}),
+               mock.patch.object(run_local, "_seed_paper_mirror")]
+        ctx += [mock.patch.object(obj, name, new) for obj, name, new in patches.pop("objs", [])]
+        for c in ctx:
+            c.start()
+        try:
+            return _run(run_local._amain(ns))
+        finally:
+            for c in reversed(ctx):
+                c.stop()
+
+    def test_worker_crash_exits_1_and_logs(self):
+        import run_local
+        import worker
+        forever_awaited = []
+
+        async def poller(*a, **k):
+            forever_awaited.append(1)
+            await asyncio.Event().wait()  # never set: only the worker can end _amain
+
+        with self.assertLogs("run_local", level="ERROR") as logs:
+            rc = self._amain(objs=[(worker, "main", mock.AsyncMock(side_effect=RuntimeError("boom"))),
+                                   (run_local, "_telegram_poll_loop", poller)])
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("crashed" in m for m in logs.output), logs.output)
+
+    def test_poller_that_returns_exits_1(self):
+        import run_local
+        with self.assertLogs("run_local", level="ERROR"):
+            rc = self._amain(no_worker=True,
+                             objs=[(run_local, "_telegram_poll_loop", mock.AsyncMock(return_value=None))])
+        self.assertEqual(rc, 1)
+
+    def test_main_exits_with_the_code(self):
+        import run_local
+        with mock.patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "FAKE_TOKEN"}), \
+                mock.patch.object(run_local.asyncio, "run", lambda c: (c.close(), 1)[1]):
+            with self.assertRaises(SystemExit) as cm:
+                run_local.main([])
+        self.assertEqual(cm.exception.code, 1)
+
+
+class TestLocalDefaults(unittest.TestCase):
+    """Round 2 RT2: run_local honours a mounted volume and forces the settings
+    polling mode needs. Plain dicts stand in for os.environ."""
+
+    def setUp(self):
+        import run_local
+        self.apply = run_local._apply_local_defaults
+
+    def test_volume_is_honoured(self):
+        env = {"RAILWAY_VOLUME_MOUNT_PATH": "/x"}
+        self.apply(env)
+        self.assertNotIn("WORKER_DATA_DIR", env)
+
+    def test_no_volume_defaults_to_repo_data(self):
+        env = {}
+        self.apply(env)
+        self.assertTrue(env["WORKER_DATA_DIR"].endswith("data"), env)
+        self.assertEqual(env["WEBHOOK_AUTOSET_ENABLED"], "false")
+
+    def test_explicit_data_dir_unchanged(self):
+        env = {"WORKER_DATA_DIR": "/y"}
+        self.apply(env)
+        self.assertEqual(env["WORKER_DATA_DIR"], "/y")
+
+    def test_guard_and_mirror_are_forced_with_a_warning(self):
+        env = {"WEBHOOK_GUARD_ENABLED": "true",
+               "PAPER_MIRROR_URL": "https://old.example/internal/paper-state",
+               "WEBHOOK_AUTOSET_ENABLED": "true"}
+        with self.assertLogs("run_local", level="WARNING") as logs:
+            self.apply(env)
+        self.assertEqual(env["WEBHOOK_GUARD_ENABLED"], "false")
+        self.assertEqual(env["PAPER_MIRROR_URL"], "inprocess")
+        self.assertEqual(env["WEBHOOK_AUTOSET_ENABLED"], "true")  # a default, not forced
+        self.assertEqual(len(logs.output), 2, logs.output)
+        self.assertFalse(any("old.example" in m for m in logs.output), logs.output)
+
+    def test_paper_state_lands_on_the_volume(self):
+        import core.paper_trading as paper
+        with mock.patch.dict(os.environ, {"RAILWAY_VOLUME_MOUNT_PATH": "/x"}):
+            os.environ.pop("WORKER_DATA_DIR", None)
+            self.apply(os.environ)
+            self.assertEqual(paper.state_path(), "/x/paper_state.json")
+
+
+class TestConsolePrintNeverRaises(unittest.TestCase):
+    """Round 2 TG4: console_print runs outside the senders' try; a non-UTF-8
+    stdout used to raise UnicodeEncodeError and kill the worker at startup."""
+
+    def test_cp1252_stdout_gets_replaced_text(self):
+        import io
+        from core.local_mode import console_print
+        buf = io.BytesIO()
+        out = io.TextIOWrapper(buf, encoding="cp1252")
+        try:
+            with mock.patch("sys.stdout", out):
+                console_print("worker", "✅ worker is online ─ 📨")  # must not raise
+            out.flush()
+            self.assertIn(b"online", buf.getvalue())
+        finally:
+            out.detach()
+
+    def test_failing_stdout_does_not_raise(self):
+        from core.local_mode import console_print
+
+        class _Broken:
+            encoding = "utf-8"
+
+            def write(self, s):
+                raise OSError("stdout closed")
+
+            def flush(self):
+                raise OSError("stdout closed")
+
+        with mock.patch("sys.stdout", _Broken()):
+            console_print("bot", "hello")  # must not raise
+
 
 if __name__ == "__main__":
     unittest.main()

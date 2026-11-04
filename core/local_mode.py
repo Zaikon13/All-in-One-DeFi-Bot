@@ -20,13 +20,24 @@ def console_mode() -> bool:
 def console_print(source: str, text: str, chat_id=None) -> None:
     """Print an outbound message in full (console mode replaces the Telegram send).
     Same redaction as the [tg-out] log line (apikey/api_key masked), and the chat
-    id is never echoed, so console output can't leak a credential."""
-    from core.log_redaction import redact
-    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
-    bar = "─" * 60
-    body = redact(str(text))
-    sys.stdout.write(f"\n{bar}\n📨 [{ts} UTC] {source}\n{body}\n{bar}\n")
-    sys.stdout.flush()
+    id is never echoed, so console output can't leak a credential.
+    NEVER raises: a non-UTF-8 stdout (Windows cp1252, a redirect) gets the text
+    with unencodable characters replaced, and any other write error is ignored —
+    a console print must not crash the sender (the worker's startup message)."""
+    try:
+        from core.log_redaction import redact
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        bar = "─" * 60
+        body = redact(str(text))
+        out = f"\n{bar}\n📨 [{ts} UTC] {source}\n{body}\n{bar}\n"
+        try:
+            sys.stdout.write(out)
+        except UnicodeEncodeError:
+            enc = sys.stdout.encoding or "ascii"
+            sys.stdout.write(out.encode(enc, "replace").decode(enc))
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 
 def normalize_command(text: str) -> str:

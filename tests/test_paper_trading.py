@@ -183,5 +183,69 @@ class TestStateIO(unittest.TestCase):
         self.assertNotIn("\n", line)
 
 
+_GOOD_OPEN = {"pair_address": "0xok", "token_address": "0xt", "entry_price": 0.1, "qty": 500.0,
+              "usd_in": 50.0, "symbol": "OK/X", "opened_at": "2026-07-17T00:00:00+00:00"}
+
+
+class TestLoadCleaningIsBackedUp(unittest.TestCase):
+    """Round 2 SIM2 (2026-11-04): a load that had to CLEAN the file (drop or
+    ignore anything) copies the original bytes aside, because the worker saves
+    right after loading. Bad numeric rows never reset the simulation."""
+
+    def _load(self, obj):
+        import glob
+        import shutil
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        p = os.path.join(d, "paper_state.json")
+        raw = json.dumps(obj).encode()
+        with open(p, "wb") as f:
+            f.write(raw)
+        st = pt.load_state(p)
+        backups = glob.glob(p + ".corrupt-*")
+        return st, raw, backups
+
+    def _assert_backup_of(self, backups, raw):
+        self.assertEqual(len(backups), 1, backups)
+        with open(backups[0], "rb") as f:
+            self.assertEqual(f.read(), raw)
+
+    def test_closed_not_a_list_is_backed_up(self):
+        st, raw, backups = self._load({"balance_usd": 887.5, "starting_usd": 1000,
+                                       "closed": {"0": {"pnl_usd": -12.5}}, "open": [_GOOD_OPEN]})
+        self.assertEqual(st["closed"], [])
+        self._assert_backup_of(backups, raw)
+
+    def test_dropped_open_position_is_backed_up(self):
+        bad = dict(_GOOD_OPEN, pair_address="0xbad", qty=None)
+        st, raw, backups = self._load({"balance_usd": 900, "starting_usd": 1000, "closed": [],
+                                       "open": [_GOOD_OPEN, bad]})
+        self.assertEqual([q["pair_address"] for q in st["open"]], ["0xok"])
+        self._assert_backup_of(backups, raw)
+
+    def test_non_numeric_pnl_row_does_not_reset_the_sim(self):
+        """Mutation that breaks it: reconcile_balance using float(pnl_usd) — the
+        'n/a' row raises and the whole simulation resets to its starting capital."""
+        closed = [{"symbol": "A/B", "pnl_usd": "n/a", "usd_in": 50},
+                  {"symbol": "C/D", "pnl_usd": 10, "pnl_pct": 20.0, "usd_in": 50}]
+        st, raw, backups = self._load({"balance_usd": 900, "starting_usd": 1000,
+                                       "closed": closed, "open": [_GOOD_OPEN]})
+        self.assertEqual(len(st["closed"]), 2)
+        self.assertAlmostEqual(st["balance_usd"], 1000 + 10 - 50)
+        self._assert_backup_of(backups, raw)
+
+    def test_clean_file_makes_no_backup(self):
+        closed = [{"symbol": "C/D", "pnl_usd": 10, "pnl_pct": 20.0, "usd_in": 50}]
+        st, raw, backups = self._load({"balance_usd": 960, "starting_usd": 1000,
+                                       "closed": closed, "open": [_GOOD_OPEN]})
+        self.assertEqual(backups, [])
+        self.assertAlmostEqual(st["balance_usd"], 960)
+
+    def test_repair_skips_an_unconvertible_row(self):
+        st = {"starting_usd": 1000, "balance_usd": 1000, "open": [],
+              "closed": [{"pnl_pct": 400.0, "usd_in": "x", "pnl_usd": 200}]}
+        self.assertEqual(pt.repair_impossible_trades(st, tp_pct=25)["corrected"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

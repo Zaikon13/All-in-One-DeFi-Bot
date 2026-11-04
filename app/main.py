@@ -84,17 +84,23 @@ def set_paper_mirror(state: dict, signals: dict | None = None, as_of: str | None
                      "as_of": as_of}
 
 
-async def send_telegram_message(text: str, chat_id: str = None, reply_markup=None):
+async def send_telegram_message(text: str, chat_id: str = None, reply_markup=None) -> bool:
+    """Send a bot reply. Returns True only if Telegram accepted EVERY chunk
+    (console mode: True). A chunk that fails both the Markdown send and the
+    plain-text resend — or raises — is logged at ERROR and makes the result
+    False; the remaining chunks are still sent."""
     tg_out_log(logging.getLogger("app.main"), text)
     cid = chat_id or CHAT_ID
     if console_mode():
         console_print("bot", plain_text(text), cid)  # readable, as Telegram renders it
-        return
+        return True
     if not (BOT_TOKEN and cid):
-        return
+        logging.warning("Telegram NOT sent: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set")
+        return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     # Telegram caps a message at 4096 chars (400 above that) -> split on lines.
     chunks = split_message(text)
+    ok = True
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             for i, chunk in enumerate(chunks):
@@ -105,16 +111,26 @@ async def send_telegram_message(text: str, chat_id: str = None, reply_markup=Non
                 }
                 if reply_markup and i == 0:
                     payload["reply_markup"] = reply_markup
-                r = await client.post(url, json=payload)
-                if r.status_code != 200:
+                try:
+                    r = await client.post(url, json=payload)
+                    if r.status_code == 200:
+                        continue
                     # A stray Markdown entity (token symbols, '_' in names) 400s the
                     # whole message; resend as plain text so the reply is never lost.
                     logging.warning(f"Telegram Markdown send HTTP {r.status_code}; resending as plain text")
                     payload.pop("parse_mode", None)
                     payload["text"] = plain_text(chunk)
-                    await client.post(url, json=payload)
+                    r2 = await client.post(url, json=payload)
+                    if r2.status_code != 200:
+                        logging.error(f"Telegram send FAILED (HTTP {r.status_code} then {r2.status_code}); chunk lost")
+                        ok = False
+                except Exception as e:
+                    logging.error(f"Telegram send FAILED ({type(e).__name__}: {e}); chunk lost")
+                    ok = False
     except Exception as e:
         logging.error(f"Send message error: {e}")
+        ok = False
+    return ok
 
 
 async def get_all_balances(chat_id: str):
